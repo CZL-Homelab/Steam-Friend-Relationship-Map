@@ -53,6 +53,7 @@ class SteamClient:
         self._client = None
 
     async def resolve_steam_id(self, value: str) -> str:
+        # 支持直接输入 64 位 SteamID，也支持 Steam 主页 URL。
         raw = value.strip()
         if STEAM_ID_RE.match(raw):
             return raw
@@ -79,6 +80,7 @@ class SteamClient:
     async def get_player_summaries(self, steam_ids: list[str]) -> list[SteamUserRecord]:
         if not steam_ids:
             return []
+        # Steam GetPlayerSummaries 支持批量 steamids，这里按 100 个一组降低请求次数。
         chunks: list[list[str]] = [steam_ids[index : index + 100] for index in range(0, len(steam_ids), 100)]
         records: list[SteamUserRecord] = []
         for chunk in chunks:
@@ -112,6 +114,7 @@ class SteamClient:
                 {"key": self.api_key, "steamid": steam_id, "relationship": "friend"},
             )
         except SteamApiError as exc:
+            # 私密或不可访问的好友列表不视为致命错误，交给抓取器标记分支状态。
             if exc.status_code in {401, 403, 404}:
                 return FriendListResult(steam_id=steam_id, friend_ids=[], private=True)
             raise
@@ -130,6 +133,7 @@ class SteamClient:
         for attempt in range(retries):
             try:
                 response = await self._client.get(url, params=params)
+                # 429 和 5xx 通常是临时问题，做轻量退避后重试。
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < retries - 1:
                     await asyncio.sleep(0.8 * (attempt + 1))
                     continue

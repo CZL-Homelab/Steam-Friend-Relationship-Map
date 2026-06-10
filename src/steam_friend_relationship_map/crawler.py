@@ -49,6 +49,7 @@ class CrawlManager:
         return True
 
     async def _run_crawl(self, run: CrawlRun, delay_ms: int, control: CrawlControl) -> None:
+        # discovered 保存每个节点首次发现的最短层级，避免环路导致重复入队。
         discovered: dict[str, int] = {run.root_steam_id: 0}
         expanded: set[str] = set()
         edges_seen: set[tuple[str, str]] = set()
@@ -79,6 +80,7 @@ class CrawlManager:
                     return
 
                 current_id, depth = queue.popleft()
+                # 只展开 max_depth 以内的节点；边界层节点只作为结果保留，不继续向外扩张。
                 if current_id in expanded or depth >= run.max_depth:
                     continue
                 expanded.add(current_id)
@@ -103,6 +105,7 @@ class CrawlManager:
                 next_depth = depth + 1
                 for friend_id in friends.friend_ids:
                     if friend_id not in discovered:
+                        # max_nodes 是硬上限，达到后不再创建外围占位节点。
                         if len(discovered) >= run.max_nodes:
                             continue
                         discovered[friend_id] = next_depth
@@ -119,6 +122,7 @@ class CrawlManager:
                     by_id = {record.steam_id: record for record in summaries}
                     records: list[SteamUserRecord] = []
                     for steam_id in new_ids:
+                        # 少数资料接口缺失的用户仍保留占位节点，关系线不会丢。
                         record = by_id.get(steam_id, placeholder_user(steam_id, discovered[steam_id]))
                         record.depth_min = discovered[steam_id]
                         records.append(record)

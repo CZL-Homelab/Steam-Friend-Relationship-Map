@@ -24,6 +24,7 @@ class Neo4jRepository:
         return "Neo4j 连接正常"
 
     def ensure_schema(self) -> None:
+        # 约束保证 MERGE 的唯一键稳定，也能让后续查询更快。
         statements = [
             "CREATE CONSTRAINT steam_user_id IF NOT EXISTS FOR (u:SteamUser) REQUIRE u.steam_id IS UNIQUE",
             "CREATE CONSTRAINT crawl_run_id IF NOT EXISTS FOR (r:CrawlRun) REQUIRE r.id IS UNIQUE",
@@ -72,6 +73,7 @@ class Neo4jRepository:
             return
         now = utc_now_iso()
         with self.driver.session() as session:
+            # 用户节点用 steam_id 幂等写入，备注/标签/分类由本工具维护，不被 Steam 资料覆盖。
             session.run(
                 """
                 UNWIND $users AS user
@@ -120,6 +122,7 @@ class Neo4jRepository:
             return
         now = utc_now_iso()
         with self.driver.session() as session:
+            # Steam 好友关系按无向边处理，避免 A-B 和 B-A 重复出现。
             session.run(
                 """
                 UNWIND $edges AS edge
@@ -177,6 +180,7 @@ class Neo4jRepository:
         with self.driver.session() as session:
             if root:
                 params["root"] = root
+                # Root 查询只取指定层数内的子图，防止前端一次渲染过大的全库图。
                 node_query = f"""
                 MATCH p=(r:SteamUser {{steam_id: $root}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
                 WITH DISTINCT n
