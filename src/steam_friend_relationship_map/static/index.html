@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Steam Friend Map</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div>
+            <h1>Steam Friend Map</h1>
+            <p>Neo4j local graph</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>Connection</span>
+            <button class="icon-button" id="testSettings" title="测试连接"><i data-lucide="plug-zap"></i></button>
+          </div>
+          <div class="status-grid">
+            <div>
+              <span class="muted">Steam</span>
+              <strong id="steamStatus">Unknown</strong>
+            </div>
+            <div>
+              <span class="muted">Neo4j</span>
+              <strong id="neo4jStatus">Unknown</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>Crawl</span>
+            <button class="icon-button danger" id="cancelCrawl" title="取消抓取"><i data-lucide="square"></i></button>
+          </div>
+          <label>
+            Root URL
+            <input id="rootUrl" placeholder="https://steamcommunity.com/id/..." />
+          </label>
+          <div class="two-col">
+            <label>
+              Depth
+              <input id="maxDepth" type="number" min="1" max="4" value="2" />
+            </label>
+            <label>
+              Nodes
+              <input id="maxNodes" type="number" min="1" max="10000" value="2000" />
+            </label>
+          </div>
+          <label>
+            Delay ms
+            <input id="delayMs" type="number" min="0" max="10000" value="300" />
+          </label>
+          <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span>Start Crawl</span></button>
+          <div class="progress">
+            <div class="progress-row"><span>Status</span><strong id="crawlStatus">Idle</strong></div>
+            <div class="progress-row"><span>Nodes</span><strong id="nodeCount">0</strong></div>
+            <div class="progress-row"><span>Edges</span><strong id="edgeCount">0</strong></div>
+            <div class="progress-row"><span>Private</span><strong id="privateCount">0</strong></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>Filters</span>
+            <button class="icon-button" id="refreshGraph" title="刷新图谱"><i data-lucide="refresh-cw"></i></button>
+          </div>
+          <label>
+            Root SteamID
+            <input id="graphRoot" placeholder="7656..." />
+          </label>
+          <div class="two-col">
+            <label>
+              Depth
+              <input id="graphDepth" type="number" min="0" max="4" value="2" />
+            </label>
+            <label>
+              Limit
+              <input id="graphLimit" type="number" min="1" max="2000" value="500" />
+            </label>
+          </div>
+          <label>
+            Search
+            <input id="graphSearch" placeholder="昵称 / SteamID" />
+          </label>
+          <label>
+            Category
+            <input id="graphCategory" placeholder="现实 / 游戏群 / ..." />
+          </label>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h2>Relationship Graph</h2>
+            <p id="graphSummary">0 nodes · 0 edges</p>
+          </div>
+          <div class="toolbar">
+            <button class="tool" id="fitGraph" title="适配视图"><i data-lucide="maximize"></i></button>
+            <button class="tool" id="layoutGraph" title="重新布局"><i data-lucide="network"></i></button>
+            <button class="tool" id="exportJson" title="导出 JSON"><i data-lucide="braces"></i></button>
+            <button class="tool" id="exportCsv" title="导出 CSV"><i data-lucide="download"></i></button>
+          </div>
+        </header>
+        <div id="graph"></div>
+      </section>
+
+      <aside class="inspector">
+        <section class="profile-card" id="profileCard">
+          <img id="profileAvatar" src="" alt="" />
+          <div class="profile-body">
+            <h3 id="profileName">Select a node</h3>
+            <a id="profileUrl" href="#" target="_blank" rel="noreferrer">Steam profile</a>
+            <dl>
+              <div><dt>SteamID</dt><dd id="profileSteamId">-</dd></div>
+              <div><dt>Degree</dt><dd id="profileDegree">0</dd></div>
+              <div><dt>Status</dt><dd id="profileStatus">unknown</dd></div>
+            </dl>
+            <label>
+              Category
+              <input id="profileCategory" />
+            </label>
+            <label>
+              Tags
+              <input id="profileTags" placeholder="tag1, tag2" />
+            </label>
+            <label>
+              Note
+              <textarea id="profileNote" rows="5"></textarea>
+            </label>
+            <button id="saveProfile" class="secondary"><i data-lucide="save"></i><span>Save</span></button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>Shortest Path</span>
+            <button class="icon-button" id="findPath" title="查询路径"><i data-lucide="route"></i></button>
+          </div>
+          <label>
+            From
+            <input id="pathFrom" placeholder="SteamID" />
+          </label>
+          <label>
+            To
+            <input id="pathTo" placeholder="SteamID" />
+          </label>
+          <div id="pathResult" class="path-result">No path selected</div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>Central Nodes</span>
+            <button class="icon-button" id="loadTopDegree" title="刷新排行"><i data-lucide="bar-chart-3"></i></button>
+          </div>
+          <ol id="topDegreeList" class="rank-list"></ol>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span>Bloom Cypher</span>
+            <button class="icon-button" id="copyBloom" title="复制查询"><i data-lucide="copy"></i></button>
+          </div>
+          <textarea id="bloomQuery" rows="7" readonly>MATCH p=(r:SteamUser {steam_id:$root})-[:STEAM_FRIEND*1..3]-(n) RETURN p LIMIT 500
+
+MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:SteamUser {steam_id:$to})) RETURN p</textarea>
+        </section>
+      </aside>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
