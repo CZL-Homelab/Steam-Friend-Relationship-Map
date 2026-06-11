@@ -80,6 +80,37 @@ bolt://localhost:7687
 
 Steam Web API Key 用来访问公开 Steam API。没有 Key 时无法抓取好友列表和用户资料。
 
+获取方式：
+
+1. 登录你的 Steam 账号。
+2. 打开 Steam Web API Key 页面：
+
+   ```text
+   https://steamcommunity.com/dev/apikey
+   ```
+
+3. 如果页面要求填写 Domain Name，可以填写本地用途说明，例如：
+
+   ```text
+   localhost
+   ```
+
+   或填写你自己的域名。这个项目默认是本地工具，不需要真实公网服务器。
+
+4. 阅读并同意 Steam API Terms of Use。
+5. 提交后页面会显示一串 API Key，把它复制到 `.env`：
+
+   ```env
+   STEAM_API_KEY=你的SteamWebAPIKey
+   ```
+
+注意：
+
+- Steam Web API Key 属于敏感信息，不要提交到 GitHub。
+- 不要把 Key 发到 Issue、截图、README、聊天记录或公开文档里。
+- 如果 Key 泄露，请回到 Steam API Key 页面撤销或重新生成。
+- Steam 官方文档说明，使用 Steam Web API 需要 API Key，并需要同意 Steam API Terms of Use：`https://steamcommunity.com/dev`。
+
 ### 3. 创建配置文件
 
 ```powershell
