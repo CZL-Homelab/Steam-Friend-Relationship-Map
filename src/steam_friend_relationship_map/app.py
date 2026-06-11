@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 from dotenv import set_key
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -124,7 +124,21 @@ def create_app(
     app.state.manager = manager
     app.state.logs = log_buffer
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+
+    def safe_detail(exc: object) -> str:
+        return log_buffer.redact(str(exc))
+
+    @app.middleware("http")
+    async def csrf_check(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if request.method in ("POST", "PATCH", "DELETE"):
+            origin = request.headers.get("origin") or request.headers.get("referer") or ""
+            if origin:
+                host = f"http://{settings.app_host}:{settings.app_port}"
+                localhost = f"http://localhost:{settings.app_port}"
+                if not (origin.startswith(host) or origin.startswith(localhost)):
+                    return Response(content='{"detail":"Cross-origin request denied"}', status_code=403, media_type="application/json")
+        return await call_next(request)
 
     @app.middleware("http")
     async def log_api_errors(request, call_next):  # type: ignore[no-untyped-def]
@@ -168,7 +182,7 @@ def create_app(
         try:
             secret_store.set(payload.name, payload.value)
         except SecretStorageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
         await rebuild_runtime()
         log_buffer.append("info", "settings", f"敏感配置已保存: {payload.name}")
         return public_settings("敏感配置已保存到系统凭据库。")
@@ -178,7 +192,7 @@ def create_app(
         try:
             secret_store.delete(name)
         except SecretStorageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
         await rebuild_runtime()
         log_buffer.append("warn", "settings", f"敏感配置已删除: {name}")
         return public_settings("敏感配置已删除。")
@@ -213,10 +227,10 @@ def create_app(
             return await manager.create_crawl(payload)
         except SteamApiError as exc:
             log_buffer.append("warn", "crawl", f"抓取任务创建失败: {exc}")
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
         except Exception as exc:
             log_buffer.append("error", "crawl", f"抓取任务创建异常: {exc}")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.get("/api/crawls/{run_id}", response_model=CrawlRun)
     async def get_crawl(run_id: str) -> CrawlRun:
@@ -265,7 +279,7 @@ def create_app(
             raise
         except Exception as exc:
             log_buffer.append("error", "graph", f"图谱查询失败: {exc}")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.get("/api/db/stats", response_model=DbStats)
     async def db_stats() -> DbStats:
@@ -273,7 +287,7 @@ def create_app(
             return repo.get_db_stats()
         except Exception as exc:
             log_buffer.append("error", "db", f"数据库状态读取失败: {exc}")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.patch("/api/users/{steam_id}")
     async def patch_user(steam_id: str, payload: UserPatch) -> dict[str, bool]:
@@ -303,9 +317,9 @@ def create_app(
             return repo.get_friend_circle_analysis(root=root, max_depth=max_depth, min_mutual=min_mutual, limit=limit)
         except Exception as exc:
             log_buffer.append("error", "analysis", f"朋友圈分析失败: {exc}")
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
-    @app.get("/api/export", response_model=ExportResponse)
+    @app.post("/api/export", response_model=ExportResponse)
     async def export_graph(format: str = "json") -> Response | ExportResponse:
         data = repo.export_graph()
         if format == "json":

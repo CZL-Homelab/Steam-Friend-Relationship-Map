@@ -659,8 +659,25 @@ function focusAnalysisCandidate(steamId, candidates) {
   appendSystemLog("info", "analysis", t("analysis.focused", { label: candidate?.label || steamId }));
 }
 
-function exportFile(format) {
-  window.location.href = `/api/export?format=${format}`;
+async function exportFile(format) {
+  try {
+    const response = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `steam_graph.${format}`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    toast(`Export failed: ${err.message}`);
+    return;
+  }
   toast(t(format === "csv" ? "toast.exportCsv" : "toast.exportJson"));
 }
 

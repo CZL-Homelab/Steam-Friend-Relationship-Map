@@ -122,6 +122,9 @@ class SteamClient:
         return FriendListResult(steam_id=steam_id, friend_ids=[str(item["steamid"]) for item in friends if item.get("steamid")])
 
     async def _get_json(self, path: str, params: dict[str, str], retries: int = 3) -> dict:
+        # 安全注意事项：Steam Web API 要求 api_key 作为 URL 查询参数传递（GET ?key=...）。
+        # 虽然通过 HTTPS 加密传输，但 key 会出现在服务器访问日志和可能的中间代理日志中。
+        # 应用层日志已通过 AppLogBuffer.redact() 脱敏处理。
         if not self.api_key:
             raise SteamApiError("缺少 STEAM_API_KEY")
         if self._client is None:
