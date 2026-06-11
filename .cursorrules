@@ -1,6 +1,6 @@
 # Steam Friend Relationship Map - Developer Rules (.cursorrules)
 
-This file defines the core project description, architecture, file structure, and security development rules. All AI assistants and developers contributing to this project must strictly adhere to these rules.
+This file defines the core project description, architecture, file structure, security guidelines, and development roadmap. All AI assistants and developers contributing to this project must strictly adhere to these rules.
 
 ---
 
@@ -87,7 +87,29 @@ Security is the highest priority for this project. Developers must strictly foll
 
 ---
 
-## 4. Development & Code Quality Guidelines
+## 4. Project Roadmap & Development Stages
+
+All agents working on this codebase should consult this roadmap when developing new features:
+
+### 4.1 Phase 1: Local Experience & Performance (Short-term)
+* **Incremental Crawling & Cache**: Implement caching with expiration (e.g., 7 days) on `SteamUser` nodes; query local DB before asking Steam API to speed up crawler.
+* **Adaptive Rate Limiter**: Transition from hardcoded sleep delays in `crawler.py` to a sliding window rate limiter that permits safe concurrent fetches.
+* **Proxy Configuration Support**: Extend settings and `SteamClient` in `steam.py` to support SOCKS/HTTP proxies via GUI inputs or environment variables.
+* **Neo4j Bulk Writes**: Optimize existing Cypher list-based `UNWIND` statements in `neo4j_repo.py` to optimize write transactional batch size.
+
+### 4.2 Phase 2: Deep Social Network Analytics (Medium-term)
+* **Graph Algorithms Integration**: Connect to Neo4j Graph Data Science (GDS) features to execute Louvain community detection (grouping friends into colored subgroups) and PageRank/centrality algorithms (identifying key influencers).
+* **Multi-Root Crawling**: Enhance `crawler.py` and UI to accept multiple Steam root profiles, finding common overlaps and intersection subgraphs.
+* **Data Visualization Panel**: Integrate ECharts or D3.js charts into the sidebar/inspector layout, summarizing player nationalities, game libraries, and profile status.
+
+### 4.3 Phase 3: Deployment & Distribution (Long-term)
+* **Docker Containerization**: Deliver a standard `docker-compose.yml` bundling FastAPI, frontend assets, and a configured Neo4j DBMS instance.
+* **Neo4j AuraDB Support**: Validate connections using TLS bolt protocols (`neo4j+s://`) to support remote cloud database targets.
+* **Desktop Application**: Compile the Python engine using PyInstaller and pack it alongside a Chromium Webview container (e.g. Pywebview) into a native client (`.exe` / `.app`).
+
+---
+
+## 5. Development & Code Quality Guidelines
 
 * **Dependency Management**: Any new dependencies must be added using `uv add` to keep `pyproject.toml` in sync. Avoid manually editing it.
 * **Internationalization (i18n)**: All frontend texts, labels, and prompts must be defined in `static/i18n.json` and dynamically loaded, ensuring consistency between English and Chinese.
