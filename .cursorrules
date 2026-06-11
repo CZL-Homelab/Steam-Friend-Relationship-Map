@@ -60,7 +60,7 @@ Steam-Friend-Relationship-Map/
 
 ## 3. Project Roadmap Reference
 
-* **Roadmap Location**: The official, detailed roadmap is maintained in the project workspace at [roadmap.md](file:///e:/code/Steam-Friend-Relationship-Map/roadmap.md).
+* **Roadmap Location**: The official, detailed roadmap is maintained in the project workspace at [roadmap.md](./roadmap.md).
 * **Developer Directive**: Before initiating any feature implementation or refactoring, all developers and AI agents must review `roadmap.md` to ensure modifications align with the current development phase (Phase 1, 2, or 3) and respect defined task dependencies.
 
 ---
