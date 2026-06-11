@@ -58,6 +58,9 @@ class FakeRepo:
         for edge in edges:
             self.edges.add(tuple(sorted((edge.from_id, edge.to_id))))
 
+    def get_cached_friend_list(self, steam_id: str, valid_days: int) -> tuple[str, list[str]] | None:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_crawl_respects_depth_and_records_private_nodes() -> None:
