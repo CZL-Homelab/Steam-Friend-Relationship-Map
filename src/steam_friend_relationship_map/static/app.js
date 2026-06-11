@@ -473,6 +473,7 @@ function validateCrawlPayload() {
     ["maxNodes", 1, 10000],
     ["delayMs", 0, 10000],
     ["crawlPriorPoolMinLinks", 0, Number.MAX_SAFE_INTEGER],
+    ["cacheValidDays", 0, Number.MAX_SAFE_INTEGER],
   ];
   for (const [id, min, max] of checks) {
     const value = numberValue(id, 0);
@@ -492,6 +493,7 @@ async function startCrawl() {
     max_nodes: Number($("maxNodes").value || 2000),
     delay_ms: Number($("delayMs").value || 300),
     prior_pool_min_links: Number($("crawlPriorPoolMinLinks").value || 0),
+    cache_valid_days: Number($("cacheValidDays").value === "" ? 14 : $("cacheValidDays").value),
   };
   const friendMin = $("crawlFriendCountMin").value.trim();
   const friendMax = $("crawlFriendCountMax").value.trim();

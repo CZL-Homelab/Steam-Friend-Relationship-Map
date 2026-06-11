@@ -143,23 +143,37 @@ class CrawlManager:
                         progress_percent=self._progress(nodes_discovered, run.max_nodes, False),
                     )
 
-                    try:
-                        friends = await self.steam.get_friend_list(current_id)
-                    except SteamApiError as exc:
-                        error_count += 1
-                        event = self.append_event(run.id, "error", "friends", f"好友列表请求失败: {current_id} ({exc})")
-                        self.repo.update_crawl_run(run.id, error_count=error_count, last_event=event.message)
-                        continue
+                    cached = self.repo.get_cached_friend_list(current_id, payload.cache_valid_days)
+                    used_cache = False
+                    if cached is not None:
+                        status, cached_ids = cached
+                        if status == "private":
+                            private_count += 1
+                            event = self.append_event(run.id, "warn", "private", f"好友列表私密 (缓存): {current_id}")
+                            self.repo.update_crawl_run(run.id, private_count=private_count, last_event=event.message)
+                            continue
+                        friend_ids = cached_ids
+                        used_cache = True
+                    else:
+                        try:
+                            friends = await self.steam.get_friend_list(current_id)
+                        except SteamApiError as exc:
+                            error_count += 1
+                            event = self.append_event(run.id, "error", "friends", f"好友列表请求失败: {current_id} ({exc})")
+                            self.repo.update_crawl_run(run.id, error_count=error_count, last_event=event.message)
+                            continue
 
-                    if friends.private:
-                        private_count += 1
-                        self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private")
-                        event = self.append_event(run.id, "warn", "private", f"好友列表不可访问: {current_id}")
-                        self.repo.update_crawl_run(run.id, private_count=private_count, last_event=event.message)
-                        continue
+                        if friends.private:
+                            private_count += 1
+                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private")
+                            event = self.append_event(run.id, "warn", "private", f"好友列表不可访问: {current_id}")
+                            self.repo.update_crawl_run(run.id, private_count=private_count, last_event=event.message)
+                            continue
 
-                    self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public")
-                    for friend_id in friends.friend_ids:
+                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public")
+                        friend_ids = friends.friend_ids
+
+                    for friend_id in friend_ids:
                         edge_key = tuple(sorted((current_id, friend_id)))
                         edge = FriendEdge(from_id=current_id, to_id=friend_id, crawl_id=run.id, source_depth=depth)
                         if friend_id in discovered:
@@ -171,7 +185,7 @@ class CrawlManager:
                         if edge_key not in edges_seen:
                             candidate_edges[friend_id].append(edge)
 
-                    if payload.delay_ms:
+                    if not used_cache and payload.delay_ms:
                         await asyncio.sleep(payload.delay_ms / 1000)
 
                 accepted_ids: list[str] = []
@@ -190,22 +204,32 @@ class CrawlManager:
                     friend_count: int | None = None
                     friend_count_status = "unknown"
                     if uses_friend_count_filter:
-                        try:
-                            candidate_friends = await self.steam.get_friend_list(friend_id)
-                        except SteamApiError:
-                            friend_count_status = "error"
+                        cached_candidate = self.repo.get_cached_friend_list(friend_id, payload.cache_valid_days)
+                        if cached_candidate is not None:
+                            c_status, c_ids = cached_candidate
+                            friend_count_status = c_status
+                            if c_status == "public":
+                                friend_count = len(c_ids)
                         else:
-                            if candidate_friends.private:
-                                friend_count_status = "private"
+                            try:
+                                candidate_friends = await self.steam.get_friend_list(friend_id)
+                            except SteamApiError:
+                                friend_count_status = "error"
                             else:
-                                friend_count_status = "public"
-                                friend_count = len(candidate_friends.friend_ids)
+                                if candidate_friends.private:
+                                    friend_count_status = "private"
+                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private")
+                                else:
+                                    friend_count_status = "public"
+                                    friend_count = len(candidate_friends.friend_ids)
+                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public")
+                            if payload.delay_ms:
+                                await asyncio.sleep(payload.delay_ms / 1000)
+
                         if not self._friend_count_matches(friend_count, friend_count_status, payload):
                             friend_count_filtered_count += 1
                             filtered_count += 1
                             continue
-                        if payload.delay_ms:
-                            await asyncio.sleep(payload.delay_ms / 1000)
 
                     discovered[friend_id] = next_depth
                     accepted_ids.append(friend_id)

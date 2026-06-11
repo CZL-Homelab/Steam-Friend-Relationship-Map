@@ -48,6 +48,7 @@ class CrawlCreate(BaseModel):
     friend_count_min: int | None = Field(default=None, ge=0)
     friend_count_max: int | None = Field(default=None, ge=0)
     prior_pool_min_links: int = Field(default=0, ge=0)
+    cache_valid_days: int = Field(default=14, ge=0)
 
     @model_validator(mode="after")
     def validate_filters(self) -> "CrawlCreate":
@@ -130,6 +131,7 @@ class PublicSettings(BaseModel):
     default_max_depth: int
     default_max_nodes: int
     default_delay_ms: int
+    default_cache_valid_days: int
     steam_api_key_configured: bool
     neo4j_password_configured: bool
     steam_api_key_from_env: bool = False
@@ -146,6 +148,7 @@ class SettingsPatch(BaseModel):
     default_max_depth: int | None = Field(default=None, ge=1, le=4)
     default_max_nodes: int | None = Field(default=None, ge=1, le=10000)
     default_delay_ms: int | None = Field(default=None, ge=0, le=10000)
+    default_cache_valid_days: int | None = Field(default=None, ge=0)
 
 
 class SecretUpdate(BaseModel):

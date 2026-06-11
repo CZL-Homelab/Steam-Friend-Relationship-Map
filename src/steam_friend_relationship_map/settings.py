@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     default_max_depth: int = Field(default=2, ge=1, le=4, alias="DEFAULT_MAX_DEPTH")
     default_max_nodes: int = Field(default=2000, ge=1, le=10000, alias="DEFAULT_MAX_NODES")
     default_delay_ms: int = Field(default=300, ge=0, le=10000, alias="DEFAULT_DELAY_MS")
+    default_cache_valid_days: int = Field(default=14, ge=0, alias="DEFAULT_CACHE_VALID_DAYS")
 
 
 @lru_cache

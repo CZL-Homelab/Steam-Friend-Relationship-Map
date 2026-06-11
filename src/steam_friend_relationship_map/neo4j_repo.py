@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from datetime import UTC, datetime, timedelta
+
 from neo4j import GraphDatabase
 from .models import (
     CrawlRun,
@@ -164,6 +166,7 @@ class Neo4jRepository:
                         WHEN $friend_count_status IS NULL THEN coalesce(u.friend_count_status, "unknown")
                         ELSE $friend_count_status
                     END,
+                    u.friend_list_fetched_at = $now,
                     u.last_seen_at = $now
                 """,
                 steam_id=steam_id,
@@ -172,6 +175,35 @@ class Neo4jRepository:
                 friend_count_status=friend_count_status,
                 now=utc_now_iso(),
             ).consume()
+
+    def get_cached_friend_list(self, steam_id: str, valid_days: int) -> tuple[str, list[str]] | None:
+        if valid_days <= 0:
+            return None
+        cutoff_time = (datetime.now(UTC) - timedelta(days=valid_days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with self.driver.session() as session:
+            record = session.run(
+                """
+                MATCH (u:SteamUser {steam_id: $steam_id})
+                WHERE u.friend_list_fetched_at >= $cutoff_time
+                RETURN u.friend_list_status AS status
+                """,
+                steam_id=steam_id,
+                cutoff_time=cutoff_time,
+            ).single()
+            if not record:
+                return None
+            status = record["status"] or "unknown"
+            if status != "public":
+                return status, []
+            
+            friends = session.run(
+                """
+                MATCH (u:SteamUser {steam_id: $steam_id})-[:STEAM_FRIEND]-(f:SteamUser)
+                RETURN f.steam_id AS friend_id
+                """,
+                steam_id=steam_id,
+            )
+            return status, [row["friend_id"] for row in friends]
 
     def upsert_relationships(self, edges: Iterable[FriendEdge]) -> None:
         rows = [edge.model_dump(mode="json") for edge in edges]

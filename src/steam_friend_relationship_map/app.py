@@ -45,6 +45,7 @@ ENV_KEYS = {
     "default_max_depth": "DEFAULT_MAX_DEPTH",
     "default_max_nodes": "DEFAULT_MAX_NODES",
     "default_delay_ms": "DEFAULT_DELAY_MS",
+    "default_cache_valid_days": "DEFAULT_CACHE_VALID_DAYS",
 }
 
 
@@ -102,6 +103,7 @@ def create_app(
             default_max_depth=settings.default_max_depth,
             default_max_nodes=settings.default_max_nodes,
             default_delay_ms=settings.default_delay_ms,
+            default_cache_valid_days=settings.default_cache_valid_days,
             steam_api_key_configured=bool(steam_secret or raw.steam_api_key),
             neo4j_password_configured=bool(neo4j_secret or raw.neo4j_password),
             steam_api_key_from_env=not bool(steam_secret) and bool(raw.steam_api_key),
