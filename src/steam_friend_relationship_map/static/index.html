@@ -109,6 +109,24 @@
             延迟 ms
             <input id="delayMs" type="number" min="0" max="10000" value="500" />
           </label>
+          <details class="subsection">
+            <summary data-i18n="section.preScanFilters">扫描前筛选</summary>
+            <div class="two-col">
+              <label data-i18n-label="field.friendCountMin">
+                最小好友数
+                <input id="crawlFriendCountMin" type="number" min="0" placeholder="100" />
+              </label>
+              <label data-i18n-label="field.friendCountMax">
+                最大好友数
+                <input id="crawlFriendCountMax" type="number" min="0" placeholder="500" />
+              </label>
+            </div>
+            <label data-i18n-label="field.priorPoolMinLinks">
+              前层朋友圈连接阈值
+              <input id="crawlPriorPoolMinLinks" type="number" min="0" value="0" />
+            </label>
+            <p class="hint" data-i18n="filter.preScanHint">好友数筛选会额外请求候选人的公开好友列表；阈值越高，扫描越收敛。</p>
+          </details>
           <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span data-i18n="action.startCrawl">开始抓取</span></button>
           <div class="progress-bar" aria-label="crawl progress">
             <div id="crawlProgressBar"></div>
@@ -119,10 +137,30 @@
             <div class="progress-row"><span data-i18n="metric.nodes">节点</span><strong id="nodeCount">0</strong></div>
             <div class="progress-row"><span data-i18n="metric.edges">关系</span><strong id="edgeCount">0</strong></div>
             <div class="progress-row"><span data-i18n="metric.private">私密</span><strong id="privateCount">0</strong></div>
+            <div class="progress-row"><span data-i18n="metric.filtered">已筛掉</span><strong id="filteredCount">0</strong></div>
           </div>
           <details class="log-drawer" id="logDrawer">
             <summary data-i18n="section.logs">抓取日志</summary>
             <div class="log-list" id="crawlLogs"></div>
+          </details>
+        </section>
+
+        <section class="panel">
+          <details class="log-drawer" id="systemLogDrawer">
+            <summary data-i18n="section.systemLogs">系统日志 / Dev Logs</summary>
+            <div class="log-tools">
+              <select id="systemLogLevel" aria-label="log level">
+                <option value="" data-i18n="log.levelAll">全部</option>
+                <option value="info">info</option>
+                <option value="warn">warn</option>
+                <option value="error">error</option>
+              </select>
+              <button class="mini-button" id="refreshSystemLogs" data-i18n="action.refreshLogs">刷新</button>
+              <button class="mini-button" id="copySystemLogs" data-i18n="action.copyLogs">复制</button>
+              <button class="mini-button" id="clearSystemLogs" data-i18n="action.clearLogs">清空</button>
+            </div>
+            <p class="hint" data-i18n="log.securityHint">日志会自动脱敏，但 SteamID、备注和截图仍可能包含个人信息。</p>
+            <div class="log-list system-log-list" id="systemLogs"></div>
           </details>
         </section>
 
@@ -166,6 +204,57 @@
             分类
             <input id="graphCategory" placeholder="现实 / 游戏群 / ..." data-i18n-placeholder="placeholder.category" />
           </label>
+          <div class="two-col">
+            <label data-i18n-label="field.friendCountMin">
+              最小好友数
+              <input id="graphFriendCountMin" type="number" min="0" />
+            </label>
+            <label data-i18n-label="field.friendCountMax">
+              最大好友数
+              <input id="graphFriendCountMax" type="number" min="0" />
+            </label>
+          </div>
+          <label data-i18n-label="field.priorPoolMinLinks">
+            前层朋友圈连接阈值
+            <input id="graphPriorPoolMinLinks" type="number" min="0" value="0" />
+          </label>
+          <div class="two-col">
+            <label data-i18n-label="field.sortBy">
+              排序
+              <select id="graphSortBy">
+                <option value="depth" data-i18n="sort.depth">层数</option>
+                <option value="degree" data-i18n="sort.degree">度数</option>
+                <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
+                <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
+                <option value="closeness" data-i18n="sort.closeness">紧密度</option>
+              </select>
+            </label>
+            <label data-i18n-label="field.sortDir">
+              方向
+              <select id="graphSortDir">
+                <option value="asc" data-i18n="sort.asc">升序</option>
+                <option value="desc" data-i18n="sort.desc">降序</option>
+              </select>
+            </label>
+          </div>
+          <div class="two-col">
+            <label data-i18n-label="field.sizeBy">
+              头像大小
+              <select id="graphSizeBy">
+                <option value="degree" data-i18n="sort.degree">度数</option>
+                <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
+                <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
+                <option value="closeness" data-i18n="sort.closeness">紧密度</option>
+              </select>
+            </label>
+            <label data-i18n-label="field.layoutBias">
+              布局
+              <select id="graphLayoutBias">
+                <option value="cose" data-i18n="layout.cose">自然网络</option>
+                <option value="closeness" data-i18n="layout.closeness">紧密度靠中心</option>
+              </select>
+            </label>
+          </div>
         </section>
       </aside>
 
@@ -201,6 +290,9 @@
               <div><dt>SteamID</dt><dd id="profileSteamId">-</dd></div>
               <div><dt data-i18n="metric.degree">度数</dt><dd id="profileDegree">0</dd></div>
               <div><dt data-i18n="metric.status">状态</dt><dd id="profileStatus" data-status="unknown">未知</dd></div>
+              <div><dt data-i18n="metric.friendCount">好友数</dt><dd id="profileFriendCount">-</dd></div>
+              <div><dt data-i18n="metric.priorPoolLinks">朋友圈连接</dt><dd id="profilePriorLinks">0</dd></div>
+              <div><dt data-i18n="metric.closeness">紧密度</dt><dd id="profileCloseness">0</dd></div>
             </dl>
             <label data-i18n-label="field.category">
               分类
@@ -216,6 +308,33 @@
             </label>
             <button id="saveProfile" class="secondary"><i data-lucide="save"></i><span data-i18n="action.save">保存</span></button>
           </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span data-i18n="section.friendCircles">朋友圈分析</span>
+            <button class="icon-button" id="loadFriendCircles" title="分析朋友圈" data-i18n-title="action.analyzeCircles"><i data-lucide="users-round"></i></button>
+          </div>
+          <label data-i18n-label="field.rootSteamId">
+            Root SteamID
+            <input id="analysisRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
+          </label>
+          <div class="two-col">
+            <label data-i18n-label="field.maxDepth">
+              最大层数
+              <input id="analysisMaxDepth" type="number" min="2" max="4" value="3" />
+            </label>
+            <label data-i18n-label="field.minMutual">
+              最少共同连接
+              <input id="analysisMinMutual" type="number" min="0" value="2" />
+            </label>
+          </div>
+          <label data-i18n-label="field.limit">
+            限制
+            <input id="analysisLimit" type="number" min="1" max="100" value="30" />
+          </label>
+          <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
+          <ol id="friendCircleList" class="rank-list"></ol>
         </section>
 
         <section class="panel">

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from steam_friend_relationship_map.app import create_app
-from steam_friend_relationship_map.models import DbStats, ExportResponse, GraphEdge, GraphNode, GraphResponse
+from steam_friend_relationship_map.models import DbStats, ExportResponse, FriendCircleAnalysisResponse, FriendCircleCandidate, GraphEdge, GraphNode, GraphResponse
 from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.steam import SteamClient
 
@@ -29,6 +29,12 @@ class FakeRepo:
 
     def get_db_stats(self) -> DbStats:
         return DbStats(steam_users=2, steam_friend_relationships=1, crawl_runs=1)
+
+    def get_friend_circle_analysis(self, **_: object) -> FriendCircleAnalysisResponse:
+        return FriendCircleAnalysisResponse(
+            root="root",
+            candidates=[FriendCircleCandidate(steam_id="candidate", label="Candidate", mutual_count=2, score=18)],
+        )
 
     def export_graph(self) -> ExportResponse:
         return ExportResponse(nodes=[{"steam_id": "root", "persona_name": "Root"}], edges=[])
@@ -93,3 +99,27 @@ def test_secret_api_does_not_echo_secret() -> None:
     body = response.json()
     assert body["steam_api_key_configured"] is True
     assert "super-secret" not in response.text
+
+
+def test_logs_endpoint_redacts_sensitive_values() -> None:
+    app = create_app(settings=Settings(steam_api_key="abcd1234abcd1234abcd1234abcd1234", neo4j_password="pw-secret"), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    app.state.logs.append("error", "test", "password=pw-secret key=abcd1234abcd1234abcd1234abcd1234")
+    response = client.get("/api/logs")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "pw-secret" not in text
+    assert "abcd1234abcd1234abcd1234abcd1234" not in text
+    assert "[REDACTED]" in text
+
+
+def test_friend_circle_analysis_endpoint() -> None:
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/analysis/friend-circles?root=root&max_depth=3&min_mutual=2&limit=10")
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["steam_id"] == "candidate"

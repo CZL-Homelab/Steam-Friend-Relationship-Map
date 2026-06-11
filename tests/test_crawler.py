@@ -51,7 +51,7 @@ class FakeRepo:
         for user in users:
             self.users[user.steam_id] = user
 
-    def mark_friend_list_status(self, steam_id: str, status: str) -> None:
+    def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
         self.statuses[steam_id] = status
 
     def upsert_relationships(self, edges: list[FriendEdge]) -> None:
@@ -85,6 +85,31 @@ async def test_crawl_respects_max_nodes() -> None:
 
     assert set(repo.users) == {"root", "a", "b"}
     assert repo.runs[run.id].nodes_discovered == 3
+
+
+@pytest.mark.asyncio
+async def test_crawl_filters_by_friend_count() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, friend_count_min=3))
+    await manager.controls[run.id].task
+
+    assert set(repo.users) == {"root", "b"}
+    assert repo.users["b"].friend_count == 3
+    assert repo.runs[run.id].friend_count_filtered_count == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_filters_by_prior_pool_links() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, prior_pool_min_links=2))
+    await manager.controls[run.id].task
+
+    assert set(repo.users) == {"root"}
+    assert repo.runs[run.id].prior_pool_filtered_count == 2
 
 
 @pytest.mark.asyncio

@@ -300,6 +300,7 @@ http://127.0.0.1:8000
 6. Neo4j 状态显示正常。
 7. 如果 Neo4j 失败，先确认 Neo4j Desktop 数据库是否已经 Start。
 8. 如果 Steam 失败，先确认 Steam API Key 是否保存成功。
+9. 展开“系统日志 / Dev Logs”，确认没有红色错误。日志会自动脱敏，适合排查连接、图谱查询和前端异常。
 
 ## 第一次抓取好友图谱
 
@@ -330,6 +331,35 @@ http://127.0.0.1:8000
 9. 点击一个节点，右侧会显示头像、昵称、主页链接、备注、标签和分类。
 
 确认 1 层正常后，再尝试 2 层。不要一上来就抓 4 层。
+
+### 扫描前筛选怎么用？
+
+抓取面板里有“扫描前筛选”：
+
+- 最小/最大好友数：只让公开好友数落在范围内的候选用户进入下一层。例如 `100-500`、`1000 以上` 或 `100 以下`。
+- 前层朋友圈连接阈值：候选用户必须和更靠近 Root 的用户池至少有多少条已知好友关系。默认 `0` 表示不启用。
+
+注意：好友数筛选会额外请求候选人的公开好友列表，因此会更慢，也更容易触发 API 限速。阈值越高，扫描越收敛，适合减少指数爆炸。
+
+### 扫描后筛选、排序和朋友圈分析
+
+左侧“筛选”面板作用于已经写入 Neo4j 的数据：
+
+- 可以按好友数范围、前层朋友圈连接阈值过滤当前图谱。
+- 可以按层数、度数、好友数、朋友圈连接数、紧密度排序。
+- 可以选择头像大小依据，让共同连接更多或更紧密的用户在图上更明显。
+- 布局选择“紧密度靠中心”后，紧密度更高的节点会更靠近图谱中心。
+
+右侧“朋友圈分析”会查找潜在 Root 朋友：这些人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。结果里的“共同连接”和“分数”只基于当前数据库中已经抓到的公开关系，不代表真实社交关系的完整结论。
+
+### 日志和安全排错
+
+页面有两类日志：
+
+- 抓取日志：只显示当前抓取任务的进度事件。
+- 系统日志 / Dev Logs：显示后端 API、图谱查询、Neo4j、Steam API 和前端异常。
+
+日志进入页面前会自动脱敏 Steam API Key、Neo4j 密码、Cookie、Authorization、`password=`、`key=` 等内容。即便如此，SteamID、昵称、头像、备注、路径和截图仍可能包含个人信息，复制日志或截图前请再检查一遍。
 
 ## 在 Neo4j Bloom 里查看图谱
 
@@ -476,6 +506,8 @@ This project is a local Steam friend graph crawler and Neo4j visualizer. The Web
 
 8. Use the Secure Settings panel to save your Steam API Key and Neo4j password into the system credential store.
 
-The app only uses public Steam Web API data. Private friend lists are marked as inaccessible and skipped.
+The app only uses public Steam Web API data. Private friend lists are marked as inaccessible and skipped. Pre-scan filters can limit candidates by public friend count or by links to the prior user pool; post-scan filters and Friend Circle Analysis work only on data already stored in your local Neo4j database.
+
+System Logs / Dev Logs redact API keys, passwords, Cookie, Authorization, and common `password=` / `key=` values before showing them in the browser. SteamIDs, notes, screenshots, and relationship context may still be personal data, so review logs before sharing.
 
 Disclaimer: this is an unofficial local research and visualization tool. It is not affiliated with, endorsed by, or sponsored by Valve, Steam, or Neo4j. Do not use it for harassment, doxxing, unauthorized monitoring, spam, privacy invasion, or any illegal activity. Never commit `.env`, Steam API keys, Neo4j passwords, database dumps, exported relationship data, screenshots with private notes, or other sensitive files to a public repository.

@@ -18,6 +18,8 @@
 
 当前版本推荐通过网页端“安全配置”保存 Steam API Key 和 Neo4j 密码。它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍可兼容读取，但建议迁移。
 
+网页端“系统日志 / Dev Logs”会自动脱敏 Steam API Key、Neo4j 密码、Cookie、Authorization、`password=`、`key=` 等内容，用于本地排错。但日志中仍可能出现 SteamID、昵称、路径、备注分类或错误上下文。复制日志、提交 Issue 或分享截图前，请再手动检查并删除可识别个人信息。
+
 ### 如果密钥或数据泄露
 
 如果你不小心公开了敏感信息：

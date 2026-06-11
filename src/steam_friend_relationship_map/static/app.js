@@ -6,48 +6,34 @@ const FALLBACK_ZH = {
   "graph.summary": "{nodes} 个节点 · {edges} 条关系",
   "graph.summaryLimited": "{nodes} 个节点 · {edges} 条关系 · 已限制",
   "graph.loadFailed": "图谱加载失败",
+  "graph.emptyTitle": "暂无图谱",
+  "graph.emptyHint": "完成抓取或刷新图谱后会显示节点。",
   "log.empty": "暂无日志",
   "path.empty": "未选择路径",
   "path.noPath": "没有路径",
   "profile.empty": "选择一个节点",
   "profile.steamProfile": "Steam 主页",
-  "status.cancelled": "已取消",
-  "status.completed": "已完成",
-  "status.failed": "失败",
   "status.idle": "空闲",
-  "status.ok": "正常",
-  "status.pending": "等待中",
-  "status.private": "私密",
-  "status.public": "公开",
-  "status.running": "运行中",
-  "status.testing": "测试中",
   "status.unknown": "未知",
-  "toast.cancelRequested": "已请求取消",
-  "toast.copied": "已复制",
-  "toast.crawlStarted": "抓取已开始",
-  "toast.fromToRequired": "请输入起点和终点",
-  "toast.profileSaved": "资料已保存",
   "toast.rootRequired": "请输入 Root URL",
-  "toast.settingsSaved": "配置已保存",
   "toast.graphLoadFailed": "图谱加载失败，详情见日志",
 };
 
 let cy;
 let currentRunId = null;
 let pollTimer = null;
+let systemLogTimer = null;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
+let lastSystemLogSeq = 0;
 
-// 前端不引入构建系统，翻译文件直接作为静态 JSON 加载。
 async function loadI18n() {
   try {
     const response = await fetch("/static/i18n.json");
-    if (response.ok) {
-      i18n = await response.json();
-    }
+    if (response.ok) i18n = await response.json();
   } catch {
     i18n = { "zh-CN": FALLBACK_ZH, en: {} };
   }
@@ -119,31 +105,107 @@ function toast(message) {
   setTimeout(() => box.classList.remove("show"), 2600);
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || response.statusText);
-  }
-  return response.json();
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
-function appendUiLog(level, stage, message, time = new Date().toISOString()) {
-  const list = $("crawlLogs");
+async function api(path, options = {}) {
+  try {
+    const response = await fetch(path, {
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...options,
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || response.statusText);
+    }
+    return response.json();
+  } catch (error) {
+    appendSystemLog("error", "api", `${path.split("?")[0]}: ${error.message}`);
+    throw error;
+  }
+}
+
+function appendLog(listId, level, source, message, time = new Date().toISOString()) {
+  const list = $(listId);
   const row = document.createElement("div");
   row.className = `log-item log-${level}`;
-  row.innerHTML = `<span class="log-meta">${escapeHtml(time)} · ${escapeHtml(stage)}</span><span>${escapeHtml(message)}</span>`;
+  row.dataset.level = level;
+  row.innerHTML = `<span class="log-meta">${escapeHtml(time)} · ${escapeHtml(source)}</span><span>${escapeHtml(message)}</span>`;
   list.appendChild(row);
   while (list.children.length > 300) list.removeChild(list.firstElementChild);
   list.scrollTop = list.scrollHeight;
+}
+
+function appendUiLog(level, stage, message, time = new Date().toISOString()) {
+  appendLog("crawlLogs", level, stage, message, time);
   $("lastEvent").textContent = message;
+}
+
+function appendSystemLog(level, source, message, time = new Date().toISOString()) {
+  appendLog("systemLogs", level, source, message, time);
 }
 
 function setProgress(percent) {
   $("crawlProgressBar").style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
+}
+
+function setFieldError(id, message) {
+  const input = $(id);
+  input.classList.toggle("field-invalid", Boolean(message));
+  let error = input.parentElement.querySelector(".field-error");
+  if (!error) {
+    error = document.createElement("div");
+    error.className = "field-error";
+    input.parentElement.appendChild(error);
+  }
+  error.textContent = message || "";
+}
+
+function clearFieldErrors(ids) {
+  ids.forEach((id) => setFieldError(id, ""));
+}
+
+function numberValue(id, fallback = null) {
+  const raw = $(id).value.trim();
+  if (raw === "") return fallback;
+  return Number(raw);
+}
+
+function validateRange(minId, maxId) {
+  const min = numberValue(minId);
+  const max = numberValue(maxId);
+  if (min !== null && max !== null && min > max) {
+    setFieldError(maxId, t("validation.minMax"));
+    return false;
+  }
+  return true;
+}
+
+async function withButtonState(button, action) {
+  const node = typeof button === "string" ? $(button) : button;
+  node.disabled = true;
+  node.classList.remove("button-success", "button-error");
+  node.classList.add("is-loading");
+  try {
+    const result = await action();
+    node.classList.add("button-success");
+    setTimeout(() => node.classList.remove("button-success"), 900);
+    return result;
+  } catch (error) {
+    node.classList.add("button-error");
+    toast(error.message);
+    appendSystemLog("error", "ui", error.message);
+    setTimeout(() => node.classList.remove("button-error"), 1200);
+    throw error;
+  } finally {
+    node.disabled = false;
+    node.classList.remove("is-loading");
+  }
 }
 
 function initGraph() {
@@ -166,8 +228,8 @@ function initGraph() {
           "text-background-opacity": 0.9,
           "text-background-padding": 3,
           "text-margin-y": 8,
-          width: "mapData(degree, 0, 100, 34, 86)",
-          height: "mapData(degree, 0, 100, 34, 86)",
+          width: "mapData(visualSize, 0, 100, 34, 92)",
+          height: "mapData(visualSize, 0, 100, 34, 92)",
         },
       },
       {
@@ -175,11 +237,19 @@ function initGraph() {
         style: { "border-color": "#be123c", "border-width": 3 },
       },
       {
+        selector: "node.analysis-focus",
+        style: { "border-color": "#2563eb", "border-width": 5 },
+      },
+      {
+        selector: "node.analysis-evidence",
+        style: { "border-color": "#b45309", "border-width": 4 },
+      },
+      {
         selector: "edge",
         style: {
-          width: 1.4,
+          width: "mapData(strength, 1, 20, 1.2, 7)",
           "line-color": "#9aa8b2",
-          opacity: 0.62,
+          opacity: 0.68,
           "curve-style": "haystack",
         },
       },
@@ -198,8 +268,17 @@ function initGraph() {
   });
 }
 
+function metricValue(node, metric) {
+  if (metric === "friend_count") return node.friend_count ?? 0;
+  if (metric === "prior_pool_links") return node.prior_pool_link_count ?? 0;
+  if (metric === "closeness") return node.root_closeness_score ?? 0;
+  return node.degree ?? 0;
+}
+
 function renderGraph(data) {
   currentGraph = data;
+  const sizeBy = $("graphSizeBy").value || "degree";
+  const maxMetric = Math.max(1, ...data.nodes.map((node) => metricValue(node, sizeBy)));
   const elements = [
     ...data.nodes.map((node) => ({
       data: {
@@ -207,17 +286,22 @@ function renderGraph(data) {
         label: node.label,
         avatar: node.avatar,
         degree: node.degree || 1,
+        closeness: node.root_closeness_score || 0,
+        visualSize: Math.max(5, Math.min(100, (metricValue(node, sizeBy) / maxMetric) * 100)),
         status: node.friend_list_status,
         node,
       },
     })),
-    ...data.edges.map((edge) => ({ data: { id: edge.id, source: edge.source, target: edge.target } })),
+    ...data.edges.map((edge) => ({ data: { id: edge.id, source: edge.source, target: edge.target, strength: Math.max(1, edge.strength || 1) } })),
   ];
   cy.elements().remove();
   cy.add(elements);
   runLayout();
   updateGraphSummary();
   $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
+  if (!data.nodes.length) {
+    $("graphEmpty").querySelector("span").textContent = t("graph.emptyFiltered");
+  }
 }
 
 function updateGraphSummary() {
@@ -228,8 +312,19 @@ function updateGraphSummary() {
   });
 }
 
-// Cytoscape 的 cose 布局适合中小规模社交网络，刷新和路径结果都复用这一套布局。
 function runLayout() {
+  const bias = $("graphLayoutBias")?.value || "cose";
+  if (bias === "closeness") {
+    cy.layout({
+      name: "concentric",
+      animate: "end",
+      animationDuration: 320,
+      padding: 48,
+      concentric: (node) => node.data("closeness") || node.data("degree") || 1,
+      levelWidth: () => 12,
+    }).run();
+    return;
+  }
   cy.layout({
     name: "cose",
     animate: "end",
@@ -249,6 +344,9 @@ function fillProfile(node) {
   $("profileUrl").textContent = node.profile_url || t("profile.steamProfile");
   $("profileSteamId").textContent = node.id || "-";
   $("profileDegree").textContent = node.degree ?? 0;
+  $("profileFriendCount").textContent = node.friend_count ?? "-";
+  $("profilePriorLinks").textContent = node.prior_pool_link_count ?? 0;
+  $("profileCloseness").textContent = node.root_closeness_score ?? 0;
   $("profileStatus").dataset.status = node.friend_list_status || "unknown";
   $("profileStatus").textContent = statusText(node.friend_list_status);
   $("profileCategory").value = node.category || "";
@@ -257,19 +355,43 @@ function fillProfile(node) {
   $("pathFrom").value ||= node.id || "";
 }
 
-async function loadGraph() {
+function graphParams() {
   const params = new URLSearchParams();
   const root = $("graphRoot").value.trim();
   const q = $("graphSearch").value.trim();
   const category = $("graphCategory").value.trim();
+  const friendMin = $("graphFriendCountMin").value.trim();
+  const friendMax = $("graphFriendCountMax").value.trim();
   if (root) params.set("root", root);
   if (q) params.set("q", q);
   if (category) params.set("category", category);
+  if (friendMin) params.set("friend_count_min", friendMin);
+  if (friendMax) params.set("friend_count_max", friendMax);
+  params.set("prior_pool_min_links", $("graphPriorPoolMinLinks").value || "0");
+  params.set("sort_by", $("graphSortBy").value || "depth");
+  params.set("sort_dir", $("graphSortDir").value || "asc");
   params.set("depth", $("graphDepth").value || "2");
   params.set("limit", $("graphLimit").value || "500");
+  return params;
+}
+
+function validateGraphFilters() {
+  clearFieldErrors(["graphFriendCountMin", "graphFriendCountMax", "graphPriorPoolMinLinks", "graphDepth", "graphLimit"]);
+  if (!validateRange("graphFriendCountMin", "graphFriendCountMax")) return false;
+  const prior = numberValue("graphPriorPoolMinLinks", 0);
+  if (prior < 0) {
+    setFieldError("graphPriorPoolMinLinks", t("validation.nonNegative"));
+    return false;
+  }
+  return true;
+}
+
+async function loadGraph() {
+  if (!validateGraphFilters()) throw new Error(t("validation.fixFields"));
   try {
-    const data = await api(`/api/graph?${params.toString()}`);
+    const data = await api(`/api/graph?${graphParams().toString()}`);
     renderGraph(data);
+    appendSystemLog("info", "graph", t("log.graphLoaded", { nodes: data.nodes.length, edges: data.edges.length }));
   } catch (error) {
     appendUiLog("error", t("graph.loadFailed"), error.message);
     toast(t("toast.graphLoadFailed"));
@@ -299,6 +421,15 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  clearFieldErrors(["settingsNeo4jUri", "settingsNeo4jUser"]);
+  if (!$("settingsNeo4jUri").value.trim()) {
+    setFieldError("settingsNeo4jUri", t("validation.required"));
+    throw new Error(t("validation.fixFields"));
+  }
+  if (!$("settingsNeo4jUser").value.trim()) {
+    setFieldError("settingsNeo4jUser", t("validation.required"));
+    throw new Error(t("validation.fixFields"));
+  }
   const payload = {
     neo4j_uri: $("settingsNeo4jUri").value.trim(),
     neo4j_user: $("settingsNeo4jUser").value.trim(),
@@ -325,27 +456,56 @@ async function testSettings() {
   setStatus("steamStatus", result.steam_ok ? "ok" : "failed");
   setStatus("neo4jStatus", result.neo4j_ok ? "ok" : "failed");
   toast(`${result.steam_message} · ${result.neo4j_message}`);
+  appendSystemLog(result.steam_ok && result.neo4j_ok ? "info" : "warn", "settings", `${result.steam_message} · ${result.neo4j_message}`);
   await loadDbStats().catch(() => {});
 }
 
+function validateCrawlPayload() {
+  clearFieldErrors(["rootUrl", "maxDepth", "maxNodes", "delayMs", "crawlFriendCountMin", "crawlFriendCountMax", "crawlPriorPoolMinLinks"]);
+  let ok = true;
+  if (!$("rootUrl").value.trim()) {
+    setFieldError("rootUrl", t("validation.required"));
+    ok = false;
+  }
+  if (!validateRange("crawlFriendCountMin", "crawlFriendCountMax")) ok = false;
+  const checks = [
+    ["maxDepth", 1, 4],
+    ["maxNodes", 1, 10000],
+    ["delayMs", 0, 10000],
+    ["crawlPriorPoolMinLinks", 0, Number.MAX_SAFE_INTEGER],
+  ];
+  for (const [id, min, max] of checks) {
+    const value = numberValue(id, 0);
+    if (value < min || value > max) {
+      setFieldError(id, t("validation.range", { min, max }));
+      ok = false;
+    }
+  }
+  return ok;
+}
+
 async function startCrawl() {
+  if (!validateCrawlPayload()) throw new Error(t("validation.fixFields"));
   const payload = {
     root_url: $("rootUrl").value.trim(),
     max_depth: Number($("maxDepth").value || 2),
     max_nodes: Number($("maxNodes").value || 2000),
     delay_ms: Number($("delayMs").value || 300),
+    prior_pool_min_links: Number($("crawlPriorPoolMinLinks").value || 0),
   };
-  if (!payload.root_url) {
-    toast(t("toast.rootRequired"));
-    return;
-  }
+  const friendMin = $("crawlFriendCountMin").value.trim();
+  const friendMax = $("crawlFriendCountMax").value.trim();
+  if (friendMin) payload.friend_count_min = Number(friendMin);
+  if (friendMax) payload.friend_count_max = Number(friendMax);
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
   currentRunId = run.id;
   lastEventSeq = 0;
   $("crawlLogs").innerHTML = "";
   setProgress(1);
   $("graphRoot").value = run.root_steam_id;
+  $("analysisRoot").value = run.root_steam_id;
   toast(t("toast.crawlStarted"));
+  appendSystemLog("info", "crawl", t("toast.crawlStarted"));
   pollRun();
 }
 
@@ -357,11 +517,13 @@ async function pollRun() {
   $("nodeCount").textContent = run.nodes_discovered;
   $("edgeCount").textContent = run.edges_discovered;
   $("privateCount").textContent = run.private_count;
+  $("filteredCount").textContent = run.filtered_count || 0;
   setProgress(run.progress_percent);
   if (run.last_event) $("lastEvent").textContent = run.last_event;
   await loadEvents().catch(() => {});
   if (["completed", "cancelled", "failed"].includes(run.status)) {
     toast(run.message || statusText(run.status));
+    appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
     await loadGraph().catch(() => {});
     await loadDbStats().catch(() => {});
     return;
@@ -378,14 +540,41 @@ async function loadEvents() {
   }
 }
 
+async function loadSystemLogs(reset = false) {
+  if (reset) {
+    lastSystemLogSeq = 0;
+    $("systemLogs").innerHTML = "";
+  }
+  const params = new URLSearchParams();
+  params.set("after", String(lastSystemLogSeq));
+  const level = $("systemLogLevel").value;
+  if (level) params.set("level", level);
+  const rows = await api(`/api/logs?${params.toString()}`);
+  for (const row of rows) {
+    appendSystemLog(row.level, row.source, row.message, row.time);
+    lastSystemLogSeq = Math.max(lastSystemLogSeq, row.seq);
+  }
+}
+
+function startSystemLogPolling() {
+  clearInterval(systemLogTimer);
+  systemLogTimer = setInterval(() => loadSystemLogs().catch(() => {}), 2500);
+}
+
 async function cancelCrawl() {
-  if (!currentRunId) return;
+  if (!currentRunId) {
+    toast(t("toast.noActiveCrawl"));
+    return;
+  }
   await api(`/api/crawls/${currentRunId}/cancel`, { method: "POST", body: "{}" });
   toast(t("toast.cancelRequested"));
 }
 
 async function saveProfile() {
-  if (!selectedNode?.id) return;
+  if (!selectedNode?.id) {
+    toast(t("toast.selectNodeFirst"));
+    return;
+  }
   await api(`/api/users/${selectedNode.id}`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -401,9 +590,11 @@ async function saveProfile() {
 async function findPath() {
   const from = $("pathFrom").value.trim();
   const to = $("pathTo").value.trim();
+  clearFieldErrors(["pathFrom", "pathTo"]);
   if (!from || !to) {
-    toast(t("toast.fromToRequired"));
-    return;
+    if (!from) setFieldError("pathFrom", t("validation.required"));
+    if (!to) setFieldError("pathTo", t("validation.required"));
+    throw new Error(t("toast.fromToRequired"));
   }
   const data = await api(`/api/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&max_depth=4`);
   if (!data.nodes.length) {
@@ -423,41 +614,107 @@ async function loadTopDegree() {
     .join("");
 }
 
-function exportFile(format) {
-  window.location.href = `/api/export?format=${format}`;
+async function loadFriendCircles() {
+  clearFieldErrors(["analysisRoot", "analysisMaxDepth", "analysisMinMutual", "analysisLimit"]);
+  const root = $("analysisRoot").value.trim() || $("graphRoot").value.trim();
+  if (!root) {
+    setFieldError("analysisRoot", t("validation.required"));
+    throw new Error(t("validation.rootSteamIdRequired"));
+  }
+  $("analysisRoot").value = root;
+  const params = new URLSearchParams({
+    root,
+    max_depth: $("analysisMaxDepth").value || "3",
+    min_mutual: $("analysisMinMutual").value || "2",
+    limit: $("analysisLimit").value || "30",
+  });
+  const data = await api(`/api/analysis/friend-circles?${params.toString()}`);
+  $("friendCircleList").innerHTML = data.candidates
+    .map(
+      (item) =>
+        `<li><button class="rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>${t("analysis.row", {
+          mutual: item.mutual_count,
+          score: item.score,
+        })}</span></button></li>`,
+    )
+    .join("");
+  document.querySelectorAll(".rank-button").forEach((button) => {
+    button.addEventListener("click", () => focusAnalysisCandidate(button.dataset.steamId, data.candidates));
+  });
+  toast(t("toast.analysisLoaded"));
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+function focusAnalysisCandidate(steamId, candidates) {
+  const candidate = candidates.find((item) => item.steam_id === steamId);
+  cy.elements().removeClass("analysis-focus analysis-evidence");
+  const node = cy.getElementById(steamId);
+  if (node.length) {
+    node.addClass("analysis-focus");
+    cy.center(node);
+  }
+  for (const evidence of candidate?.evidence || []) {
+    const evidenceNode = cy.getElementById(evidence.id);
+    if (evidenceNode.length) evidenceNode.addClass("analysis-evidence");
+  }
+  appendSystemLog("info", "analysis", t("analysis.focused", { label: candidate?.label || steamId }));
+}
+
+function exportFile(format) {
+  window.location.href = `/api/export?format=${format}`;
+  toast(t(format === "csv" ? "toast.exportCsv" : "toast.exportJson"));
+}
+
+async function copySystemLogs() {
+  const text = Array.from($("systemLogs").querySelectorAll(".log-item"))
+    .map((row) => row.textContent.trim())
+    .join("\n");
+  await navigator.clipboard.writeText(text);
+  toast(t("toast.logsCopied"));
 }
 
 function wireEvents() {
   document.querySelectorAll(".lang-button").forEach((button) => {
     button.addEventListener("click", () => setLanguage(button.dataset.lang));
   });
-  $("testSettings").addEventListener("click", () => testSettings().catch((error) => toast(error.message)));
-  $("loadSettings").addEventListener("click", () => loadSettings().catch((error) => toast(error.message)));
-  $("saveSettings").addEventListener("click", () => saveSettings().catch((error) => toast(error.message)));
-  $("refreshDbStats").addEventListener("click", () => loadDbStats().catch((error) => toast(error.message)));
-  $("startCrawl").addEventListener("click", () => startCrawl().catch((error) => toast(error.message)));
-  $("cancelCrawl").addEventListener("click", () => cancelCrawl().catch((error) => toast(error.message)));
-  $("refreshGraph").addEventListener("click", () => loadGraph().catch((error) => toast(error.message)));
-  $("fitGraph").addEventListener("click", () => cy.fit(undefined, 40));
-  $("layoutGraph").addEventListener("click", runLayout);
-  $("saveProfile").addEventListener("click", () => saveProfile().catch((error) => toast(error.message)));
-  $("findPath").addEventListener("click", () => findPath().catch((error) => toast(error.message)));
-  $("loadTopDegree").addEventListener("click", () => loadTopDegree().catch((error) => toast(error.message)));
-  $("exportJson").addEventListener("click", () => exportFile("json"));
-  $("exportCsv").addEventListener("click", () => exportFile("csv"));
-  $("copyBloom").addEventListener("click", async () => {
-    await navigator.clipboard.writeText($("bloomQuery").value);
-    toast(t("toast.copied"));
+  $("testSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, testSettings).catch(() => {}));
+  $("loadSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, loadSettings).catch(() => {}));
+  $("saveSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, saveSettings).catch(() => {}));
+  $("refreshDbStats").addEventListener("click", (event) => withButtonState(event.currentTarget, loadDbStats).catch(() => {}));
+  $("startCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, startCrawl).catch(() => {}));
+  $("cancelCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, cancelCrawl).catch(() => {}));
+  $("refreshGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, loadGraph).catch(() => {}));
+  $("fitGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => cy.fit(undefined, 40)).catch(() => {}));
+  $("layoutGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => runLayout()).catch(() => {}));
+  $("saveProfile").addEventListener("click", (event) => withButtonState(event.currentTarget, saveProfile).catch(() => {}));
+  $("findPath").addEventListener("click", (event) => withButtonState(event.currentTarget, findPath).catch(() => {}));
+  $("loadTopDegree").addEventListener("click", (event) => withButtonState(event.currentTarget, loadTopDegree).catch(() => {}));
+  $("loadFriendCircles").addEventListener("click", (event) => withButtonState(event.currentTarget, loadFriendCircles).catch(() => {}));
+  $("refreshSystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, () => loadSystemLogs(true)).catch(() => {}));
+  $("copySystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, copySystemLogs).catch(() => {}));
+  $("clearSystemLogs").addEventListener("click", () => {
+    $("systemLogs").innerHTML = "";
+    toast(t("toast.logsCleared"));
   });
+  $("systemLogLevel").addEventListener("change", () => loadSystemLogs(true).catch(() => {}));
+  $("graphSizeBy").addEventListener("change", () => renderGraph(currentGraph));
+  $("graphLayoutBias").addEventListener("change", runLayout);
+  $("exportJson").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("json")).catch(() => {}));
+  $("exportCsv").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("csv")).catch(() => {}));
+  $("copyBloom").addEventListener("click", (event) =>
+    withButtonState(event.currentTarget, async () => {
+      await navigator.clipboard.writeText($("bloomQuery").value);
+      toast(t("toast.copied"));
+    }).catch(() => {}),
+  );
 }
+
+window.addEventListener("error", (event) => {
+  appendSystemLog("error", "frontend", event.message);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  appendSystemLog("error", "frontend", event.reason?.message || String(event.reason));
+});
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadI18n();
@@ -466,8 +723,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   initGraph();
   wireEvents();
   $("pathResult").dataset.state = "empty";
-  loadSettings().catch((error) => appendUiLog("error", "settings", error.message));
+  loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));
   loadGraph().catch(() => {});
-  loadDbStats().catch((error) => appendUiLog("error", "db", error.message));
-  loadTopDegree().catch((error) => appendUiLog("error", "stats", error.message));
+  loadDbStats().catch((error) => appendSystemLog("error", "db", error.message));
+  loadTopDegree().catch((error) => appendSystemLog("error", "stats", error.message));
+  loadSystemLogs(true).catch(() => {});
+  startSystemLogPolling();
 });

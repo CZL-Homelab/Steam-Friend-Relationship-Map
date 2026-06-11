@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class CrawlStatus(StrEnum):
@@ -26,6 +26,11 @@ class SteamUserRecord(BaseModel):
     profile_state: int | None = None
     depth_min: int = 0
     friend_list_status: str = "unknown"
+    friend_count: int | None = None
+    friend_count_status: str = "unknown"
+    prior_pool_link_count: int = 0
+    root_closeness_score: float = 0
+    last_scored_crawl_id: str = ""
 
 
 class FriendEdge(BaseModel):
@@ -40,6 +45,15 @@ class CrawlCreate(BaseModel):
     max_depth: int = Field(default=2, ge=1, le=4)
     max_nodes: int = Field(default=2000, ge=1, le=10000)
     delay_ms: int = Field(default=300, ge=0, le=10000)
+    friend_count_min: int | None = Field(default=None, ge=0)
+    friend_count_max: int | None = Field(default=None, ge=0)
+    prior_pool_min_links: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_filters(self) -> "CrawlCreate":
+        if self.friend_count_min is not None and self.friend_count_max is not None and self.friend_count_min > self.friend_count_max:
+            raise ValueError("friend_count_min must be less than or equal to friend_count_max")
+        return self
 
 
 class CrawlRun(BaseModel):
@@ -61,6 +75,9 @@ class CrawlRun(BaseModel):
     expanded_count: int = 0
     progress_percent: int = 0
     last_event: str = ""
+    filtered_count: int = 0
+    friend_count_filtered_count: int = 0
+    prior_pool_filtered_count: int = 0
 
 
 class CrawlEvent(BaseModel):
@@ -69,6 +86,14 @@ class CrawlEvent(BaseModel):
     time: str
     level: str
     stage: str
+    message: str
+
+
+class AppLog(BaseModel):
+    seq: int
+    time: str
+    level: str
+    source: str
     message: str
 
 
@@ -146,12 +171,17 @@ class GraphNode(BaseModel):
     category: str = ""
     friend_list_status: str = "unknown"
     degree: int = 0
+    friend_count: int | None = None
+    friend_count_status: str = "unknown"
+    prior_pool_link_count: int = 0
+    root_closeness_score: float = 0
 
 
 class GraphEdge(BaseModel):
     id: str
     source: str
     target: str
+    strength: int = 1
 
 
 class GraphResponse(BaseModel):
@@ -163,6 +193,24 @@ class GraphResponse(BaseModel):
 class ExportResponse(BaseModel):
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
+
+
+class FriendCircleCandidate(BaseModel):
+    steam_id: str
+    label: str
+    depth: int | None = None
+    avatar: str = ""
+    profile_url: str = ""
+    degree: int = 0
+    friend_count: int | None = None
+    mutual_count: int = 0
+    score: float = 0
+    evidence: list[GraphNode] = []
+
+
+class FriendCircleAnalysisResponse(BaseModel):
+    root: str
+    candidates: list[FriendCircleCandidate]
 
 
 def utc_now_iso() -> str:

@@ -4,7 +4,20 @@ from collections.abc import Iterable
 from typing import Any
 
 from neo4j import GraphDatabase
-from .models import CrawlRun, CrawlStatus, DbStats, ExportResponse, FriendEdge, GraphEdge, GraphNode, GraphResponse, SteamUserRecord, utc_now_iso
+from .models import (
+    CrawlRun,
+    CrawlStatus,
+    DbStats,
+    ExportResponse,
+    FriendCircleAnalysisResponse,
+    FriendCircleCandidate,
+    FriendEdge,
+    GraphEdge,
+    GraphNode,
+    GraphResponse,
+    SteamUserRecord,
+    utc_now_iso,
+)
 
 
 class Neo4jRepository:
@@ -46,7 +59,16 @@ class Neo4jRepository:
                     r.edges_discovered = $edges_discovered,
                     r.private_count = $private_count,
                     r.error_count = $error_count,
-                    r.message = $message
+                    r.message = $message,
+                    r.current_depth = $current_depth,
+                    r.current_steam_id = $current_steam_id,
+                    r.queue_size = $queue_size,
+                    r.expanded_count = $expanded_count,
+                    r.progress_percent = $progress_percent,
+                    r.last_event = $last_event,
+                    r.filtered_count = $filtered_count,
+                    r.friend_count_filtered_count = $friend_count_filtered_count,
+                    r.prior_pool_filtered_count = $prior_pool_filtered_count
                 """,
                 **run.model_dump(mode="json"),
             ).consume()
@@ -85,6 +107,26 @@ class Neo4jRepository:
                     u.avatar_full = user.avatar_full,
                     u.visibility_state = user.visibility_state,
                     u.profile_state = user.profile_state,
+                    u.friend_count = CASE
+                        WHEN user.friend_count IS NULL THEN u.friend_count
+                        ELSE user.friend_count
+                    END,
+                    u.friend_count_status = CASE
+                        WHEN user.friend_count_status IS NULL OR user.friend_count_status = "unknown" THEN coalesce(u.friend_count_status, "unknown")
+                        ELSE user.friend_count_status
+                    END,
+                    u.prior_pool_link_count = CASE
+                        WHEN user.prior_pool_link_count > coalesce(u.prior_pool_link_count, 0) THEN user.prior_pool_link_count
+                        ELSE coalesce(u.prior_pool_link_count, 0)
+                    END,
+                    u.root_closeness_score = CASE
+                        WHEN user.root_closeness_score > coalesce(u.root_closeness_score, 0) THEN user.root_closeness_score
+                        ELSE coalesce(u.root_closeness_score, 0)
+                    END,
+                    u.last_scored_crawl_id = CASE
+                        WHEN user.last_scored_crawl_id = "" THEN coalesce(u.last_scored_crawl_id, "")
+                        ELSE user.last_scored_crawl_id
+                    END,
                     u.friend_list_status = CASE
                         WHEN coalesce(u.friend_list_status, "unknown") = "private" THEN "private"
                         ELSE user.friend_list_status
@@ -101,16 +143,33 @@ class Neo4jRepository:
                 now=now,
             ).consume()
 
-    def mark_friend_list_status(self, steam_id: str, status: str) -> None:
+    def mark_friend_list_status(
+        self,
+        steam_id: str,
+        status: str,
+        *,
+        friend_count: int | None = None,
+        friend_count_status: str | None = None,
+    ) -> None:
         with self.driver.session() as session:
             session.run(
                 """
                 MERGE (u:SteamUser {steam_id: $steam_id})
                 SET u.friend_list_status = $status,
+                    u.friend_count = CASE
+                        WHEN $friend_count IS NULL THEN u.friend_count
+                        ELSE $friend_count
+                    END,
+                    u.friend_count_status = CASE
+                        WHEN $friend_count_status IS NULL THEN coalesce(u.friend_count_status, "unknown")
+                        ELSE $friend_count_status
+                    END,
                     u.last_seen_at = $now
                 """,
                 steam_id=steam_id,
                 status=status,
+                friend_count=friend_count,
+                friend_count_status=friend_count_status,
                 now=utc_now_iso(),
             ).consume()
 
@@ -163,6 +222,11 @@ class Neo4jRepository:
         limit: int,
         query: str | None = None,
         category: str | None = None,
+        friend_count_min: int | None = None,
+        friend_count_max: int | None = None,
+        prior_pool_min_links: int = 0,
+        sort_by: str = "depth",
+        sort_dir: str = "asc",
     ) -> GraphResponse:
         depth = max(0, min(depth, 4))
         limit = max(1, min(limit, 2000))
@@ -174,7 +238,25 @@ class Neo4jRepository:
         if category:
             params["category"] = category
             filters.append("coalesce(n.category, '') = $category")
+        if friend_count_min is not None:
+            params["friend_count_min"] = friend_count_min
+            filters.append("coalesce(n.friend_count, -1) >= $friend_count_min")
+        if friend_count_max is not None:
+            params["friend_count_max"] = friend_count_max
+            filters.append("coalesce(n.friend_count, -1) <= $friend_count_max")
+        if prior_pool_min_links:
+            params["prior_pool_min_links"] = prior_pool_min_links
+            filters.append("coalesce(n.prior_pool_link_count, 0) >= $prior_pool_min_links")
         where = "WHERE " + " AND ".join(filters) if filters else ""
+        sort_map = {
+            "depth": "coalesce(n.depth_min, 999)",
+            "degree": "degree",
+            "friend_count": "coalesce(n.friend_count, -1)",
+            "prior_pool_links": "coalesce(n.prior_pool_link_count, 0)",
+            "closeness": "coalesce(n.root_closeness_score, 0)",
+        }
+        order_expr = sort_map.get(sort_by, sort_map["depth"])
+        direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
         with self.driver.session() as session:
             if root:
                 params["root"] = root
@@ -184,7 +266,7 @@ class Neo4jRepository:
                 WITH DISTINCT n
                 {where}
                 RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
-                ORDER BY coalesce(n.depth_min, 999), degree DESC
+                ORDER BY {order_expr} {direction}, degree DESC
                 LIMIT $limit + 1
                 """
             else:
@@ -192,7 +274,7 @@ class Neo4jRepository:
                 MATCH (n:SteamUser)
                 {where}
                 RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
-                ORDER BY degree DESC
+                ORDER BY {order_expr} {direction}, degree DESC
                 LIMIT $limit + 1
                 """
             records = list(session.run(node_query, **params))
@@ -205,14 +287,16 @@ class Neo4jRepository:
                     """
                     MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
                     WHERE a.steam_id IN $ids AND b.steam_id IN $ids AND a.steam_id < b.steam_id
-                    RETURN a.steam_id AS source, b.steam_id AS target
+                    RETURN a.steam_id AS source,
+                           b.steam_id AS target,
+                           COUNT { (a)-[:STEAM_FRIEND]-(:SteamUser)-[:STEAM_FRIEND]-(b) } AS strength
                     LIMIT 5000
                     """,
                     ids=ids,
                 )
             )
         edges = [
-            GraphEdge(id=f"{record['source']}-{record['target']}", source=record["source"], target=record["target"])
+            GraphEdge(id=f"{record['source']}-{record['target']}", source=record["source"], target=record["target"], strength=record["strength"] or 1)
             for record in edge_records
         ]
         return GraphResponse(nodes=nodes, edges=edges, limited=limited)
@@ -236,8 +320,67 @@ class Neo4jRepository:
             for index in range(len(path_nodes) - 1):
                 source = path_nodes[index]["steam_id"]
                 target = path_nodes[index + 1]["steam_id"]
-                edges.append(GraphEdge(id=f"{source}-{target}", source=source, target=target))
+                edges.append(GraphEdge(id=f"{source}-{target}", source=source, target=target, strength=1))
             return GraphResponse(nodes=nodes, edges=edges)
+
+    def get_friend_circle_analysis(self, root: str, max_depth: int = 3, min_mutual: int = 2, limit: int = 50) -> FriendCircleAnalysisResponse:
+        max_depth = max(2, min(max_depth, 4))
+        min_mutual = max(0, min_mutual)
+        limit = max(1, min(limit, 100))
+        with self.driver.session() as session:
+            records = list(
+                session.run(
+                    f"""
+                    MATCH (root:SteamUser {{steam_id: $root}})
+                    MATCH p=(root)-[:STEAM_FRIEND*2..{max_depth}]-(candidate:SteamUser)
+                    WITH root, candidate, min(length(p)) AS depth
+                    WHERE candidate.steam_id <> $root
+                      AND NOT EXISTS {{
+                        MATCH (root)-[:STEAM_FRIEND]-(candidate)
+                      }}
+                    MATCH (candidate)-[:STEAM_FRIEND]-(evidence:SteamUser)
+                    WHERE coalesce(evidence.depth_min, 999) < coalesce(candidate.depth_min, 999)
+                       OR EXISTS {{
+                        MATCH (root)-[:STEAM_FRIEND]-(evidence)
+                       }}
+                    WITH candidate,
+                         depth,
+                         collect(DISTINCT evidence)[0..6] AS evidence_nodes,
+                         count(DISTINCT evidence) AS mutual_count,
+                         COUNT {{ (candidate)-[:STEAM_FRIEND]-() }} AS degree
+                    WHERE mutual_count >= $min_mutual
+                    RETURN candidate,
+                           depth,
+                           evidence_nodes,
+                           mutual_count,
+                           degree,
+                           (mutual_count * 10 + degree * 0.2 + coalesce(candidate.friend_count, 0) / 100.0 - depth * 3) AS score
+                    ORDER BY score DESC, mutual_count DESC
+                    LIMIT $limit
+                    """,
+                    root=root,
+                    min_mutual=min_mutual,
+                    limit=limit,
+                )
+            )
+        candidates = []
+        for record in records:
+            node = self._graph_node(record["candidate"], record["degree"])
+            candidates.append(
+                FriendCircleCandidate(
+                    steam_id=node.id,
+                    label=node.label,
+                    depth=record["depth"],
+                    avatar=node.avatar,
+                    profile_url=node.profile_url,
+                    degree=node.degree,
+                    friend_count=node.friend_count,
+                    mutual_count=record["mutual_count"],
+                    score=round(float(record["score"] or 0), 2),
+                    evidence=[self._graph_node(evidence, 0) for evidence in record["evidence_nodes"]],
+                )
+            )
+        return FriendCircleAnalysisResponse(root=root, candidates=candidates)
 
     def get_top_degree(self, limit: int = 12) -> list[GraphNode]:
         with self.driver.session() as session:
@@ -305,4 +448,8 @@ class Neo4jRepository:
             category=data.get("category") or "",
             friend_list_status=data.get("friend_list_status") or "unknown",
             degree=degree,
+            friend_count=data.get("friend_count"),
+            friend_count_status=data.get("friend_count_status") or "unknown",
+            prior_pool_link_count=data.get("prior_pool_link_count") or 0,
+            root_closeness_score=data.get("root_closeness_score") or 0,
         )
