@@ -233,6 +233,10 @@ button svg {
   background: var(--blue);
 }
 
+.compact {
+  min-height: 36px;
+}
+
 .icon-button,
 .tool {
   display: grid;
@@ -260,6 +264,23 @@ button svg {
   display: grid;
   gap: 8px;
   margin-top: 14px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3eaed;
+}
+
+.progress-bar > div {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--teal);
+  transition: width 180ms ease;
 }
 
 .progress-row {
@@ -298,6 +319,30 @@ button svg {
   background-size: 24px 24px;
 }
 
+.graph-wrap {
+  position: relative;
+}
+
+.graph-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.graph-empty strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.graph-empty.hidden {
+  display: none;
+}
+
 .profile-card {
   overflow: hidden;
 }
@@ -307,6 +352,10 @@ button svg {
   height: 160px;
   object-fit: cover;
   background: #e8eef1;
+}
+
+.profile-card img[hidden] {
+  display: none;
 }
 
 .profile-body {
@@ -388,6 +437,83 @@ dd {
 .toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+.guide-panel summary,
+.log-drawer summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.guide-list {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hint {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.secret-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.secret-state strong {
+  color: var(--ink);
+}
+
+.log-drawer {
+  margin-top: 12px;
+}
+
+.log-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  margin-top: 10px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+  padding: 8px;
+}
+
+.log-item {
+  display: grid;
+  gap: 2px;
+  border-bottom: 1px solid #eef2f3;
+  padding-bottom: 6px;
+  font-size: 12px;
+}
+
+.log-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.log-meta {
+  color: var(--muted);
+}
+
+.log-error {
+  color: var(--rose);
+}
+
+.log-warn {
+  color: var(--amber);
 }
 
 @media (max-width: 1100px) {

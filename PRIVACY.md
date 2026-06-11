@@ -50,6 +50,10 @@ DETACH DELETE n
 
 当前版本不读取 Cookie，不接入 Steam 登录态，不存储 Steam 密码，不尝试绕过好友列表或个人资料隐私设置。
 
+### Secret 保存方式
+
+当前版本推荐将 Steam API Key 和 Neo4j 密码保存到系统凭据库，例如 Windows Credential Manager。网页端只显示“已配置/未配置”，不会回显原文。旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍可兼容读取，但建议迁移到系统凭据库。
+
 ## English
 
 This project runs locally by default. It does not include telemetry and does not upload your Steam data, Neo4j database, notes, or configuration to a server operated by the author.

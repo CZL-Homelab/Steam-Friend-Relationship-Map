@@ -16,6 +16,8 @@
 
 `.env` 已在 `.gitignore` 中忽略，但如果你手动复制密钥到 README、Issue、截图或其他文件，Git 仍然可能记录这些内容。
 
+当前版本推荐通过网页端“安全配置”保存 Steam API Key 和 Neo4j 密码。它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍可兼容读取，但建议迁移。
+
 ### 如果密钥或数据泄露
 
 如果你不小心公开了敏感信息：

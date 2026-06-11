@@ -55,6 +55,21 @@ class CrawlRun(BaseModel):
     private_count: int = 0
     error_count: int = 0
     message: str = ""
+    current_depth: int | None = None
+    current_steam_id: str = ""
+    queue_size: int = 0
+    expanded_count: int = 0
+    progress_percent: int = 0
+    last_event: str = ""
+
+
+class CrawlEvent(BaseModel):
+    seq: int
+    run_id: str
+    time: str
+    level: str
+    stage: str
+    message: str
 
 
 class UserPatch(BaseModel):
@@ -80,6 +95,44 @@ class SettingsTestResult(BaseModel):
     neo4j_ok: bool
     steam_message: str
     neo4j_message: str
+
+
+class PublicSettings(BaseModel):
+    neo4j_uri: str
+    neo4j_user: str
+    app_host: str
+    app_port: int
+    default_max_depth: int
+    default_max_nodes: int
+    default_delay_ms: int
+    steam_api_key_configured: bool
+    neo4j_password_configured: bool
+    steam_api_key_from_env: bool = False
+    neo4j_password_from_env: bool = False
+    secure_store_available: bool = True
+    message: str = ""
+
+
+class SettingsPatch(BaseModel):
+    neo4j_uri: str | None = None
+    neo4j_user: str | None = None
+    app_host: str | None = None
+    app_port: int | None = Field(default=None, ge=1, le=65535)
+    default_max_depth: int | None = Field(default=None, ge=1, le=4)
+    default_max_nodes: int | None = Field(default=None, ge=1, le=10000)
+    default_delay_ms: int | None = Field(default=None, ge=0, le=10000)
+
+
+class SecretUpdate(BaseModel):
+    name: str
+    value: str = Field(min_length=1)
+
+
+class DbStats(BaseModel):
+    steam_users: int = 0
+    steam_friend_relationships: int = 0
+    crawl_runs: int = 0
+    latest_crawl: CrawlRun | None = None
 
 
 class GraphNode(BaseModel):

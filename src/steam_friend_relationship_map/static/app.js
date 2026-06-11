@@ -5,6 +5,8 @@ const FALLBACK_ZH = {
   "app.subtitle": "Neo4j 本地图数据库",
   "graph.summary": "{nodes} 个节点 · {edges} 条关系",
   "graph.summaryLimited": "{nodes} 个节点 · {edges} 条关系 · 已限制",
+  "graph.loadFailed": "图谱加载失败",
+  "log.empty": "暂无日志",
   "path.empty": "未选择路径",
   "path.noPath": "没有路径",
   "profile.empty": "选择一个节点",
@@ -26,6 +28,8 @@ const FALLBACK_ZH = {
   "toast.fromToRequired": "请输入起点和终点",
   "toast.profileSaved": "资料已保存",
   "toast.rootRequired": "请输入 Root URL",
+  "toast.settingsSaved": "配置已保存",
+  "toast.graphLoadFailed": "图谱加载失败，详情见日志",
 };
 
 let cy;
@@ -35,6 +39,7 @@ let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
+let lastEventSeq = 0;
 
 // 前端不引入构建系统，翻译文件直接作为静态 JSON 加载。
 async function loadI18n() {
@@ -94,6 +99,7 @@ function applyTranslations() {
   if (!selectedNode) $("profileUrl").textContent = t("profile.steamProfile");
   if ($("pathResult").dataset.state === "empty") $("pathResult").textContent = t("path.empty");
   if ($("pathResult").dataset.state === "no-path") $("pathResult").textContent = t("path.noPath");
+  if (!$("crawlLogs").children.length) $("lastEvent").textContent = t("log.empty");
 }
 
 function statusText(status) {
@@ -123,6 +129,21 @@ async function api(path, options = {}) {
     throw new Error(detail.detail || response.statusText);
   }
   return response.json();
+}
+
+function appendUiLog(level, stage, message, time = new Date().toISOString()) {
+  const list = $("crawlLogs");
+  const row = document.createElement("div");
+  row.className = `log-item log-${level}`;
+  row.innerHTML = `<span class="log-meta">${escapeHtml(time)} · ${escapeHtml(stage)}</span><span>${escapeHtml(message)}</span>`;
+  list.appendChild(row);
+  while (list.children.length > 300) list.removeChild(list.firstElementChild);
+  list.scrollTop = list.scrollHeight;
+  $("lastEvent").textContent = message;
+}
+
+function setProgress(percent) {
+  $("crawlProgressBar").style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
 }
 
 function initGraph() {
@@ -196,6 +217,7 @@ function renderGraph(data) {
   cy.add(elements);
   runLayout();
   updateGraphSummary();
+  $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
 }
 
 function updateGraphSummary() {
@@ -220,7 +242,8 @@ function runLayout() {
 
 function fillProfile(node) {
   selectedNode = node;
-  $("profileAvatar").src = node.avatar || "";
+  $("profileAvatar").hidden = !node.avatar;
+  if (node.avatar) $("profileAvatar").src = node.avatar;
   $("profileName").textContent = node.label || statusText("unknown");
   $("profileUrl").href = node.profile_url || "#";
   $("profileUrl").textContent = node.profile_url || t("profile.steamProfile");
@@ -244,8 +267,55 @@ async function loadGraph() {
   if (category) params.set("category", category);
   params.set("depth", $("graphDepth").value || "2");
   params.set("limit", $("graphLimit").value || "500");
-  const data = await api(`/api/graph?${params.toString()}`);
-  renderGraph(data);
+  try {
+    const data = await api(`/api/graph?${params.toString()}`);
+    renderGraph(data);
+  } catch (error) {
+    appendUiLog("error", t("graph.loadFailed"), error.message);
+    toast(t("toast.graphLoadFailed"));
+    throw error;
+  }
+}
+
+async function loadDbStats() {
+  const stats = await api("/api/db/stats");
+  $("dbSteamUsers").textContent = stats.steam_users;
+  $("dbRelationships").textContent = stats.steam_friend_relationships;
+  $("dbCrawlRuns").textContent = stats.crawl_runs;
+}
+
+function secretLabel(configured, fromEnv) {
+  if (fromEnv) return t("secret.env");
+  return configured ? t("secret.configured") : t("secret.missing");
+}
+
+async function loadSettings() {
+  const settings = await api("/api/settings");
+  $("settingsNeo4jUri").value = settings.neo4j_uri || "";
+  $("settingsNeo4jUser").value = settings.neo4j_user || "";
+  $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
+  $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
+  $("settingsMessage").textContent = settings.message || "";
+}
+
+async function saveSettings() {
+  const payload = {
+    neo4j_uri: $("settingsNeo4jUri").value.trim(),
+    neo4j_user: $("settingsNeo4jUser").value.trim(),
+  };
+  await api("/api/settings", { method: "PATCH", body: JSON.stringify(payload) });
+  const steamKey = $("steamApiKeyInput").value.trim();
+  const neo4jPassword = $("neo4jPasswordInput").value;
+  if (steamKey) {
+    await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "steam_api_key", value: steamKey }) });
+  }
+  if (neo4jPassword) {
+    await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "neo4j_password", value: neo4jPassword }) });
+  }
+  $("steamApiKeyInput").value = "";
+  $("neo4jPasswordInput").value = "";
+  await loadSettings();
+  toast(t("toast.settingsSaved"));
 }
 
 async function testSettings() {
@@ -255,6 +325,7 @@ async function testSettings() {
   setStatus("steamStatus", result.steam_ok ? "ok" : "failed");
   setStatus("neo4jStatus", result.neo4j_ok ? "ok" : "failed");
   toast(`${result.steam_message} · ${result.neo4j_message}`);
+  await loadDbStats().catch(() => {});
 }
 
 async function startCrawl() {
@@ -270,6 +341,9 @@ async function startCrawl() {
   }
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
   currentRunId = run.id;
+  lastEventSeq = 0;
+  $("crawlLogs").innerHTML = "";
+  setProgress(1);
   $("graphRoot").value = run.root_steam_id;
   toast(t("toast.crawlStarted"));
   pollRun();
@@ -283,12 +357,25 @@ async function pollRun() {
   $("nodeCount").textContent = run.nodes_discovered;
   $("edgeCount").textContent = run.edges_discovered;
   $("privateCount").textContent = run.private_count;
+  setProgress(run.progress_percent);
+  if (run.last_event) $("lastEvent").textContent = run.last_event;
+  await loadEvents().catch(() => {});
   if (["completed", "cancelled", "failed"].includes(run.status)) {
     toast(run.message || statusText(run.status));
     await loadGraph().catch(() => {});
+    await loadDbStats().catch(() => {});
     return;
   }
   pollTimer = setTimeout(pollRun, 1200);
+}
+
+async function loadEvents() {
+  if (!currentRunId) return;
+  const events = await api(`/api/crawls/${currentRunId}/events?after=${lastEventSeq}`);
+  for (const event of events) {
+    appendUiLog(event.level, event.stage, event.message, event.time);
+    lastEventSeq = Math.max(lastEventSeq, event.seq);
+  }
 }
 
 async function cancelCrawl() {
@@ -353,6 +440,9 @@ function wireEvents() {
     button.addEventListener("click", () => setLanguage(button.dataset.lang));
   });
   $("testSettings").addEventListener("click", () => testSettings().catch((error) => toast(error.message)));
+  $("loadSettings").addEventListener("click", () => loadSettings().catch((error) => toast(error.message)));
+  $("saveSettings").addEventListener("click", () => saveSettings().catch((error) => toast(error.message)));
+  $("refreshDbStats").addEventListener("click", () => loadDbStats().catch((error) => toast(error.message)));
   $("startCrawl").addEventListener("click", () => startCrawl().catch((error) => toast(error.message)));
   $("cancelCrawl").addEventListener("click", () => cancelCrawl().catch((error) => toast(error.message)));
   $("refreshGraph").addEventListener("click", () => loadGraph().catch((error) => toast(error.message)));
@@ -376,6 +466,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   initGraph();
   wireEvents();
   $("pathResult").dataset.state = "empty";
+  loadSettings().catch((error) => appendUiLog("error", "settings", error.message));
   loadGraph().catch(() => {});
-  loadTopDegree().catch(() => {});
+  loadDbStats().catch((error) => appendUiLog("error", "db", error.message));
+  loadTopDegree().catch((error) => appendUiLog("error", "stats", error.message));
 });

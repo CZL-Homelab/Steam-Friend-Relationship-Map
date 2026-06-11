@@ -4,9 +4,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from neo4j import GraphDatabase
-from neo4j.exceptions import Neo4jError
-
-from .models import CrawlRun, CrawlStatus, ExportResponse, FriendEdge, GraphEdge, GraphNode, GraphResponse, SteamUserRecord, utc_now_iso
+from .models import CrawlRun, CrawlStatus, DbStats, ExportResponse, FriendEdge, GraphEdge, GraphNode, GraphResponse, SteamUserRecord, utc_now_iso
 
 
 class Neo4jRepository:
@@ -185,7 +183,7 @@ class Neo4jRepository:
                 MATCH p=(r:SteamUser {{steam_id: $root}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
                 WITH DISTINCT n
                 {where}
-                RETURN n, size((n)-[:STEAM_FRIEND]-()) AS degree
+                RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
                 ORDER BY coalesce(n.depth_min, 999), degree DESC
                 LIMIT $limit + 1
                 """
@@ -193,7 +191,7 @@ class Neo4jRepository:
                 node_query = f"""
                 MATCH (n:SteamUser)
                 {where}
-                RETURN n, size((n)-[:STEAM_FRIEND]-()) AS degree
+                RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
                 ORDER BY degree DESC
                 LIMIT $limit + 1
                 """
@@ -247,7 +245,7 @@ class Neo4jRepository:
                 session.run(
                     """
                     MATCH (n:SteamUser)
-                    RETURN n, size((n)-[:STEAM_FRIEND]-()) AS degree
+                    RETURN n, COUNT { (n)-[:STEAM_FRIEND]-() } AS degree
                     ORDER BY degree DESC
                     LIMIT $limit
                     """,
@@ -255,6 +253,27 @@ class Neo4jRepository:
                 )
             )
         return [self._graph_node(record["n"], record["degree"]) for record in records]
+
+    def get_db_stats(self) -> DbStats:
+        with self.driver.session() as session:
+            steam_users = session.run("MATCH (u:SteamUser) RETURN count(u) AS count").single()["count"]
+            relationships = session.run("MATCH ()-[r:STEAM_FRIEND]->() RETURN count(r) AS count").single()["count"]
+            crawl_runs = session.run("MATCH (c:CrawlRun) RETURN count(c) AS count").single()["count"]
+            latest_record = session.run(
+                """
+                MATCH (latest:CrawlRun)
+                RETURN latest
+                ORDER BY latest.started_at DESC
+                LIMIT 1
+                """
+            ).single()
+        latest = latest_record["latest"] if latest_record is not None else None
+        return DbStats(
+            steam_users=steam_users or 0,
+            steam_friend_relationships=relationships or 0,
+            crawl_runs=crawl_runs or 0,
+            latest_crawl=CrawlRun(**dict(latest)) if latest is not None else None,
+        )
 
     def export_graph(self) -> ExportResponse:
         with self.driver.session() as session:

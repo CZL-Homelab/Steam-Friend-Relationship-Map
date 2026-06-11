@@ -85,3 +85,17 @@ async def test_crawl_respects_max_nodes() -> None:
 
     assert set(repo.users) == {"root", "a", "b"}
     assert repo.runs[run.id].nodes_discovered == 3
+
+
+@pytest.mark.asyncio
+async def test_crawl_events_can_be_read_after_sequence() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0))
+    await manager.controls[run.id].task
+    events = manager.get_events(run.id, after=1)
+
+    assert events
+    assert all(event.seq > 1 for event in events)
+    assert "secret" not in " ".join(event.message.lower() for event in events)

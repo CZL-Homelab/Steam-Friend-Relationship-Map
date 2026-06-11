@@ -23,6 +23,52 @@
           <button class="lang-button" data-lang="en">English</button>
         </div>
 
+        <section class="panel guide-panel">
+          <details open>
+            <summary data-i18n="section.guide">新手引导</summary>
+            <ol class="guide-list">
+              <li data-i18n="guide.step1">先保存 Steam API Key。</li>
+              <li data-i18n="guide.step2">再填写 Neo4j 连接和密码。</li>
+              <li data-i18n="guide.step3">点击连接测试，确认 Steam 和 Neo4j 正常。</li>
+              <li data-i18n="guide.step4">首次建议 Depth=1、Nodes=200。</li>
+            </ol>
+            <p class="hint" data-i18n="guide.security">敏感信息会保存到系统凭据库，页面不会回显原文。</p>
+          </details>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span data-i18n="section.secureSettings">安全配置</span>
+            <button class="icon-button" id="loadSettings" title="刷新配置" data-i18n-title="action.refreshSettings"><i data-lucide="settings"></i></button>
+          </div>
+          <div class="secret-state">
+            <span>Steam Key</span>
+            <strong id="steamSecretState" data-i18n="secret.unknown">未知</strong>
+          </div>
+          <label data-i18n-label="field.steamApiKey">
+            Steam API Key
+            <input id="steamApiKeyInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
+          </label>
+          <div class="secret-state">
+            <span>Neo4j Password</span>
+            <strong id="neo4jSecretState" data-i18n="secret.unknown">未知</strong>
+          </div>
+          <label data-i18n-label="field.neo4jPassword">
+            Neo4j 密码
+            <input id="neo4jPasswordInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
+          </label>
+          <label>
+            NEO4J_URI
+            <input id="settingsNeo4jUri" placeholder="bolt://localhost:7687" />
+          </label>
+          <label>
+            NEO4J_USER
+            <input id="settingsNeo4jUser" placeholder="neo4j" />
+          </label>
+          <button class="secondary compact" id="saveSettings"><i data-lucide="shield-check"></i><span data-i18n="action.saveSettings">保存安全配置</span></button>
+          <p class="hint" id="settingsMessage"></p>
+        </section>
+
         <section class="panel">
           <div class="panel-title">
             <span data-i18n="section.connection">连接</span>
@@ -52,24 +98,45 @@
           <div class="two-col">
             <label data-i18n-label="field.depth">
               层数
-              <input id="maxDepth" type="number" min="1" max="4" value="2" />
+              <input id="maxDepth" type="number" min="1" max="4" value="1" />
             </label>
             <label data-i18n-label="field.nodes">
               节点数
-              <input id="maxNodes" type="number" min="1" max="10000" value="2000" />
+              <input id="maxNodes" type="number" min="1" max="10000" value="200" />
             </label>
           </div>
           <label data-i18n-label="field.delay">
             延迟 ms
-            <input id="delayMs" type="number" min="0" max="10000" value="300" />
+            <input id="delayMs" type="number" min="0" max="10000" value="500" />
           </label>
           <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span data-i18n="action.startCrawl">开始抓取</span></button>
+          <div class="progress-bar" aria-label="crawl progress">
+            <div id="crawlProgressBar"></div>
+          </div>
+          <div class="hint" id="lastEvent" data-i18n="log.empty">暂无日志</div>
           <div class="progress">
             <div class="progress-row"><span data-i18n="metric.status">状态</span><strong id="crawlStatus" data-status="idle">空闲</strong></div>
             <div class="progress-row"><span data-i18n="metric.nodes">节点</span><strong id="nodeCount">0</strong></div>
             <div class="progress-row"><span data-i18n="metric.edges">关系</span><strong id="edgeCount">0</strong></div>
             <div class="progress-row"><span data-i18n="metric.private">私密</span><strong id="privateCount">0</strong></div>
           </div>
+          <details class="log-drawer" id="logDrawer">
+            <summary data-i18n="section.logs">抓取日志</summary>
+            <div class="log-list" id="crawlLogs"></div>
+          </details>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <span data-i18n="section.dbStats">数据库状态</span>
+            <button class="icon-button" id="refreshDbStats" title="刷新数据库状态" data-i18n-title="action.refreshDbStats"><i data-lucide="database"></i></button>
+          </div>
+          <div class="progress">
+            <div class="progress-row"><span>SteamUser</span><strong id="dbSteamUsers">0</strong></div>
+            <div class="progress-row"><span>STEAM_FRIEND</span><strong id="dbRelationships">0</strong></div>
+            <div class="progress-row"><span>CrawlRun</span><strong id="dbCrawlRuns">0</strong></div>
+          </div>
+          <p class="hint" data-i18n="dbStats.hint">Neo4j Explore 当前画布不一定等于数据库总数。</p>
         </section>
 
         <section class="panel">
@@ -115,12 +182,18 @@
             <button class="tool" id="exportCsv" title="导出 CSV" data-i18n-title="action.exportCsv"><i data-lucide="download"></i></button>
           </div>
         </header>
-        <div id="graph"></div>
+        <div class="graph-wrap">
+          <div id="graph"></div>
+          <div id="graphEmpty" class="graph-empty">
+            <strong data-i18n="graph.emptyTitle">暂无图谱</strong>
+            <span data-i18n="graph.emptyHint">完成抓取或刷新图谱后会显示节点。</span>
+          </div>
+        </div>
       </section>
 
       <aside class="inspector">
         <section class="profile-card" id="profileCard">
-          <img id="profileAvatar" src="" alt="" />
+          <img id="profileAvatar" alt="" hidden />
           <div class="profile-body">
             <h3 id="profileName" data-i18n="profile.empty">选择一个节点</h3>
             <a id="profileUrl" href="#" target="_blank" rel="noreferrer">Steam profile</a>

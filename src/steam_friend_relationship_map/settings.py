@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .secrets import SecretStorageError, SecretStore
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -22,4 +24,21 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    store = SecretStore()
+    updates = {}
+    try:
+        steam_api_key = store.get("steam_api_key")
+        neo4j_password = store.get("neo4j_password")
+    except SecretStorageError:
+        steam_api_key = ""
+        neo4j_password = ""
+    if steam_api_key:
+        updates["steam_api_key"] = steam_api_key
+    if neo4j_password:
+        updates["neo4j_password"] = neo4j_password
+    return settings.model_copy(update=updates)
+
+
+def clear_settings_cache() -> None:
+    get_settings.cache_clear()
