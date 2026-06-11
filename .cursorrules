@@ -1,0 +1,95 @@
+# Steam Friend Relationship Map - Developer Rules (.cursorrules)
+
+This file defines the core project description, architecture, file structure, and security development rules. All AI assistants and developers contributing to this project must strictly adhere to these rules.
+
+---
+
+## 1. Project Description & Core Architecture
+
+### 1.1 Project Overview
+This project is a locally run **Steam Friend Relationship Map Analysis & Visualization Tool**. Users input a public Steam profile URL. The tool treats this user as the Root node and uses a Breadth-First Search (BFS) algorithm to crawl public friend relationships downward by 1-4 levels. The data is saved in a local Neo4j graph database and visualized as an interactive graph in a local Web GUI.
+
+### 1.2 Core Architecture
+- **Backend**: FastAPI provides asynchronous RESTful APIs, managing BFS crawl states and graph queries.
+- **Graph Database**: Neo4j Desktop (running locally, connected via Bolt protocol).
+- **Frontend**: Single-Page Application (SPA) built with HTML5, Vanilla CSS, and ES6 JavaScript. Cytoscape.js renders the graph. Multi-language support is provided via `i18n.json` (Chinese/English).
+- **Environment & Dependency Management**: Python 3.12+ managed by `uv` (executed using `uv sync` and `uv run`).
+
+---
+
+## 2. Project Directory & File Structure
+
+Developers and AI models must maintain the following file organization and respect each file's dedicated responsibility:
+
+```text
+Steam-Friend-Relationship-Map/
+├── pyproject.toml                     # Project metadata & dependency declarations (managed by uv)
+├── uv.lock                            # Lock file containing locked dependencies
+├── README.md                          # User documentation & startup instructions
+├── SECURITY.md                        # Security & vulnerability reporting policy
+├── PRIVACY.md                         # Privacy policy & data protection guidelines
+├── .cursorrules                       # AI assistant instructions & project guidelines (this file)
+├── src/
+│   └── steam_friend_relationship_map/ # Main package source directory
+│       ├── __init__.py                # Package initializer
+│       ├── __main__.py                # Command-line entry point mapping to `steam-friend-map` executable
+│       ├── app.py                     # FastAPI server initialization, routers, endpoints, and middleware
+│       ├── crawler.py                 # BFS crawl runner, manages async task loops, delay, and filter pipeline
+│       ├── logs.py                    # Custom AppLogBuffer & handler mapping to redact secrets in logs
+│       ├── models.py                  # Pydantic schemas, models, and validator rules for API requests/responses
+│       ├── neo4j_repo.py              # Neo4j repository layer containing database connectivity & Cypher queries
+│       ├── secrets.py                 # Keyring wrapper to securely store/fetch secrets from system credential stores
+│       ├── settings.py                # System settings loader based on Pydantic-settings
+│       ├── steam.py                   # Steam API wrapper handling profile resolving, summaries, and friend lists
+│       └── static/                    # Frontend SPA resources
+│           ├── index.html             # Dashboard UI structure (sidebar controls, main canvas, detail inspector)
+│           ├── app.js                 # Frontend application logic, API queries, & Cytoscape.js rendering
+│           ├── styles.css             # Glassmorphism visual theme, custom layout, and responsive styles
+│           ├── i18n.json              # Localized text resource mapping (en / zh-CN)
+│           └── vendor/                # Third-party frontend assets (cytoscape.min.js, lucide.min.js)
+└── tests/                             # Automated test suite
+    ├── test_app.py                    # FastAPI route & payload schema tests using TestClient & mock repository
+    ├── test_crawler.py                # Crawl BFS logic, node limits, and candidate filtering rules (via Fakes)
+    ├── test_steam.py                  # Steam client query resolving & private profile handling tests
+    ├── test_i18n.py                   # Translating-key symmetry checks between en & zh-CN in i18n.json
+    └── test_neo4j_queries.py          # Static syntax checkers verifying compatibility with Neo4j 5.0+ COUNT clauses
+```
+
+---
+
+## 3. Security & Credentials Rules
+
+Security is the highest priority for this project. Developers must strictly follow these rules:
+
+### 3.1 No Hardcoded Secrets
+* **Never hardcode or write the following sensitive credentials to any files tracked by Git**:
+  - Steam Web API Key
+  - Neo4j Database Password
+  - Cookies, login states, Access Tokens, or browser session details
+  - Exported real CSV/JSON graph datasets
+  - Screenshots and log files containing personal notes, friend paths, SteamIDs, avatars, or nicknames.
+* **Secure Storage Mechanism**:
+  - The project must use secure storage (calling `keyring` / Windows Credential Manager via `secrets.py`) to save the Steam API Key and Neo4j password. Writing these secrets to `.env` or codebase files is strictly prohibited.
+  - The `.env` file should only contain non-sensitive settings (e.g., `NEO4J_URI`, `NEO4J_USER`, port, and default crawl depth parameters).
+* **Configuration Inputs & Outputs**:
+  - Input elements in the frontend for secrets must use password fields (`type="password"`) and must clear immediately after saving.
+  - API endpoints must only return the configuration state (e.g., "configured" / "not configured"). They **must never return the actual values of sensitive secrets**.
+
+### 3.2 Log Redaction Rules
+* System logs (including console outputs and the Web UI's `Dev Logs`) must be run through an automatic redaction filter (refer to `AppLogBuffer` in `logs.py`) before outputting or returning to the client.
+* Redaction must cover keys such as: `steam_api_key`, `neo4j_password`, `Authorization`, `Cookie`, `key=`, `password=`, etc.
+
+### 3.3 Data Privacy & Compliance
+* **Official API Limitation**: The project must only query public data accessible via official Steam Web APIs.
+* **Scraping Prohibition**: Do not read cookies, scrape sessions, or try to bypass privacy settings.
+* **Private Profile Handling**: If a user's friend list is private (returning 401/403/404 or indicated as private), mark the node's list status as `private`, skip it, and stop expanding from it. Do not attempt privilege escalation.
+* **Compliance**: Ensure query intervals (default delay `300-500ms`) respect Steam API rate limits, avoiding harassment or unauthorized tracking.
+
+---
+
+## 4. Development & Code Quality Guidelines
+
+* **Dependency Management**: Any new dependencies must be added using `uv add` to keep `pyproject.toml` in sync. Avoid manually editing it.
+* **Internationalization (i18n)**: All frontend texts, labels, and prompts must be defined in `static/i18n.json` and dynamically loaded, ensuring consistency between English and Chinese.
+* **Test-Driven Development**: When modifying the crawler (`crawler.py`) or the database repository (`neo4j_repo.py`), developers must run `pytest` to verify that all test suites pass.
+* **Code Style**: Adhere to PEP 8 for Python and camelCase for JavaScript. When editing files, **always preserve existing unrelated comments and docstrings**.
