@@ -135,7 +135,7 @@ uv --version
 进入本项目目录：
 
 ```powershell
-cd F:\ProjectA\Steam-Friend-Relationship-Map
+cd Steam-Friend-Relationship-Map
 ```
 
 如果你把项目放在了其他位置，请换成自己的路径。
