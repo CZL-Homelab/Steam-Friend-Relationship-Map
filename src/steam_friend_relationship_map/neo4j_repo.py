@@ -118,6 +118,14 @@ class Neo4jRepository:
                 ORDER BY p.created_at DESC
                 """
             ))
+        if not records:
+            # 首次启动：确保默认项目和 schema 存在
+            self.ensure_schema()
+            self.ensure_default_project()
+            return ProjectListResponse(
+                projects=[ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())],
+                active_project_id="",
+            )
         projects = []
         for record in records:
             p = dict(record["p"])

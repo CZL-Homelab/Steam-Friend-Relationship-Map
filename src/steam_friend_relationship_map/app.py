@@ -70,8 +70,6 @@ def create_app(
     repo = repo or Neo4jRepository(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
     steam = steam or SteamClient(settings.steam_api_key)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
-    repo.ensure_schema()
-    repo.ensure_default_project()
 
     async def rebuild_runtime() -> None:
         nonlocal settings, repo, steam, manager
@@ -83,8 +81,6 @@ def create_app(
         repo = old_repo if provided_repo is not None else Neo4jRepository(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
         steam = old_steam if provided_steam is not None else SteamClient(settings.steam_api_key)
         manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
-        repo.ensure_schema()
-        repo.ensure_default_project()
         app.state.repo = repo
         app.state.steam = steam
         app.state.manager = manager

@@ -419,7 +419,9 @@ async function loadSettings() {
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
   $("activeProjectName").textContent = settings.active_project || "default";
-  await loadProjects().catch(() => {});
+  loadProjects().catch(() => {
+    $("projectList").innerHTML = `<div class="project-item active" data-project-id="default"><span>默认项目</span><span class="project-meta">离线</span></div>`;
+  });
 }
 
 async function saveSettings() {
@@ -643,6 +645,12 @@ async function createProject() {
   await loadProjects();
   toast(t("toast.projectCreated"));
 }
+
+async function saveProfile() {
+  if (!selectedNode?.id) {
+    toast(t("toast.selectNodeFirst"));
+    return;
+  }
   await api(`/api/users/${selectedNode.id}`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -798,6 +806,83 @@ function wireEvents() {
   });
 }
 
+// ── Resizable panels ──────────────────────────────────────────────
+
+function initResizeHandles() {
+  const shell = document.querySelector(".app-shell");
+  const leftHandle = $("resizeHandleLeft");
+  const rightHandle = $("resizeHandleRight");
+  if (!shell || !leftHandle || !rightHandle) return;
+
+  const STORAGE_KEY = "sfm_panel_sizes";
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch { /* ignore */ }
+
+  const defaults = { left: 320, right: 340 };
+  const sizes = { left: saved?.left || defaults.left, right: saved?.right || defaults.right };
+
+  function applySizes() {
+    shell.style.gridTemplateColumns = `${sizes.left}px 6px minmax(320px, 1fr) 6px ${sizes.right}px`;
+  }
+
+  function persist() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sizes)); } catch { /* ignore */ }
+  }
+
+  applySizes();
+
+  function makeDraggable(handle, side) {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startSize = sizes[side];
+      const shellRect = shell.getBoundingClientRect();
+      const isLeft = side === "left";
+
+      document.body.classList.add("resize-in-progress");
+      handle.classList.add("active");
+
+      function onMove(ev) {
+        const delta = ev.clientX - startX;
+        let newSize = isLeft ? startSize + delta : startSize - delta;
+        const minW = 220;
+        const maxW = Math.floor((isLeft ? shellRect.width - 360 : shellRect.width - 340));
+        newSize = Math.max(minW, Math.min(newSize, Math.max(minW, maxW)));
+        sizes[side] = newSize;
+        applySizes();
+      }
+
+      function onUp() {
+        document.body.classList.remove("resize-in-progress");
+        handle.classList.remove("active");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        persist();
+      }
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  makeDraggable(leftHandle, "left");
+  makeDraggable(rightHandle, "right");
+
+  // Double-click handle to reset
+  leftHandle.addEventListener("dblclick", () => {
+    sizes.left = defaults.left;
+    applySizes();
+    persist();
+  });
+  rightHandle.addEventListener("dblclick", () => {
+    sizes.right = defaults.right;
+    applySizes();
+    persist();
+  });
+}
+
 window.addEventListener("error", (event) => {
   appendSystemLog("error", "frontend", event.message);
 });
@@ -811,6 +896,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyTranslations();
   if (window.lucide) window.lucide.createIcons();
   initGraph();
+  initResizeHandles();
   wireEvents();
   $("pathResult").dataset.state = "empty";
   loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));
