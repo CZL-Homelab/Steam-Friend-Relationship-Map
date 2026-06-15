@@ -48,4 +48,57 @@ Do not commit `.env`, Steam Web API keys, Neo4j passwords, database dumps, expor
 
 If a secret is leaked, revoke or rotate it immediately, remove the public content, inspect Git history, and avoid posting raw secrets or identifiable personal data in public issues.
 
+---
+
+## 安全审计报告 / Security Audit Report
+
+> 审计日期 / Audit date: 2026-06-16
+> 审计分支 / Audited branch: `dev-base`
+> 目标分支 / Target branch: `security-check-before-main`
+
+### 已修复 / Resolved
+
+| 严重度 | 问题 | 修复方式 |
+|--------|------|---------|
+| **HIGH** | Neo4j Cypher 查询深度值通过 f-string 拼接 | 提取 `_safe_depth()` 静态方法统一校验+钳制，所有深度值强制为安全整数后内插 |
+| **MEDIUM** | `.env` 写入未过滤换行符，可注入环境变量 | `patch_settings` 写入前移除 `\n` `\r` |
+| **LOW** | CSRF 中间件注释不够清晰 | 补充文档说明：空 Origin 头（同源请求）正常放行，仅拦截跨域写操作 |
+
+### 已确认安全 / Confirmed Safe
+
+| 检查项 | 结论 |
+|--------|------|
+| API Key / 密码存储 | 使用 OS 原生凭据库（Windows Credential Manager / macOS Keychain）加密存储 |
+| 日志脱敏 | `AppLogBuffer.redact()` 对 API Key、密码、32 位十六进制令牌、Cookie、Authorization 头进行正则替换 |
+| 输入校验 | Pydantic 模型对所有参数做类型+范围校验；`validate_crawl_payload` 和 `validateGraphFilters` 做前后双重校验 |
+| 端点可访问的资源 | `/static` 仅暴露前端静态文件；`FileResponse` 只返回 index.html |
+| CSRF 保护 | 所有 POST/PATCH/DELETE 请求检查 Origin 头，仅允许 localhost 和配置的 host:port |
+| 无 shell 执行 | 代码中无 `os.system`、`subprocess`、`eval`、`exec` 调用 |
+| Neo4j 参数化查询 | 除深度值外所有用户数据均通过 `$param` 参数化绑定，防止 Cypher 注入 |
+| 密钥不回显 | `/api/settings` 只返回 `configured: true/false`，不返回密钥原文 |
+
+### 已知风险 / Known Risks
+
+| 风险 | 影响 | 缓解措施 |
+|------|------|---------|
+| 本地回环绑定 `127.0.0.1` 时无 TLS | 局域网嗅探可能截获密钥 | 默认绑定 127.0.0.1；若需远程访问请配置反向代理 + HTTPS |
+| 日志脱敏可能遗漏自定义格式的密钥 | 密钥碎片出现在日志中 | 前端复制日志前会提示用户手动检查 |
+| 32 位十六进制正则可能误脱敏非敏感数据（如 UUID） | 日志中 UUID 被替换为 [REDACTED] | 优先保密性；可后续优化为白名单模式 |
+| Neo4j 深度值内插（已受控） | 若 `_safe_depth()` 被绕过则存在注入风险 | 静态方法+类型注解+文档警告三重防护 |
+| 无请求频率限制 | 恶意脚本可高频调用 API | 本地工具场景风险可控；未来可添加 slowapi |
+
+### 开发流程 / Dev Workflow
+
+```
+dev-N → dev-base → security-check-before-main → main
+         ↑              ↑
+    功能开发分支    安全审计+修复+规整化
+                    (本分支)
+```
+
+- `dev-N`：功能开发分支
+- `dev-base`：功能集成分支（所有 dev-N 合并到这里）
+- `security-check-before-main`：安全检查+代码规整化（本分支）
+- `main`：生产分支（由其他人最终 review）
+
 This project only targets public Steam Web API data. It does not support bypassing privacy settings or collecting unauthorized private data.

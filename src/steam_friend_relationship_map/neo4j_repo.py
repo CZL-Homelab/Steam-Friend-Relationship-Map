@@ -26,6 +26,13 @@ from .models import (
 
 
 class Neo4jRepository:
+    """Neo4j 数据访问层。
+
+    Security note: Cypher 查询中深度值经过 ``_safe_depth()`` 校验后以 f-string
+    形式拼接。Neo4j 不支持参数化变长路径模式 ``*..$depth``，因此必须在应用层
+    保证 depth 为安全整数后方可内插。
+    """
+
     def __init__(self, uri: str, user: str, password: str) -> None:
         self.uri = uri
         self.user = user
@@ -34,6 +41,11 @@ class Neo4jRepository:
 
     def close(self) -> None:
         self.driver.close()
+
+    @staticmethod
+    def _safe_depth(value: int, maximum: int = 4) -> int:
+        """将深度值钳制到安全范围，供 f-string 拼接 Cypher 查询使用。"""
+        return max(0, min(int(value), maximum))
 
     def test_connection(self) -> str:
         self.driver.verify_connectivity()
@@ -357,6 +369,27 @@ class Neo4jRepository:
                 **fields,
             ).consume()
 
+    def count_inner_layer_links(
+        self, candidate_ids: list[str], inner_pool_ids: list[str], project_id: str
+    ) -> dict[str, int]:
+        """统计每个候选人与内层用户池（深度更浅的层）的连接数。"""
+        if not candidate_ids or not inner_pool_ids:
+            return {}
+        with self.driver.session() as session:
+            records = session.run(
+                """
+                UNWIND $candidates AS cid
+                MATCH (c:SteamUser {steam_id: cid})-[r:STEAM_FRIEND]-(inner:SteamUser)
+                WHERE inner.steam_id IN $inner_pool
+                  AND coalesce(r.project_id, '') IN ['', $project_id]
+                RETURN cid AS candidate, count(DISTINCT inner) AS links
+                """,
+                candidates=candidate_ids,
+                inner_pool=inner_pool_ids,
+                project_id=project_id,
+            )
+            return {row["candidate"]: row["links"] for row in records}
+
     def get_graph(
         self,
         *,
@@ -372,7 +405,7 @@ class Neo4jRepository:
         sort_dir: str = "asc",
         project_id: str = "default",
     ) -> GraphResponse:
-        depth = max(0, min(depth, 4))
+        depth = self._safe_depth(depth)
         limit = max(1, min(limit, 2000))
         filters = []
         params: dict[str, Any] = {"limit": limit, "project_id": project_id}
@@ -449,7 +482,7 @@ class Neo4jRepository:
         return GraphResponse(nodes=nodes, edges=edges, limited=limited)
 
     def get_shortest_path(self, from_id: str, to_id: str, max_depth: int, project_id: str = "default") -> GraphResponse:
-        max_depth = max(1, min(max_depth, 4))
+        max_depth = self._safe_depth(max_depth, 4)
         with self.driver.session() as session:
             record = session.run(
                 f"""
@@ -473,7 +506,7 @@ class Neo4jRepository:
             return GraphResponse(nodes=nodes, edges=edges)
 
     def get_friend_circle_analysis(self, root: str, max_depth: int = 3, min_mutual: int = 2, limit: int = 50, project_id: str = "default") -> FriendCircleAnalysisResponse:
-        max_depth = max(2, min(max_depth, 4))
+        max_depth = self._safe_depth(max_depth, 4)
         min_mutual = max(0, min_mutual)
         limit = max(1, min(limit, 100))
         with self.driver.session() as session:
