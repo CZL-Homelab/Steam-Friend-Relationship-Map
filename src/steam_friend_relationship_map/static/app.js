@@ -56,6 +56,38 @@ function setLanguage(lang) {
   applyTranslations();
 }
 
+// ── Theme ─────────────────────────────────────────────────────────
+
+function initTheme() {
+  const saved = localStorage.getItem("sfm_theme") || "auto";
+  applyTheme(saved);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if ((localStorage.getItem("sfm_theme") || "auto") === "auto") {
+      applyTheme("auto");
+    }
+  });
+}
+
+function applyTheme(mode) {
+  if (mode === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+  } else if (mode === "light") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.toggleAttribute("data-theme", prefersDark);
+  }
+  localStorage.setItem("sfm_theme", mode);
+}
+
+function cycleTheme() {
+  const modes = ["auto", "light", "dark"];
+  const current = localStorage.getItem("sfm_theme") || "auto";
+  const next = modes[(modes.indexOf(current) + 1) % modes.length];
+  applyTheme(next);
+  toast(t(`theme.${next}`));
+}
+
 function translateLabel(label) {
   const key = label.dataset.i18nLabel;
   const textNode = Array.from(label.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
@@ -804,6 +836,10 @@ function wireEvents() {
   $("newProjectName").addEventListener("keydown", (e) => {
     if (e.key === "Enter") withButtonState("createProject", createProject).catch(() => {});
   });
+  $("themeToggle").addEventListener("click", cycleTheme);
+  $("toggleConsole").addEventListener("click", () => {
+    if (window._toggleConsole) window._toggleConsole();
+  });
 }
 
 // ── Resizable panels ──────────────────────────────────────────────
@@ -820,26 +856,26 @@ function initResizeHandles() {
     saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
   } catch { /* ignore */ }
 
-  const defaults = { left: 320, right: 340 };
-  const sizes = { left: saved?.left || defaults.left, right: saved?.right || defaults.right };
-
-  function applySizes() {
-    shell.style.gridTemplateColumns = `${sizes.left}px 6px minmax(320px, 1fr) 6px ${sizes.right}px`;
+  // 仅在用户拖拽过时才用 px 覆盖 CSS 的 fr 比例
+  if (saved) {
+    shell.style.gridTemplateColumns = `${saved.left}px 6px minmax(280px, 1fr) 6px ${saved.right}px`;
   }
 
-  function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sizes)); } catch { /* ignore */ }
+  function persist(left, right) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ left, right })); } catch { /* ignore */ }
   }
-
-  applySizes();
 
   function makeDraggable(handle, side) {
     handle.addEventListener("mousedown", (e) => {
       e.preventDefault();
       const startX = e.clientX;
-      const startSize = sizes[side];
-      const shellRect = shell.getBoundingClientRect();
       const isLeft = side === "left";
+      // 首次拖拽：从当前 fr 布局的 computed width 读取实际 px 值
+      const panel = isLeft
+        ? document.querySelector(".sidebar")
+        : document.querySelector(".inspector");
+      const startSize = panel ? panel.getBoundingClientRect().width : (isLeft ? 320 : 340);
+      const shellW = shell.getBoundingClientRect().width;
 
       document.body.classList.add("resize-in-progress");
       handle.classList.add("active");
@@ -848,10 +884,16 @@ function initResizeHandles() {
         const delta = ev.clientX - startX;
         let newSize = isLeft ? startSize + delta : startSize - delta;
         const minW = 220;
-        const maxW = Math.floor((isLeft ? shellRect.width - 360 : shellRect.width - 340));
+        const maxW = Math.floor(shellW - 360);
         newSize = Math.max(minW, Math.min(newSize, Math.max(minW, maxW)));
-        sizes[side] = newSize;
-        applySizes();
+        // 实时更新：当前拖拽侧用 px，另一侧保持原状
+        const otherPanel = isLeft
+          ? document.querySelector(".inspector")
+          : document.querySelector(".sidebar");
+        const otherW = otherPanel ? otherPanel.getBoundingClientRect().width : 340;
+        const leftW = isLeft ? newSize : otherW;
+        const rightW = isLeft ? otherW : newSize;
+        shell.style.gridTemplateColumns = `${leftW}px 6px minmax(280px, 1fr) 6px ${rightW}px`;
       }
 
       function onUp() {
@@ -859,7 +901,13 @@ function initResizeHandles() {
         handle.classList.remove("active");
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
-        persist();
+        // 保存当前两栏的 px 宽度
+        const leftPanel = document.querySelector(".sidebar");
+        const rightPanel = document.querySelector(".inspector");
+        persist(
+          leftPanel ? leftPanel.getBoundingClientRect().width : 320,
+          rightPanel ? rightPanel.getBoundingClientRect().width : 340,
+        );
       }
 
       document.addEventListener("mousemove", onMove);
@@ -870,16 +918,83 @@ function initResizeHandles() {
   makeDraggable(leftHandle, "left");
   makeDraggable(rightHandle, "right");
 
-  // Double-click handle to reset
-  leftHandle.addEventListener("dblclick", () => {
-    sizes.left = defaults.left;
-    applySizes();
+  // 双击 → 清除保存 → 恢复 CSS 默认 fr 比例
+  function resetToRatio() {
+    shell.style.gridTemplateColumns = "";
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  }
+  leftHandle.addEventListener("dblclick", resetToRatio);
+  rightHandle.addEventListener("dblclick", resetToRatio);
+}
+
+// ── Console panel ─────────────────────────────────────────────────
+
+function initConsole() {
+  const panel = $("consolePanel");
+  const handle = $("consoleResizeHandle");
+  if (!panel || !handle) return;
+
+  const STORAGE_KEY = "sfm_console";
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { /* ignore */ }
+
+  const state = { open: saved?.open ?? true, height: saved?.height ?? 220 };
+
+  function persist() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
+  }
+
+  function apply() {
+    const root = document.documentElement;
+    if (state.open) {
+      panel.classList.remove("collapsed");
+      handle.style.display = "";
+      root.style.setProperty("--console-height", state.height + "px");
+      document.body.style.paddingBottom = state.height + "px";
+    } else {
+      panel.classList.add("collapsed");
+      handle.style.display = "none";
+      root.style.setProperty("--console-height", "0px");
+      document.body.style.paddingBottom = "0px";
+    }
+  }
+
+  apply();
+
+  window._toggleConsole = function () {
+    state.open = !state.open;
+    if (!state.open && state.height < 60) state.height = 220;
+    apply();
     persist();
-  });
-  rightHandle.addEventListener("dblclick", () => {
-    sizes.right = defaults.right;
-    applySizes();
-    persist();
+  };
+
+  handle.addEventListener("mousedown", (e) => {
+    if (!state.open) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = state.height;
+
+    document.body.classList.add("resize-in-progress");
+    handle.classList.add("active");
+
+    function onMove(ev) {
+      const delta = startY - ev.clientY;
+      const newH = Math.max(60, Math.min(startH + delta, window.innerHeight * 0.6));
+      state.height = newH;
+      document.documentElement.style.setProperty("--console-height", newH + "px");
+      document.body.style.paddingBottom = newH + "px";
+    }
+
+    function onUp() {
+      document.body.classList.remove("resize-in-progress");
+      handle.classList.remove("active");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      persist();
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   });
 }
 
@@ -892,11 +1007,13 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
+  initTheme();
   await loadI18n();
   applyTranslations();
   if (window.lucide) window.lucide.createIcons();
   initGraph();
   initResizeHandles();
+  initConsole();
   wireEvents();
   $("pathResult").dataset.state = "empty";
   loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));

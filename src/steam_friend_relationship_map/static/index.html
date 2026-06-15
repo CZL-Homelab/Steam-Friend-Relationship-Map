@@ -23,6 +23,10 @@
           <button class="lang-button" data-lang="en">English</button>
         </div>
 
+        <button class="theme-toggle" id="themeToggle" title="切换主题" data-i18n-title="action.toggleTheme">
+          <i data-lucide="sun-moon"></i>
+        </button>
+
         <section class="panel project-panel">
           <div class="panel-title">
             <span data-i18n="section.project">项目管理</span>
@@ -153,6 +157,7 @@
               前层朋友圈连接阈值
               <input id="crawlPriorPoolMinLinks" type="number" min="0" value="0" />
             </label>
+            <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不筛选。设为 N 时，第 D 层候选人必须与 0 ~ D-1 层中至少 N 个不同用户是好友才会被收录。N 越大扫描越收敛于紧密圈子。</p>
             <p class="hint" data-i18n="filter.preScanHint">好友数筛选会额外请求候选人的公开好友列表；阈值越高，扫描越收敛。</p>
           </details>
           <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span data-i18n="action.startCrawl">开始抓取</span></button>
@@ -170,25 +175,6 @@
           <details class="log-drawer" id="logDrawer" open>
             <summary data-i18n="section.logs">抓取日志</summary>
             <div class="log-list" id="crawlLogs"></div>
-          </details>
-        </section>
-
-        <section class="panel">
-          <details class="log-drawer" id="systemLogDrawer" open>
-            <summary data-i18n="section.systemLogs">系统日志 / Dev Logs</summary>
-            <div class="log-tools">
-              <select id="systemLogLevel" aria-label="log level">
-                <option value="" data-i18n="log.levelAll">全部</option>
-                <option value="info">info</option>
-                <option value="warn">warn</option>
-                <option value="error">error</option>
-              </select>
-              <button class="mini-button" id="refreshSystemLogs" data-i18n="action.refreshLogs">刷新</button>
-              <button class="mini-button" id="copySystemLogs" data-i18n="action.copyLogs">复制</button>
-              <button class="mini-button" id="clearSystemLogs" data-i18n="action.clearLogs">清空</button>
-            </div>
-            <p class="hint" data-i18n="log.securityHint">日志会自动脱敏，但 SteamID、备注和截图仍可能包含个人信息。</p>
-            <div class="log-list system-log-list" id="systemLogs"></div>
           </details>
         </section>
 
@@ -246,6 +232,7 @@
             前层朋友圈连接阈值
             <input id="graphPriorPoolMinLinks" type="number" min="0" value="0" />
           </label>
+          <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不筛选。设为 N 时，只显示与更靠近 Root 的层中至少 N 个不同用户有连接的人员。</p>
           <div class="two-col">
             <label data-i18n-label="field.sortBy">
               排序
@@ -298,6 +285,8 @@
             <button class="tool" id="layoutGraph" title="重新布局" data-i18n-title="action.layoutGraph"><i data-lucide="network"></i></button>
             <button class="tool" id="exportJson" title="导出 JSON" data-i18n-title="action.exportJson"><i data-lucide="braces"></i></button>
             <button class="tool" id="exportCsv" title="导出 CSV" data-i18n-title="action.exportCsv"><i data-lucide="download"></i></button>
+            <span class="toolbar-sep"></span>
+            <button class="tool" id="toggleConsole" title="控制台" data-i18n-title="action.toggleConsole"><i data-lucide="terminal"></i></button>
           </div>
         </header>
         <div class="graph-wrap">
@@ -403,6 +392,27 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
         </section>
       </aside>
     </main>
+
+    <div class="console-resize-handle" id="consoleResizeHandle" aria-label="拖拽调整控制台高度"></div>
+
+    <div class="console-panel" id="consolePanel">
+      <div class="console-header">
+        <span class="console-title" data-i18n="section.systemLogs">系统日志 / Dev Logs</span>
+        <div class="console-actions">
+          <select id="systemLogLevel" aria-label="log level">
+            <option value="" data-i18n="log.levelAll">全部</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+          </select>
+          <button class="mini-button" id="refreshSystemLogs" data-i18n="action.refreshLogs">刷新</button>
+          <button class="mini-button" id="copySystemLogs" data-i18n="action.copyLogs">复制</button>
+          <button class="mini-button" id="clearSystemLogs" data-i18n="action.clearLogs">清空</button>
+        </div>
+      </div>
+      <div class="console-body" id="systemLogs"></div>
+    </div>
+
     <div id="toast" class="toast"></div>
     <script src="/static/app.js"></script>
   </body>
