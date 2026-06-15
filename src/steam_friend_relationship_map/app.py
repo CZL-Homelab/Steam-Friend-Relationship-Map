@@ -139,13 +139,19 @@ def create_app(
 
     @app.middleware("http")
     async def csrf_check(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """CSRF 防护：仅拦截跨域写请求。同源请求（Origin 为空）放行。"""
         if request.method in ("POST", "PATCH", "DELETE"):
             origin = request.headers.get("origin") or request.headers.get("referer") or ""
             if origin:
+                # 只允许本地回环和配置的 host:port
                 host = f"http://{settings.app_host}:{settings.app_port}"
                 localhost = f"http://localhost:{settings.app_port}"
                 if not (origin.startswith(host) or origin.startswith(localhost)):
-                    return Response(content='{"detail":"Cross-origin request denied"}', status_code=403, media_type="application/json")
+                    return Response(
+                        content='{"detail":"Cross-origin request denied"}',
+                        status_code=403,
+                        media_type="application/json",
+                    )
         return await call_next(request)
 
     @app.middleware("http")
@@ -179,7 +185,9 @@ def create_app(
         data = payload.model_dump(exclude_none=True)
         for field, value in data.items():
             key = ENV_KEYS[field]
-            set_key(str(ENV_PATH), key, str(value), quote_mode="never")
+            # 安全：移除换行符防止 .env 注入
+            safe_value = str(value).replace("\n", "").replace("\r", "")
+            set_key(str(ENV_PATH), key, safe_value, quote_mode="never")
         await rebuild_runtime()
         message = "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
         log_buffer.append("info", "settings", "非敏感配置已保存")

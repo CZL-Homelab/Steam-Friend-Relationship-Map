@@ -77,6 +77,44 @@ Neo4j Desktop 本地数据库
 
 `.env` 已经被 `.gitignore` 忽略，但如果你把 Key 手动复制到 README、Issue、截图或其他文件里，Git 仍然可能记录这些内容。
 
+## 分支开发流程 / Branch Workflow
+
+本仓库采用层级分支模型，所有功能开发最终经过安全检查后合并到 `main`：
+
+```
+dev-N (功能开发)
+   ↓  PR / merge
+dev-base (集成分支)
+   ↓  安全审计+代码规整化
+security-check-before-main
+   ↓  最终 review (由他人执行)
+main (生产分支)
+```
+
+| 分支 | 用途 | 谁能合并 |
+|------|------|---------|
+| `dev-N` | 功能开发分支（N=1,2,3...） | 开发者自行管理 |
+| `dev-base` | 功能集成分支，所有 dev-N 合并到此 | 开发者 |
+| `security-check-before-main` | 安全审计+修复+代码规整化 | 安全审计者 |
+| `main` | 生产分支 | **必须由他人**最终 review 后合并 |
+
+### 开发流程
+
+1. 从 `dev-base` 创建功能分支 `dev-N`
+2. 开发完成后 PR 到 `dev-base`
+3. 当 `dev-base` 积累足够功能后，从 `dev-base` 创建 `security-check-before-main`
+4. 在 `security-check-before-main` 上执行：
+   - 安全审计（参考 `SECURITY.md` 中的审计报告格式）
+   - 修复发现的安全问题
+   - 代码注释规整化
+   - 更新 `SECURITY.md` 审计报告
+5. 提交 `security-check-before-main`，由**其他人** review 后合并到 `main`
+
+### Commit 规范
+
+- **Title**：中英双语，中文在前。格式：`feat/fix/chore: 中文简述 / English brief`
+- **Body**：中英文各一段，列出关键改动
+
 ## AI 生成声明
 
 > **本项目由 AI 辅助生成。**
