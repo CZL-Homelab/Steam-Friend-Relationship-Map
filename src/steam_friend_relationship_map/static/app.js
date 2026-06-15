@@ -56,6 +56,38 @@ function setLanguage(lang) {
   applyTranslations();
 }
 
+// ── Theme ─────────────────────────────────────────────────────────
+
+function initTheme() {
+  const saved = localStorage.getItem("sfm_theme") || "auto";
+  applyTheme(saved);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if ((localStorage.getItem("sfm_theme") || "auto") === "auto") {
+      applyTheme("auto");
+    }
+  });
+}
+
+function applyTheme(mode) {
+  if (mode === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+  } else if (mode === "light") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.toggleAttribute("data-theme", prefersDark);
+  }
+  localStorage.setItem("sfm_theme", mode);
+}
+
+function cycleTheme() {
+  const modes = ["auto", "light", "dark"];
+  const current = localStorage.getItem("sfm_theme") || "auto";
+  const next = modes[(modes.indexOf(current) + 1) % modes.length];
+  applyTheme(next);
+  toast(t(`theme.${next}`));
+}
+
 function translateLabel(label) {
   const key = label.dataset.i18nLabel;
   const textNode = Array.from(label.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
@@ -418,6 +450,10 @@ async function loadSettings() {
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
+  $("activeProjectName").textContent = settings.active_project || "default";
+  loadProjects().catch(() => {
+    $("projectList").innerHTML = `<div class="project-item active" data-project-id="default"><span>默认项目</span><span class="project-meta">离线</span></div>`;
+  });
 }
 
 async function saveSettings() {
@@ -570,6 +606,76 @@ async function cancelCrawl() {
   }
   await api(`/api/crawls/${currentRunId}/cancel`, { method: "POST", body: "{}" });
   toast(t("toast.cancelRequested"));
+}
+
+async function loadProjects() {
+  const data = await api("/api/projects");
+  $("activeProjectName").textContent = data.active_project_id || "default";
+  renderProjectList(data);
+}
+
+function renderProjectList(data) {
+  const list = $("projectList");
+  list.innerHTML = data.projects
+    .map(
+      (p) => `
+    <div class="project-item${p.id === data.active_project_id ? " active" : ""}" data-project-id="${escapeHtml(p.id)}">
+      <div class="project-item-header">
+        <span class="project-name">${escapeHtml(p.name)}</span>
+        ${p.id !== "default" ? `<button class="icon-button mini danger delete-project" data-project-id="${escapeHtml(p.id)}" title="${t("action.deleteProject")}"><i data-lucide="trash-2"></i></button>` : ""}
+      </div>
+      <span class="project-meta">${p.steam_users} ${t("metric.nodes")} · ${p.relationships} ${t("metric.edges")} · ${p.crawl_runs} ${t("project.crawls")}</span>
+    </div>`,
+    )
+    .join("");
+
+  // Wire click to switch
+  list.querySelectorAll(".project-item").forEach((item) => {
+    item.addEventListener("click", async (e) => {
+      if (e.target.closest(".delete-project")) return;
+      const pid = item.dataset.projectId;
+      if (pid === data.active_project_id) return;
+      await withButtonState(item, async () => {
+        await api("/api/projects/switch", { method: "POST", body: JSON.stringify({ name: pid }) });
+        await loadSettings();
+        await loadDbStats().catch(() => {});
+        await loadGraph().catch(() => {});
+        await loadTopDegree().catch(() => {});
+        toast(t("toast.projectSwitched"));
+      });
+    });
+  });
+
+  // Wire delete buttons
+  list.querySelectorAll(".delete-project").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const pid = btn.dataset.projectId;
+      if (!confirm(t("project.confirmDelete", { name: pid }))) return;
+      await withButtonState(btn, async () => {
+        await api(`/api/projects/${pid}`, { method: "DELETE" });
+        await loadSettings();
+        await loadProjects();
+        await loadDbStats().catch(() => {});
+        await loadGraph().catch(() => {});
+        toast(t("toast.projectDeleted"));
+      });
+    });
+  });
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
+async function createProject() {
+  const name = $("newProjectName").value.trim();
+  if (!name) {
+    toast(t("validation.projectNameRequired"));
+    return;
+  }
+  await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
+  $("newProjectName").value = "";
+  await loadProjects();
+  toast(t("toast.projectCreated"));
 }
 
 async function saveProfile() {
@@ -725,6 +831,171 @@ function wireEvents() {
       toast(t("toast.copied"));
     }).catch(() => {}),
   );
+  $("refreshProjects").addEventListener("click", (event) => withButtonState(event.currentTarget, loadProjects).catch(() => {}));
+  $("createProject").addEventListener("click", (event) => withButtonState(event.currentTarget, createProject).catch(() => {}));
+  $("newProjectName").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") withButtonState("createProject", createProject).catch(() => {});
+  });
+  $("themeToggle").addEventListener("click", cycleTheme);
+  $("toggleConsole").addEventListener("click", () => {
+    if (window._toggleConsole) window._toggleConsole();
+  });
+}
+
+// ── Resizable panels ──────────────────────────────────────────────
+
+function initResizeHandles() {
+  const shell = document.querySelector(".app-shell");
+  const leftHandle = $("resizeHandleLeft");
+  const rightHandle = $("resizeHandleRight");
+  if (!shell || !leftHandle || !rightHandle) return;
+
+  const STORAGE_KEY = "sfm_panel_sizes";
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch { /* ignore */ }
+
+  // 仅在用户拖拽过时才用 px 覆盖 CSS 的 fr 比例
+  if (saved) {
+    shell.style.gridTemplateColumns = `${saved.left}px 6px minmax(280px, 1fr) 6px ${saved.right}px`;
+  }
+
+  function persist(left, right) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ left, right })); } catch { /* ignore */ }
+  }
+
+  function makeDraggable(handle, side) {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const isLeft = side === "left";
+      // 首次拖拽：从当前 fr 布局的 computed width 读取实际 px 值
+      const panel = isLeft
+        ? document.querySelector(".sidebar")
+        : document.querySelector(".inspector");
+      const startSize = panel ? panel.getBoundingClientRect().width : (isLeft ? 320 : 340);
+      const shellW = shell.getBoundingClientRect().width;
+
+      document.body.classList.add("resize-in-progress");
+      handle.classList.add("active");
+
+      function onMove(ev) {
+        const delta = ev.clientX - startX;
+        let newSize = isLeft ? startSize + delta : startSize - delta;
+        const minW = 220;
+        const maxW = Math.floor(shellW - 360);
+        newSize = Math.max(minW, Math.min(newSize, Math.max(minW, maxW)));
+        // 实时更新：当前拖拽侧用 px，另一侧保持原状
+        const otherPanel = isLeft
+          ? document.querySelector(".inspector")
+          : document.querySelector(".sidebar");
+        const otherW = otherPanel ? otherPanel.getBoundingClientRect().width : 340;
+        const leftW = isLeft ? newSize : otherW;
+        const rightW = isLeft ? otherW : newSize;
+        shell.style.gridTemplateColumns = `${leftW}px 6px minmax(280px, 1fr) 6px ${rightW}px`;
+      }
+
+      function onUp() {
+        document.body.classList.remove("resize-in-progress");
+        handle.classList.remove("active");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        // 保存当前两栏的 px 宽度
+        const leftPanel = document.querySelector(".sidebar");
+        const rightPanel = document.querySelector(".inspector");
+        persist(
+          leftPanel ? leftPanel.getBoundingClientRect().width : 320,
+          rightPanel ? rightPanel.getBoundingClientRect().width : 340,
+        );
+      }
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+
+  makeDraggable(leftHandle, "left");
+  makeDraggable(rightHandle, "right");
+
+  // 双击 → 清除保存 → 恢复 CSS 默认 fr 比例
+  function resetToRatio() {
+    shell.style.gridTemplateColumns = "";
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+  }
+  leftHandle.addEventListener("dblclick", resetToRatio);
+  rightHandle.addEventListener("dblclick", resetToRatio);
+}
+
+// ── Console panel ─────────────────────────────────────────────────
+
+function initConsole() {
+  const panel = $("consolePanel");
+  const handle = $("consoleResizeHandle");
+  if (!panel || !handle) return;
+
+  const STORAGE_KEY = "sfm_console";
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { /* ignore */ }
+
+  const state = { open: saved?.open ?? true, height: saved?.height ?? 220 };
+
+  function persist() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
+  }
+
+  function apply() {
+    const root = document.documentElement;
+    if (state.open) {
+      panel.classList.remove("collapsed");
+      handle.style.display = "";
+      root.style.setProperty("--console-height", state.height + "px");
+      document.body.style.paddingBottom = state.height + "px";
+    } else {
+      panel.classList.add("collapsed");
+      handle.style.display = "none";
+      root.style.setProperty("--console-height", "0px");
+      document.body.style.paddingBottom = "0px";
+    }
+  }
+
+  apply();
+
+  window._toggleConsole = function () {
+    state.open = !state.open;
+    if (!state.open && state.height < 60) state.height = 220;
+    apply();
+    persist();
+  };
+
+  handle.addEventListener("mousedown", (e) => {
+    if (!state.open) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = state.height;
+
+    document.body.classList.add("resize-in-progress");
+    handle.classList.add("active");
+
+    function onMove(ev) {
+      const delta = startY - ev.clientY;
+      const newH = Math.max(60, Math.min(startH + delta, window.innerHeight * 0.6));
+      state.height = newH;
+      document.documentElement.style.setProperty("--console-height", newH + "px");
+      document.body.style.paddingBottom = newH + "px";
+    }
+
+    function onUp() {
+      document.body.classList.remove("resize-in-progress");
+      handle.classList.remove("active");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      persist();
+    }
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
 }
 
 window.addEventListener("error", (event) => {
@@ -736,10 +1007,13 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 document.addEventListener("DOMContentLoaded", async () => {
+  initTheme();
   await loadI18n();
   applyTranslations();
   if (window.lucide) window.lucide.createIcons();
   initGraph();
+  initResizeHandles();
+  initConsole();
   wireEvents();
   $("pathResult").dataset.state = "empty";
   loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));

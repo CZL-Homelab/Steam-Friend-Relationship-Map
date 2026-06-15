@@ -12,6 +12,25 @@ class FakeRepo:
     def close(self) -> None:
         pass
 
+    def ensure_schema(self) -> None:
+        pass
+
+    def ensure_default_project(self) -> str:
+        return "default"
+
+    def list_projects(self) -> object:
+        from steam_friend_relationship_map.models import ProjectInfo, ProjectListResponse
+        return ProjectListResponse(
+            projects=[ProjectInfo(id="default", name="默认项目")],
+            active_project_id="default",
+        )
+
+    def create_project(self, payload: object, project_id: str | None = None) -> str:
+        return project_id or "default"
+
+    def delete_project(self, project_id: str) -> bool:
+        return project_id != "default"
+
     def get_graph(self, **_: object) -> GraphResponse:
         return GraphResponse(
             nodes=[GraphNode(id="root", label="Root", degree=1)],
@@ -24,10 +43,10 @@ class FakeRepo:
     def get_shortest_path(self, *_: object, **__: object) -> GraphResponse:
         return GraphResponse(nodes=[GraphNode(id="root", label="Root")], edges=[])
 
-    def get_top_degree(self, limit: int = 12) -> list[GraphNode]:
+    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
         return [GraphNode(id="root", label="Root", degree=5)]
 
-    def get_db_stats(self) -> DbStats:
+    def get_db_stats(self, project_id: str = "default") -> DbStats:
         return DbStats(steam_users=2, steam_friend_relationships=1, crawl_runs=1)
 
     def get_friend_circle_analysis(self, **_: object) -> FriendCircleAnalysisResponse:
@@ -36,7 +55,7 @@ class FakeRepo:
             candidates=[FriendCircleCandidate(steam_id="candidate", label="Candidate", mutual_count=2, score=18)],
         )
 
-    def export_graph(self) -> ExportResponse:
+    def export_graph(self, project_id: str = "default") -> ExportResponse:
         return ExportResponse(nodes=[{"steam_id": "root", "persona_name": "Root"}], edges=[])
 
     def get_crawl_run(self, _: str) -> None:
