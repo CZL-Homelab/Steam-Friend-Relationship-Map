@@ -50,13 +50,13 @@ This project only uses the public Steam Web API. It does not read cookies, use S
 
 ## What you need to prepare
 
-| Item | Purpose |
-| --- | --- |
-| Steam account | To request a Steam Web API Key |
+| Item              | Purpose                                                                          |
+| ----------------- | -------------------------------------------------------------------------------- |
+| Steam account     | To request a Steam Web API Key                                                   |
 | Steam Web API Key | To call the public Steam Web API; save via the web UI to system credential store |
-| Neo4j Desktop | To run the local graph database |
-| uv | To manage Python environment and dependencies |
-| Python 3.12+ | Runtime environment (handled automatically by `uv`) |
+| Neo4j Desktop     | To run the local graph database                                                  |
+| uv                | To manage Python environment and dependencies                                    |
+| Python 3.12+      | Runtime environment (handled automatically by `uv`)                              |
 
 Recommend starting with 1 or 2 layers. Steam friend networks grow exponentially — 3–4 layers can quickly approach or exceed node limits.
 
@@ -123,12 +123,12 @@ security-check-before-main
 main (production)
 ```
 
-| Branch | Purpose | Who can merge |
-|--------|---------|---------------|
-| `dev-N` | Feature branches (N=1,2,3...) | Developer |
-| `dev-base` | Integration branch for all dev-N | Developer |
-| `security-check-before-main` | Security audit + fixes + code cleanup | Security auditor |
-| `main` | Production | **Must be reviewed by someone else** |
+| Branch                       | Purpose                               | Who can merge                        |
+| ---------------------------- | ------------------------------------- | ------------------------------------ |
+| `dev-N`                      | Feature branches (N=1,2,3...)         | Developer                            |
+| `dev-base`                   | Integration branch for all dev-N      | Developer                            |
+| `security-check-before-main` | Security audit + fixes + code cleanup | Security auditor                     |
+| `main`                       | Production                            | **Must be reviewed by someone else** |
 
 ### Development workflow
 
@@ -316,15 +316,15 @@ DEFAULT_MAX_NODES=200
 DEFAULT_DELAY_MS=500
 ```
 
-| Setting | Meaning |
-| --- | --- |
-| `NEO4J_URI` | Neo4j Bolt connection address |
-| `NEO4J_USER` | Neo4j username, usually `neo4j` |
-| `APP_HOST` | Local server listen address, default `127.0.0.1` |
-| `APP_PORT` | Local server port, default `8000` |
-| `DEFAULT_MAX_DEPTH` | Default crawl depth; start with `1` or `2` |
-| `DEFAULT_MAX_NODES` | Default maximum node count |
-| `DEFAULT_DELAY_MS` | Steam API request interval in milliseconds |
+| Setting             | Meaning                                          |
+| ------------------- | ------------------------------------------------ |
+| `NEO4J_URI`         | Neo4j Bolt connection address                    |
+| `NEO4J_USER`        | Neo4j username, usually `neo4j`                  |
+| `APP_HOST`          | Local server listen address, default `127.0.0.1` |
+| `APP_PORT`          | Local server port, default `8000`                |
+| `DEFAULT_MAX_DEPTH` | Default crawl depth; start with `1` or `2`       |
+| `DEFAULT_MAX_NODES` | Default maximum node count                       |
+| `DEFAULT_DELAY_MS`  | Steam API request interval in milliseconds       |
 
 Steam API Key and Neo4j password are not in this table — they are sensitive and should be saved in the web UI to the system credential store.
 
@@ -370,11 +370,11 @@ After opening the page, check in this order:
 
 Use conservative settings for your first crawl:
 
-| Item | Recommendation |
-| --- | --- |
-| Depth | `1` |
-| Nodes | `200` or `500` |
-| Delay ms | `300` |
+| Item     | Recommendation |
+| -------- | -------------- |
+| Depth    | `1`            |
+| Nodes    | `200` or `500` |
+| Delay ms | `300`          |
 
 Steps:
 
