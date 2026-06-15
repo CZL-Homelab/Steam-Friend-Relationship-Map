@@ -357,6 +357,27 @@ class Neo4jRepository:
                 **fields,
             ).consume()
 
+    def count_inner_layer_links(
+        self, candidate_ids: list[str], inner_pool_ids: list[str], project_id: str
+    ) -> dict[str, int]:
+        """统计每个候选人与内层用户池（深度更浅的层）的连接数。"""
+        if not candidate_ids or not inner_pool_ids:
+            return {}
+        with self.driver.session() as session:
+            records = session.run(
+                """
+                UNWIND $candidates AS cid
+                MATCH (c:SteamUser {steam_id: cid})-[r:STEAM_FRIEND]-(inner:SteamUser)
+                WHERE inner.steam_id IN $inner_pool
+                  AND coalesce(r.project_id, '') IN ['', $project_id]
+                RETURN cid AS candidate, count(DISTINCT inner) AS links
+                """,
+                candidates=candidate_ids,
+                inner_pool=inner_pool_ids,
+                project_id=project_id,
+            )
+            return {row["candidate"]: row["links"] for row in records}
+
     def get_graph(
         self,
         *,

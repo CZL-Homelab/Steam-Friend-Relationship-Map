@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class CrawlStatus(StrEnum):
     pending = "pending"
     running = "running"
+    paused = "paused"
     completed = "completed"
     cancelled = "cancelled"
+    stopped = "stopped"
     failed = "failed"
 
 

@@ -23,6 +23,8 @@ let cy;
 let currentRunId = null;
 let pollTimer = null;
 let systemLogTimer = null;
+let timerInterval = null;
+let crawlStartTime = null;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
@@ -436,6 +438,12 @@ async function loadDbStats() {
   $("dbSteamUsers").textContent = stats.steam_users;
   $("dbRelationships").textContent = stats.steam_friend_relationships;
   $("dbCrawlRuns").textContent = stats.crawl_runs;
+  // 如果当前项目有历史抓取，自动填入 Root 并加载图谱
+  if (stats.latest_crawl && !$("graphRoot").value.trim()) {
+    $("graphRoot").value = stats.latest_crawl.root_steam_id || "";
+    $("analysisRoot").value = stats.latest_crawl.root_steam_id || "";
+    loadGraph().catch(() => {});
+  }
 }
 
 function secretLabel(configured, fromEnv) {
@@ -521,6 +529,42 @@ function validateCrawlPayload() {
   return ok;
 }
 
+function formatElapsed(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatTimeLocal(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleString();
+}
+
+function startTimer() {
+  crawlStartTime = Date.now();
+  $("crawlTimer").style.display = "flex";
+  $("crawlUtcTime").textContent = `UTC ${new Date().toISOString().replace("T", " ").slice(0, 19)}`;
+  clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - crawlStartTime) / 1000);
+    $("elapsedTime").textContent = formatElapsed(elapsed);
+    $("crawlUtcTime").textContent = `UTC ${new Date().toISOString().replace("T", " ").slice(0, 19)}`;
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  if (crawlStartTime) {
+    const elapsed = Math.floor((Date.now() - crawlStartTime) / 1000);
+    $("elapsedTime").textContent = formatElapsed(elapsed);
+  }
+  crawlStartTime = null;
+}
+
 async function startCrawl() {
   if (!validateCrawlPayload()) throw new Error(t("validation.fixFields"));
   const payload = {
@@ -544,6 +588,7 @@ async function startCrawl() {
   $("analysisRoot").value = run.root_steam_id;
   toast(t("toast.crawlStarted"));
   appendSystemLog("info", "crawl", t("toast.crawlStarted"));
+  startTimer();
   pollRun();
 }
 
@@ -552,6 +597,7 @@ async function pollRun() {
   clearTimeout(pollTimer);
   const run = await api(`/api/crawls/${currentRunId}`);
   setStatus("crawlStatus", run.status);
+  updateCrawlButtons(run.status);
   $("nodeCount").textContent = run.nodes_discovered;
   $("edgeCount").textContent = run.edges_discovered;
   $("privateCount").textContent = run.private_count;
@@ -559,7 +605,9 @@ async function pollRun() {
   setProgress(run.progress_percent);
   if (run.last_event) $("lastEvent").textContent = run.last_event;
   await loadEvents().catch(() => {});
-  if (["completed", "cancelled", "failed"].includes(run.status)) {
+  if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
+    stopTimer();
+    updateCrawlButtons(run.status);
     toast(run.message || statusText(run.status));
     appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
     await loadGraph().catch(() => {});
@@ -600,12 +648,42 @@ function startSystemLogPolling() {
 }
 
 async function cancelCrawl() {
-  if (!currentRunId) {
-    toast(t("toast.noActiveCrawl"));
-    return;
-  }
+  if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
   await api(`/api/crawls/${currentRunId}/cancel`, { method: "POST", body: "{}" });
   toast(t("toast.cancelRequested"));
+}
+
+async function forceStopCrawl() {
+  if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
+  await api(`/api/crawls/${currentRunId}/force-stop`, { method: "POST", body: "{}" });
+  stopTimer();
+  toast(t("toast.forceStop"));
+}
+
+async function pauseCrawl() {
+  if (!currentRunId) return;
+  await api(`/api/crawls/${currentRunId}/pause`, { method: "POST", body: "{}" });
+  $("pauseCrawl").style.display = "none";
+  $("resumeCrawl").style.display = "";
+  toast(t("toast.paused"));
+}
+
+async function resumeCrawl() {
+  if (!currentRunId) return;
+  await api(`/api/crawls/${currentRunId}/resume`, { method: "POST", body: "{}" });
+  $("pauseCrawl").style.display = "";
+  $("resumeCrawl").style.display = "none";
+  toast(t("toast.resumed"));
+}
+
+function updateCrawlButtons(status) {
+  const running = status === "running";
+  const paused = status === "paused";
+  const active = running || paused;
+  $("cancelCrawl").style.display = active ? "" : "none";
+  $("forceStopCrawl").style.display = active ? "" : "none";
+  $("pauseCrawl").style.display = running ? "" : "none";
+  $("resumeCrawl").style.display = paused ? "" : "none";
 }
 
 async function loadProjects() {
@@ -807,6 +885,9 @@ function wireEvents() {
   $("refreshDbStats").addEventListener("click", (event) => withButtonState(event.currentTarget, loadDbStats).catch(() => {}));
   $("startCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, startCrawl).catch(() => {}));
   $("cancelCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, cancelCrawl).catch(() => {}));
+  $("forceStopCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, forceStopCrawl).catch(() => {}));
+  $("pauseCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, pauseCrawl).catch(() => {}));
+  $("resumeCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, resumeCrawl).catch(() => {}));
   $("refreshGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, loadGraph).catch(() => {}));
   $("fitGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => cy.fit(undefined, 40)).catch(() => {}));
   $("layoutGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => runLayout()).catch(() => {}));
