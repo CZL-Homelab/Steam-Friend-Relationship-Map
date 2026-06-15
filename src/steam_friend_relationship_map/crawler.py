@@ -14,6 +14,8 @@ from .steam import SteamApiError, SteamClient, placeholder_user
 @dataclass
 class CrawlControl:
     cancel: bool = False
+    pause: bool = False
+    force_stop: bool = False
     task: asyncio.Task | None = None
 
 
@@ -50,11 +52,44 @@ class CrawlManager:
         return run
 
     def cancel(self, run_id: str) -> bool:
+        """优雅停止：完成当前层后停止，数据保留。"""
         control = self.controls.get(run_id)
         if control is None:
             return False
         control.cancel = True
-        self.append_event(run_id, "warn", "cancel", "收到取消请求")
+        self.append_event(run_id, "warn", "cancel", "收到停止请求，将在当前层完成后停止")
+        return True
+
+    def force_stop(self, run_id: str) -> bool:
+        """强制中断：立即停止，已扫描数据保留。"""
+        control = self.controls.get(run_id)
+        if control is None:
+            return False
+        control.force_stop = True
+        control.pause = False
+        self.append_event(run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）")
+        return True
+
+    def pause(self, run_id: str) -> bool:
+        """暂停扫描（如遇 Steam 限流）。"""
+        control = self.controls.get(run_id)
+        if control is None:
+            return False
+        if control.pause:
+            return False
+        control.pause = True
+        self.repo.update_crawl_run(run_id, status=CrawlStatus.paused.value)
+        self.append_event(run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续")
+        return True
+
+    def resume(self, run_id: str) -> bool:
+        """继续扫描。"""
+        control = self.controls.get(run_id)
+        if control is None or not control.pause:
+            return False
+        control.pause = False
+        self.repo.update_crawl_run(run_id, status=CrawlStatus.running.value)
+        self.append_event(run_id, "info", "resume", "扫描已继续")
         return True
 
     def get_events(self, run_id: str, after: int = 0) -> list[CrawlEvent]:
@@ -106,8 +141,33 @@ class CrawlManager:
             for depth in range(run.max_depth):
                 if not current_layer:
                     break
+
+                # ── 暂停检查 ──
+                while control.pause and not control.force_stop:
+                    await asyncio.sleep(0.5)
+
+                # ── 强制中断：立即停止，数据保留 ──
+                if control.force_stop:
+                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    self.repo.update_crawl_run(
+                        run.id,
+                        status=CrawlStatus.stopped.value,
+                        finished_at=utc_now_iso(),
+                        nodes_discovered=nodes_discovered,
+                        edges_discovered=edges_discovered,
+                        private_count=private_count,
+                        error_count=error_count,
+                        filtered_count=filtered_count,
+                        friend_count_filtered_count=friend_count_filtered_count,
+                        prior_pool_filtered_count=prior_pool_filtered_count,
+                        message=event.message,
+                        last_event=event.message,
+                    )
+                    return
+
+                # ── 优雅停止：完成当前层 ──
                 if control.cancel:
-                    event = self.append_event(run.id, "warn", "cancelled", "用户已取消")
+                    event = self.append_event(run.id, "warn", "cancelled", "用户停止扫描，完成当前层后停止（数据保留）")
                     self.repo.update_crawl_run(
                         run.id,
                         status=CrawlStatus.cancelled.value,
@@ -129,6 +189,11 @@ class CrawlManager:
                 same_pool_edges: list[FriendEdge] = []
                 next_depth = depth + 1
                 for idx, current_id in enumerate(sorted(current_layer), start=1):
+                    # ── 内部暂停/强制中断检查 ──
+                    while control.pause and not control.force_stop:
+                        await asyncio.sleep(0.5)
+                    if control.force_stop:
+                        break
                     if current_id in expanded:
                         continue
                     expanded.add(current_id)
@@ -194,6 +259,25 @@ class CrawlManager:
 
                     if not used_cache and payload.delay_ms:
                         await asyncio.sleep(payload.delay_ms / 1000)
+
+                # ── 内层循环后再次检查强制中断 ──
+                if control.force_stop:
+                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    self.repo.update_crawl_run(
+                        run.id,
+                        status=CrawlStatus.stopped.value,
+                        finished_at=utc_now_iso(),
+                        nodes_discovered=len(discovered),
+                        edges_discovered=edges_discovered,
+                        private_count=private_count,
+                        error_count=error_count,
+                        filtered_count=filtered_count,
+                        friend_count_filtered_count=friend_count_filtered_count,
+                        prior_pool_filtered_count=prior_pool_filtered_count,
+                        message=event.message,
+                        last_event=event.message,
+                    )
+                    return
 
                 accepted_ids: list[str] = []
                 candidate_metrics: dict[str, dict[str, object]] = {}

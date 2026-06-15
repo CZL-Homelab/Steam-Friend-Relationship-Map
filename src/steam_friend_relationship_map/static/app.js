@@ -597,6 +597,7 @@ async function pollRun() {
   clearTimeout(pollTimer);
   const run = await api(`/api/crawls/${currentRunId}`);
   setStatus("crawlStatus", run.status);
+  updateCrawlButtons(run.status);
   $("nodeCount").textContent = run.nodes_discovered;
   $("edgeCount").textContent = run.edges_discovered;
   $("privateCount").textContent = run.private_count;
@@ -604,8 +605,9 @@ async function pollRun() {
   setProgress(run.progress_percent);
   if (run.last_event) $("lastEvent").textContent = run.last_event;
   await loadEvents().catch(() => {});
-  if (["completed", "cancelled", "failed"].includes(run.status)) {
+  if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
     stopTimer();
+    updateCrawlButtons(run.status);
     toast(run.message || statusText(run.status));
     appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
     await loadGraph().catch(() => {});
@@ -646,13 +648,42 @@ function startSystemLogPolling() {
 }
 
 async function cancelCrawl() {
-  if (!currentRunId) {
-    toast(t("toast.noActiveCrawl"));
-    return;
-  }
+  if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
   await api(`/api/crawls/${currentRunId}/cancel`, { method: "POST", body: "{}" });
-  stopTimer();
   toast(t("toast.cancelRequested"));
+}
+
+async function forceStopCrawl() {
+  if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
+  await api(`/api/crawls/${currentRunId}/force-stop`, { method: "POST", body: "{}" });
+  stopTimer();
+  toast(t("toast.forceStop"));
+}
+
+async function pauseCrawl() {
+  if (!currentRunId) return;
+  await api(`/api/crawls/${currentRunId}/pause`, { method: "POST", body: "{}" });
+  $("pauseCrawl").style.display = "none";
+  $("resumeCrawl").style.display = "";
+  toast(t("toast.paused"));
+}
+
+async function resumeCrawl() {
+  if (!currentRunId) return;
+  await api(`/api/crawls/${currentRunId}/resume`, { method: "POST", body: "{}" });
+  $("pauseCrawl").style.display = "";
+  $("resumeCrawl").style.display = "none";
+  toast(t("toast.resumed"));
+}
+
+function updateCrawlButtons(status) {
+  const running = status === "running";
+  const paused = status === "paused";
+  const active = running || paused;
+  $("cancelCrawl").style.display = active ? "" : "none";
+  $("forceStopCrawl").style.display = active ? "" : "none";
+  $("pauseCrawl").style.display = running ? "" : "none";
+  $("resumeCrawl").style.display = paused ? "" : "none";
 }
 
 async function loadProjects() {
@@ -854,6 +885,9 @@ function wireEvents() {
   $("refreshDbStats").addEventListener("click", (event) => withButtonState(event.currentTarget, loadDbStats).catch(() => {}));
   $("startCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, startCrawl).catch(() => {}));
   $("cancelCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, cancelCrawl).catch(() => {}));
+  $("forceStopCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, forceStopCrawl).catch(() => {}));
+  $("pauseCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, pauseCrawl).catch(() => {}));
+  $("resumeCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, resumeCrawl).catch(() => {}));
   $("refreshGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, loadGraph).catch(() => {}));
   $("fitGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => cy.fit(undefined, 40)).catch(() => {}));
   $("layoutGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => runLayout()).catch(() => {}));

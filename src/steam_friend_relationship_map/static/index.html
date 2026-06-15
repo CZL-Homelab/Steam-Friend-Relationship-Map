@@ -114,7 +114,12 @@
         <section class="panel">
           <div class="panel-title">
             <span data-i18n="section.crawl">抓取</span>
-            <button class="icon-button danger" id="cancelCrawl" title="取消抓取" data-i18n-title="action.cancelCrawl"><i data-lucide="square"></i></button>
+            <div class="crawl-actions">
+              <button class="icon-button" id="pauseCrawl" title="暂停" data-i18n-title="action.pauseCrawl" style="display:none"><i data-lucide="pause"></i></button>
+              <button class="icon-button" id="resumeCrawl" title="继续" data-i18n-title="action.resumeCrawl" style="display:none"><i data-lucide="play"></i></button>
+              <button class="icon-button" id="cancelCrawl" title="停止扫描" data-i18n-title="action.cancelCrawl"><i data-lucide="square"></i></button>
+              <button class="icon-button danger" id="forceStopCrawl" title="强制中断" data-i18n-title="action.forceStopCrawl"><i data-lucide="octagon-x"></i></button>
+            </div>
           </div>
           <label data-i18n-label="field.rootUrl">
             Root URL

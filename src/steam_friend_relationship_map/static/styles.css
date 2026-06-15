@@ -377,6 +377,11 @@ button svg {
   color: var(--rose);
 }
 
+.crawl-actions {
+  display: flex;
+  gap: 4px;
+}
+
 .progress {
   display: grid;
   gap: 8px;
