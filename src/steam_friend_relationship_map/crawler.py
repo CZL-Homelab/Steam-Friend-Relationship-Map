@@ -18,10 +18,11 @@ class CrawlControl:
 
 
 class CrawlManager:
-    def __init__(self, repo: Neo4jRepository, steam: SteamClient, logs: AppLogBuffer | None = None) -> None:
+    def __init__(self, repo: Neo4jRepository, steam: SteamClient, logs: AppLogBuffer | None = None, project_id: str = "default") -> None:
         self.repo = repo
         self.steam = steam
         self.logs = logs
+        self.project_id = project_id
         self.controls: dict[str, CrawlControl] = {}
         self.events: dict[str, list[CrawlEvent]] = {}
         self.event_seq: dict[str, int] = {}
@@ -39,7 +40,7 @@ class CrawlManager:
             edges_discovered=0,
         )
         self.repo.ensure_schema()
-        self.repo.start_crawl_run(run)
+        self.repo.start_crawl_run(run, self.project_id)
         self.events[run.id] = []
         self.event_seq[run.id] = 0
         control = CrawlControl()
@@ -97,7 +98,7 @@ class CrawlManager:
             root.depth_min = 0
             root.root_closeness_score = 100
             root.last_scored_crawl_id = run.id
-            self.repo.upsert_users([root])
+            self.repo.upsert_users([root], self.project_id)
             nodes_discovered = 1
             edges_discovered = 0
             self.append_event(run.id, "info", "root", f"Root 用户已写入: {run.root_steam_id}")
@@ -143,7 +144,7 @@ class CrawlManager:
                         progress_percent=self._progress(nodes_discovered, run.max_nodes, False),
                     )
 
-                    cached = self.repo.get_cached_friend_list(current_id, payload.cache_valid_days)
+                    cached = self.repo.get_cached_friend_list(current_id, payload.cache_valid_days, self.project_id)
                     used_cache = False
                     if cached is not None:
                         status, cached_ids = cached
@@ -165,12 +166,12 @@ class CrawlManager:
 
                         if friends.private:
                             private_count += 1
-                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private")
+                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private", project_id=self.project_id)
                             event = self.append_event(run.id, "warn", "private", f"好友列表不可访问: {current_id}")
                             self.repo.update_crawl_run(run.id, private_count=private_count, last_event=event.message)
                             continue
 
-                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public")
+                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public", project_id=self.project_id)
                         friend_ids = friends.friend_ids
 
                     for friend_id in friend_ids:
@@ -204,7 +205,7 @@ class CrawlManager:
                     friend_count: int | None = None
                     friend_count_status = "unknown"
                     if uses_friend_count_filter:
-                        cached_candidate = self.repo.get_cached_friend_list(friend_id, payload.cache_valid_days)
+                        cached_candidate = self.repo.get_cached_friend_list(friend_id, payload.cache_valid_days, self.project_id)
                         if cached_candidate is not None:
                             c_status, c_ids = cached_candidate
                             friend_count_status = c_status
@@ -218,11 +219,11 @@ class CrawlManager:
                             else:
                                 if candidate_friends.private:
                                     friend_count_status = "private"
-                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private")
+                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private", project_id=self.project_id)
                                 else:
                                     friend_count_status = "public"
                                     friend_count = len(candidate_friends.friend_ids)
-                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public")
+                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public", project_id=self.project_id)
                             if payload.delay_ms:
                                 await asyncio.sleep(payload.delay_ms / 1000)
 
@@ -265,12 +266,12 @@ class CrawlManager:
                         record.root_closeness_score = float(metrics.get("root_closeness_score", 0))
                         record.last_scored_crawl_id = str(metrics.get("last_scored_crawl_id", ""))
                         records.append(record)
-                    self.repo.upsert_users(records)
+                    self.repo.upsert_users(records, self.project_id)
                     nodes_discovered = len(discovered)
                     self.append_event(run.id, "info", "users", f"已写入用户节点，总计 {nodes_discovered}")
 
                 if new_edges:
-                    self.repo.upsert_relationships(new_edges)
+                    self.repo.upsert_relationships(new_edges, self.project_id)
                     edges_discovered += len(new_edges)
                     self.append_event(run.id, "info", "edges", f"已写入 {len(new_edges)} 条关系，总计 {edges_discovered}")
 

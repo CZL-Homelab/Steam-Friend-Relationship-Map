@@ -418,6 +418,8 @@ async function loadSettings() {
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
+  $("activeProjectName").textContent = settings.active_project || "default";
+  await loadProjects().catch(() => {});
 }
 
 async function saveSettings() {
@@ -572,11 +574,75 @@ async function cancelCrawl() {
   toast(t("toast.cancelRequested"));
 }
 
-async function saveProfile() {
-  if (!selectedNode?.id) {
-    toast(t("toast.selectNodeFirst"));
+async function loadProjects() {
+  const data = await api("/api/projects");
+  $("activeProjectName").textContent = data.active_project_id || "default";
+  renderProjectList(data);
+}
+
+function renderProjectList(data) {
+  const list = $("projectList");
+  list.innerHTML = data.projects
+    .map(
+      (p) => `
+    <div class="project-item${p.id === data.active_project_id ? " active" : ""}" data-project-id="${escapeHtml(p.id)}">
+      <div class="project-item-header">
+        <span class="project-name">${escapeHtml(p.name)}</span>
+        ${p.id !== "default" ? `<button class="icon-button mini danger delete-project" data-project-id="${escapeHtml(p.id)}" title="${t("action.deleteProject")}"><i data-lucide="trash-2"></i></button>` : ""}
+      </div>
+      <span class="project-meta">${p.steam_users} ${t("metric.nodes")} · ${p.relationships} ${t("metric.edges")} · ${p.crawl_runs} ${t("project.crawls")}</span>
+    </div>`,
+    )
+    .join("");
+
+  // Wire click to switch
+  list.querySelectorAll(".project-item").forEach((item) => {
+    item.addEventListener("click", async (e) => {
+      if (e.target.closest(".delete-project")) return;
+      const pid = item.dataset.projectId;
+      if (pid === data.active_project_id) return;
+      await withButtonState(item, async () => {
+        await api("/api/projects/switch", { method: "POST", body: JSON.stringify({ name: pid }) });
+        await loadSettings();
+        await loadDbStats().catch(() => {});
+        await loadGraph().catch(() => {});
+        await loadTopDegree().catch(() => {});
+        toast(t("toast.projectSwitched"));
+      });
+    });
+  });
+
+  // Wire delete buttons
+  list.querySelectorAll(".delete-project").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const pid = btn.dataset.projectId;
+      if (!confirm(t("project.confirmDelete", { name: pid }))) return;
+      await withButtonState(btn, async () => {
+        await api(`/api/projects/${pid}`, { method: "DELETE" });
+        await loadSettings();
+        await loadProjects();
+        await loadDbStats().catch(() => {});
+        await loadGraph().catch(() => {});
+        toast(t("toast.projectDeleted"));
+      });
+    });
+  });
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
+async function createProject() {
+  const name = $("newProjectName").value.trim();
+  if (!name) {
+    toast(t("validation.projectNameRequired"));
     return;
   }
+  await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) });
+  $("newProjectName").value = "";
+  await loadProjects();
+  toast(t("toast.projectCreated"));
+}
   await api(`/api/users/${selectedNode.id}`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -725,6 +791,11 @@ function wireEvents() {
       toast(t("toast.copied"));
     }).catch(() => {}),
   );
+  $("refreshProjects").addEventListener("click", (event) => withButtonState(event.currentTarget, loadProjects).catch(() => {}));
+  $("createProject").addEventListener("click", (event) => withButtonState(event.currentTarget, createProject).catch(() => {}));
+  $("newProjectName").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") withButtonState("createProject", createProject).catch(() => {});
+  });
 }
 
 window.addEventListener("error", (event) => {

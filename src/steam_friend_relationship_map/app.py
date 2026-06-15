@@ -23,11 +23,15 @@ from .models import (
     FriendCircleAnalysisResponse,
     GraphNode,
     GraphResponse,
+    ProjectCreate,
+    ProjectInfo,
+    ProjectListResponse,
     PublicSettings,
     SecretUpdate,
     SettingsPatch,
     SettingsTestResult,
     UserPatch,
+    utc_now_iso,
 )
 from .neo4j_repo import Neo4jRepository
 from .secrets import SecretStorageError, SecretStore
@@ -46,6 +50,7 @@ ENV_KEYS = {
     "default_max_nodes": "DEFAULT_MAX_NODES",
     "default_delay_ms": "DEFAULT_DELAY_MS",
     "default_cache_valid_days": "DEFAULT_CACHE_VALID_DAYS",
+    "active_project": "ACTIVE_PROJECT",
 }
 
 
@@ -64,7 +69,9 @@ def create_app(
     install_log_handler(log_buffer)
     repo = repo or Neo4jRepository(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
     steam = steam or SteamClient(settings.steam_api_key)
-    manager = CrawlManager(repo, steam, log_buffer)
+    manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
+    repo.ensure_schema()
+    repo.ensure_default_project()
 
     async def rebuild_runtime() -> None:
         nonlocal settings, repo, steam, manager
@@ -75,7 +82,9 @@ def create_app(
         log_buffer.set_secret_values([settings.steam_api_key, settings.neo4j_password])
         repo = old_repo if provided_repo is not None else Neo4jRepository(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
         steam = old_steam if provided_steam is not None else SteamClient(settings.steam_api_key)
-        manager = CrawlManager(repo, steam, log_buffer)
+        manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
+        repo.ensure_schema()
+        repo.ensure_default_project()
         app.state.repo = repo
         app.state.steam = steam
         app.state.manager = manager
@@ -104,6 +113,7 @@ def create_app(
             default_max_nodes=settings.default_max_nodes,
             default_delay_ms=settings.default_delay_ms,
             default_cache_valid_days=settings.default_cache_valid_days,
+            active_project=settings.active_project,
             steam_api_key_configured=bool(steam_secret or raw.steam_api_key),
             neo4j_password_configured=bool(neo4j_secret or raw.neo4j_password),
             steam_api_key_from_env=not bool(steam_secret) and bool(raw.steam_api_key),
@@ -222,6 +232,55 @@ def create_app(
             log_buffer.append("warn", "settings", f"Neo4j 连接测试失败: {exc}")
         return SettingsTestResult(steam_ok=steam_ok, neo4j_ok=neo4j_ok, steam_message=steam_message, neo4j_message=neo4j_message)
 
+    # ── Project management ────────────────────────────────────────────
+
+    @app.get("/api/projects", response_model=ProjectListResponse)
+    async def list_projects() -> ProjectListResponse:
+        result = repo.list_projects()
+        result.active_project_id = settings.active_project
+        return result
+
+    @app.post("/api/projects", response_model=ProjectInfo)
+    async def create_project(payload: ProjectCreate) -> ProjectInfo:
+        pid = repo.create_project(payload)
+        log_buffer.append("info", "project", f"项目已创建: {payload.name} ({pid})")
+        return ProjectInfo(id=pid, name=payload.name, created_at=utc_now_iso())
+
+    @app.delete("/api/projects/{project_id}")
+    async def delete_project(project_id: str) -> dict[str, bool]:
+        if project_id == "default":
+            raise HTTPException(status_code=400, detail="无法删除默认项目")
+        ok = repo.delete_project(project_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        log_buffer.append("warn", "project", f"项目已删除: {project_id}")
+        # 如果删除的是当前活动项目，切回 default
+        if settings.active_project == project_id:
+            set_key(str(ENV_PATH), "ACTIVE_PROJECT", "default", quote_mode="never")
+            await rebuild_runtime()
+        return {"ok": True}
+
+    @app.post("/api/projects/switch")
+    async def switch_project(payload: ProjectCreate) -> ProjectListResponse:
+        """Switch active project. payload.name = project_id"""
+        pid = payload.name.strip()
+        if not pid:
+            raise HTTPException(status_code=400, detail="项目 ID 不能为空")
+        # Ensure the project exists
+        with repo.driver.session() as session:
+            exists = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=pid).single()
+        if exists is None:
+            # Auto-create if not exists
+            repo.create_project(ProjectCreate(name=pid), project_id=pid)
+            log_buffer.append("info", "project", f"项目已自动创建: {pid}")
+        ENV_PATH.touch(exist_ok=True)
+        set_key(str(ENV_PATH), "ACTIVE_PROJECT", pid, quote_mode="never")
+        await rebuild_runtime()
+        log_buffer.append("info", "project", f"已切换到项目: {pid}")
+        result = repo.list_projects()
+        result.active_project_id = pid
+        return result
+
     @app.post("/api/crawls", response_model=CrawlRun)
     async def create_crawl(payload: CrawlCreate) -> CrawlRun:
         try:
@@ -276,6 +335,7 @@ def create_app(
                 prior_pool_min_links=prior_pool_min_links,
                 sort_by=sort_by,
                 sort_dir=sort_dir,
+                project_id=settings.active_project,
             )
         except HTTPException:
             raise
@@ -286,7 +346,7 @@ def create_app(
     @app.get("/api/db/stats", response_model=DbStats)
     async def db_stats() -> DbStats:
         try:
-            return repo.get_db_stats()
+            return repo.get_db_stats(project_id=settings.active_project)
         except Exception as exc:
             log_buffer.append("error", "db", f"数据库状态读取失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
@@ -302,11 +362,11 @@ def create_app(
         to_id: Annotated[str, Query(alias="to")],
         max_depth: Annotated[int, Query(ge=1, le=4)] = 4,
     ) -> GraphResponse:
-        return repo.get_shortest_path(from_id, to_id, max_depth)
+        return repo.get_shortest_path(from_id, to_id, max_depth, project_id=settings.active_project)
 
     @app.get("/api/stats/top-degree", response_model=list[GraphNode])
     async def top_degree(limit: Annotated[int, Query(ge=1, le=50)] = 12) -> list[GraphNode]:
-        return repo.get_top_degree(limit)
+        return repo.get_top_degree(limit, project_id=settings.active_project)
 
     @app.get("/api/analysis/friend-circles", response_model=FriendCircleAnalysisResponse)
     async def friend_circles(
@@ -316,14 +376,14 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
     ) -> FriendCircleAnalysisResponse:
         try:
-            return repo.get_friend_circle_analysis(root=root, max_depth=max_depth, min_mutual=min_mutual, limit=limit)
+            return repo.get_friend_circle_analysis(root=root, max_depth=max_depth, min_mutual=min_mutual, limit=limit, project_id=settings.active_project)
         except Exception as exc:
             log_buffer.append("error", "analysis", f"朋友圈分析失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/export", response_model=ExportResponse)
     async def export_graph(format: str = "json") -> Response | ExportResponse:
-        data = repo.export_graph()
+        data = repo.export_graph(project_id=settings.active_project)
         if format == "json":
             return data
         if format != "csv":

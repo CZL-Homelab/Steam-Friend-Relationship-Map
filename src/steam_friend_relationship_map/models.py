@@ -132,6 +132,7 @@ class PublicSettings(BaseModel):
     default_max_nodes: int
     default_delay_ms: int
     default_cache_valid_days: int
+    active_project: str = "default"
     steam_api_key_configured: bool
     neo4j_password_configured: bool
     steam_api_key_from_env: bool = False
@@ -214,6 +215,24 @@ class FriendCircleCandidate(BaseModel):
 class FriendCircleAnalysisResponse(BaseModel):
     root: str
     candidates: list[FriendCircleCandidate]
+
+
+class ProjectInfo(BaseModel):
+    id: str
+    name: str
+    created_at: str = ""
+    steam_users: int = 0
+    relationships: int = 0
+    crawl_runs: int = 0
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectInfo]
+    active_project_id: str = ""
 
 
 def utc_now_iso() -> str:

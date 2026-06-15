@@ -23,6 +23,27 @@
           <button class="lang-button" data-lang="en">English</button>
         </div>
 
+        <section class="panel project-panel">
+          <div class="panel-title">
+            <span data-i18n="section.project">项目管理</span>
+            <button class="icon-button" id="refreshProjects" title="刷新项目列表" data-i18n-title="action.refreshProjects"><i data-lucide="refresh-cw"></i></button>
+          </div>
+          <div class="project-info" id="activeProjectInfo">
+            <span class="muted" data-i18n="project.current">当前项目</span>
+            <strong id="activeProjectName">默认项目</strong>
+          </div>
+          <div class="project-actions">
+            <input id="newProjectName" placeholder="新项目名称" data-i18n-placeholder="placeholder.projectName" maxlength="80" />
+            <button class="secondary compact" id="createProject"><i data-lucide="plus"></i><span data-i18n="action.createProject">新建</span></button>
+          </div>
+          <div class="project-list" id="projectList">
+            <div class="project-item active" data-project-id="default">
+              <span>默认项目</span>
+              <span class="project-meta">0 节点 · 0 关系</span>
+            </div>
+          </div>
+        </section>
+
         <section class="panel guide-panel">
           <details open>
             <summary data-i18n="section.guide">新手引导</summary>

@@ -679,3 +679,113 @@ dd {
     height: 70vh;
   }
 }
+
+/* ── Project panel ─────────────────────────────────────────────── */
+
+.project-panel {
+  background: #f9fbfb;
+}
+
+.project-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #eef7f5;
+  font-size: 12px;
+}
+
+.project-info strong {
+  color: var(--teal);
+  font-weight: 750;
+}
+
+.project-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.project-actions input {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-actions .secondary {
+  white-space: nowrap;
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.project-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.project-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 120ms;
+}
+
+.project-item:hover {
+  border-color: var(--teal);
+}
+
+.project-item.active {
+  border-color: var(--teal);
+  background: #eef7f5;
+}
+
+.project-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.project-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.project-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.project-item .icon-button.mini {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.project-item:hover .icon-button.mini {
+  opacity: 1;
+}
+
+.project-item .icon-button.danger:hover {
+  color: var(--rose);
+  background: #fef2f2;
+}
+
+@media (max-width: 780px) {
+  .project-actions {
+    flex-direction: column;
+  }
+}

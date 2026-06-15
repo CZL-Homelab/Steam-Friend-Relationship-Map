@@ -38,7 +38,7 @@ class FakeRepo:
     def ensure_schema(self) -> None:
         pass
 
-    def start_crawl_run(self, run: CrawlRun) -> None:
+    def start_crawl_run(self, run: CrawlRun, project_id: str = "default") -> None:
         self.runs[run.id] = run
 
     def update_crawl_run(self, run_id: str, **fields: object) -> None:
@@ -47,18 +47,18 @@ class FakeRepo:
         data.update(fields)
         self.runs[run_id] = CrawlRun(**data)
 
-    def upsert_users(self, users: list[SteamUserRecord]) -> None:
+    def upsert_users(self, users: list[SteamUserRecord], project_id: str = "default") -> None:
         for user in users:
             self.users[user.steam_id] = user
 
     def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
         self.statuses[steam_id] = status
 
-    def upsert_relationships(self, edges: list[FriendEdge]) -> None:
+    def upsert_relationships(self, edges: list[FriendEdge], project_id: str = "default") -> None:
         for edge in edges:
             self.edges.add(tuple(sorted((edge.from_id, edge.to_id))))
 
-    def get_cached_friend_list(self, steam_id: str, valid_days: int) -> tuple[str, list[str]] | None:
+    def get_cached_friend_list(self, steam_id: str, valid_days: int, project_id: str = "default") -> tuple[str, list[str]] | None:
         return None
 
 
