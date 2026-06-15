@@ -157,14 +157,19 @@
               前层朋友圈连接阈值
               <input id="crawlPriorPoolMinLinks" type="number" min="0" value="0" />
             </label>
-            <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不筛选。设为 N 时，第 D 层候选人必须与 0 ~ D-1 层中至少 N 个不同用户是好友才会被收录。N 越大扫描越收敛于紧密圈子。</p>
-            <p class="hint" data-i18n="filter.preScanHint">好友数筛选会额外请求候选人的公开好友列表；阈值越高，扫描越收敛。</p>
+            <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不限制。设为 N 时，与 0~当前层 用户连接数不足 N 的候选人仍会收录但不继续展开（标记为孤岛）。</p>
+            <p class="hint" data-i18n="filter.preScanHint">好友数/跨层连接不达标的候选人仍会收录，但标记为"不展开"，不会扫描其下一层好友。</p>
           </details>
           <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span data-i18n="action.startCrawl">开始抓取</span></button>
           <div class="progress-bar" aria-label="crawl progress">
             <div id="crawlProgressBar"></div>
           </div>
           <div class="hint" id="lastEvent" data-i18n="log.empty">暂无日志</div>
+          <div class="crawl-timer" id="crawlTimer" style="display:none">
+            <span data-i18n="metric.elapsed">耗时</span>
+            <strong id="elapsedTime">00:00</strong>
+            <span class="muted" id="crawlUtcTime"></span>
+          </div>
           <div class="progress">
             <div class="progress-row"><span data-i18n="metric.status">状态</span><strong id="crawlStatus" data-status="idle">空闲</strong></div>
             <div class="progress-row"><span data-i18n="metric.nodes">节点</span><strong id="nodeCount">0</strong></div>
