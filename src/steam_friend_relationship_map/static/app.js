@@ -25,6 +25,7 @@ let pollTimer = null;
 let systemLogTimer = null;
 let timerInterval = null;
 let crawlStartTime = null;
+let dbStatsTimer = null;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
@@ -446,6 +447,18 @@ async function loadDbStats() {
   }
 }
 
+function startDbStatsPolling() {
+  stopDbStatsPolling();
+  const ms = parseInt($("dbStatsInterval").value) || 0;
+  if (ms < 500) return;
+  dbStatsTimer = setInterval(() => loadDbStats().catch(() => {}), ms);
+}
+
+function stopDbStatsPolling() {
+  clearInterval(dbStatsTimer);
+  dbStatsTimer = null;
+}
+
 function secretLabel(configured, fromEnv) {
   if (fromEnv) return t("secret.env");
   return configured ? t("secret.configured") : t("secret.missing");
@@ -557,12 +570,12 @@ function startTimer() {
 
 // ── Recent roots ──────────────────────────────────────────────────
 
-function saveRecentRoot(url, name, avatar) {
+function saveRecentRoot(url, name, avatar, id) {
   let roots = [];
   try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
   roots = roots.filter(r => r.url !== url);
-  roots.unshift({ url, name, avatar });
-  if (roots.length > 5) roots = roots.slice(0, 5);
+  roots.unshift({ url, name: name || url, avatar, id: id || "" });
+  if (roots.length > 10) roots = roots.slice(0, 10);
   try { localStorage.setItem("sfm_recent_roots", JSON.stringify(roots)); } catch { /* */ }
   renderRecentRoots();
 }
@@ -570,20 +583,30 @@ function saveRecentRoot(url, name, avatar) {
 function renderRecentRoots() {
   let roots = [];
   try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
-  const container = $("recentRoots");
-  if (!roots.length) { container.style.display = "none"; return; }
-  container.style.display = "flex";
-  container.querySelectorAll(".recent-root-chip").forEach(c => c.remove());
+  const list = $("recentRootsList");
+  const count = $("recentRootsCount");
+  list.innerHTML = "";
+  if (!roots.length) {
+    count.textContent = "";
+    return;
+  }
+  count.textContent = ` (${roots.length})`;
   roots.forEach(r => {
     const chip = document.createElement("div");
     chip.className = "recent-root-chip";
     chip.title = r.url;
-    chip.innerHTML = `<img src="${escapeHtml(r.avatar || '')}" alt="" onerror="this.style.display='none'"><div class="chip-info"><div class="chip-name">${escapeHtml(r.name || r.url)}</div><div class="chip-url">${escapeHtml(r.url)}</div></div>`;
+    chip.innerHTML =
+      `<img src="${escapeHtml(r.avatar || '')}" alt="" onerror="this.style.display='none'">` +
+      `<div class="chip-info">` +
+        `<div class="chip-name">${escapeHtml(r.name || r.id || r.url)}</div>` +
+        `<div class="chip-meta"><span>${escapeHtml(r.id || '')}</span></div>` +
+        `<div class="chip-url">${escapeHtml(r.url)}</div>` +
+      `</div>`;
     chip.addEventListener("click", () => {
       $("rootUrl").value = r.url;
-      $("graphRoot").value = "";
+      $("graphRoot").value = r.id || "";
     });
-    container.appendChild(chip);
+    list.appendChild(chip);
   });
 }
 
@@ -693,7 +716,8 @@ async function startCrawl() {
   if (friendMax) payload.friend_count_max = Number(friendMax);
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
   currentRunId = run.id;
-  saveRecentRoot(payload.root_url, run.root_steam_id, "");
+  saveRecentRoot(payload.root_url, run.root_steam_id, "", run.root_steam_id);
+  startDbStatsPolling();
   lastEventSeq = 0;
   $("crawlLogs").innerHTML = "";
   setProgress(1);
@@ -720,6 +744,7 @@ async function pollRun() {
   await loadEvents().catch(() => {});
   if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
     stopTimer();
+    stopDbStatsPolling();
     updateCrawlButtons(run.status);
     toast(run.message || statusText(run.status));
     appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
@@ -729,7 +754,7 @@ async function pollRun() {
     if (currentGraph.nodes.length) {
       const rootNode = currentGraph.nodes.find(n => n.id === run.root_steam_id);
       if (rootNode) {
-        saveRecentRoot($("rootUrl").value || rootNode.profile_url, rootNode.label, rootNode.avatar);
+        saveRecentRoot($("rootUrl").value || rootNode.profile_url, rootNode.label, rootNode.avatar, rootNode.id);
       }
     }
     return;
@@ -777,6 +802,7 @@ async function forceStopCrawl() {
   if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
   await api(`/api/crawls/${currentRunId}/force-stop`, { method: "POST", body: "{}" });
   stopTimer();
+  stopDbStatsPolling();
   toast(t("toast.forceStop"));
 }
 
@@ -1003,6 +1029,11 @@ function wireEvents() {
   $("loadSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, loadSettings).catch(() => {}));
   $("saveSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, saveSettings).catch(() => {}));
   $("refreshDbStats").addEventListener("click", (event) => withButtonState(event.currentTarget, loadDbStats).catch(() => {}));
+  $("dbStatsInterval").addEventListener("change", () => {
+    if (currentRunId && ["running", "paused"].includes($("crawlStatus").dataset.status || "")) {
+      startDbStatsPolling();
+    }
+  });
   $("startCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, startCrawl).catch(() => {}));
   $("cancelCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, cancelCrawl).catch(() => {}));
   $("forceStopCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, forceStopCrawl).catch(() => {}));
