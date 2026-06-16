@@ -451,7 +451,10 @@ function startDbStatsPolling() {
   stopDbStatsPolling();
   const ms = parseInt($("dbStatsInterval").value) || 0;
   if (ms < 500) return;
-  dbStatsTimer = setInterval(() => loadDbStats().catch(() => {}), ms);
+  dbStatsTimer = setInterval(() => {
+    loadDbStats().catch(() => {});
+    loadProjects().catch(() => {});
+  }, ms);
 }
 
 function stopDbStatsPolling() {
