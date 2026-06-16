@@ -121,10 +121,21 @@
               <button class="icon-button danger" id="forceStopCrawl" title="强制中断" data-i18n-title="action.forceStopCrawl"><i data-lucide="octagon-x"></i></button>
             </div>
           </div>
+          <div class="preset-bar" id="presetBar">
+            <select id="presetSelect" aria-label="预设配置">
+              <option value="" data-i18n="preset.choose">选择预设…</option>
+            </select>
+            <button class="icon-button" id="savePreset" title="保存当前配置为预设" data-i18n-title="action.savePreset"><i data-lucide="bookmark-plus"></i></button>
+            <button class="icon-button" id="deletePreset" title="删除选中预设" data-i18n-title="action.deletePreset"><i data-lucide="trash-2"></i></button>
+          </div>
           <label data-i18n-label="field.rootUrl">
             Root URL
             <input id="rootUrl" placeholder="https://steamcommunity.com/id/..." data-i18n-placeholder="placeholder.rootUrl" />
           </label>
+          <details class="subsection recent-roots-drawer" id="recentRootsDrawer">
+            <summary><span data-i18n="section.recentRoots">最近扫描</span><span class="muted" id="recentRootsCount"></span></summary>
+            <div class="recent-roots-list" id="recentRootsList"></div>
+          </details>
           <div class="two-col">
             <label data-i18n-label="field.depth">
               层数
@@ -191,7 +202,16 @@
         <section class="panel">
           <div class="panel-title">
             <span data-i18n="section.dbStats">数据库状态</span>
-            <button class="icon-button" id="refreshDbStats" title="刷新数据库状态" data-i18n-title="action.refreshDbStats"><i data-lucide="database"></i></button>
+            <div class="dbstats-controls">
+              <select id="dbStatsInterval" aria-label="刷新间隔">
+                <option value="0" data-i18n="dbstats.manual">手动</option>
+                <option value="500">0.5s</option>
+                <option value="1000">1s</option>
+                <option value="2000" selected>2s</option>
+                <option value="5000">5s</option>
+              </select>
+              <button class="icon-button" id="refreshDbStats" title="刷新数据库状态" data-i18n-title="action.refreshDbStats"><i data-lucide="database"></i></button>
+            </div>
           </div>
           <div class="progress">
             <div class="progress-row"><span>SteamUser</span><strong id="dbSteamUsers">0</strong></div>

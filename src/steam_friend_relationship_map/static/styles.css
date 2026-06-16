@@ -382,6 +382,19 @@ button svg {
   gap: 4px;
 }
 
+.dbstats-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.dbstats-controls select {
+  width: auto;
+  min-height: 28px;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
 .progress {
   display: grid;
   gap: 8px;
@@ -957,7 +970,111 @@ body {
   transition: padding-bottom 160ms ease;
 }
 
-/* ── Project panel ─────────────────────────────────────────────── */
+/* ── Preset bar ─────────────────────────────────────────────────── */
+
+.preset-bar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.preset-bar select {
+  flex: 1;
+  min-height: 32px;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.preset-bar .icon-button {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+
+/* ── Recent roots (collapsible) ───────────────────────────────────── */
+
+.recent-roots-drawer {
+  margin-top: 0 !important;
+  border-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+.recent-roots-drawer summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent-roots-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.recent-root-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+  transition: border-color 120ms;
+}
+
+.recent-root-chip:hover {
+  border-color: var(--teal);
+}
+
+.recent-root-chip img {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--avatar-placeholder);
+}
+
+.recent-root-chip .chip-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.recent-root-chip .chip-name {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-root-chip .chip-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-root-chip .chip-url {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .project-panel {
   background: var(--surface-project);
@@ -987,12 +1104,12 @@ body {
 }
 
 .project-actions input {
-  flex: 1;
+  flex: 5;
   min-width: 0;
 }
 
 .project-actions .secondary {
-  white-space: nowrap;
+  flex: 1;
   min-height: 38px;
   padding: 0 10px;
 }
