@@ -957,7 +957,84 @@ body {
   transition: padding-bottom 160ms ease;
 }
 
-/* ── Project panel ─────────────────────────────────────────────── */
+/* ── Preset bar ─────────────────────────────────────────────────── */
+
+.preset-bar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.preset-bar select {
+  flex: 1;
+  min-height: 32px;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.preset-bar .icon-button {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+
+/* ── Recent roots ───────────────────────────────────────────────── */
+
+.recent-roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.recent-root-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: pointer;
+  transition: border-color 120ms;
+  max-width: 100%;
+}
+
+.recent-root-chip:hover {
+  border-color: var(--teal);
+}
+
+.recent-root-chip img {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--avatar-placeholder);
+}
+
+.recent-root-chip .chip-info {
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.recent-root-chip .chip-name {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-root-chip .chip-url {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .project-panel {
   background: var(--surface-project);

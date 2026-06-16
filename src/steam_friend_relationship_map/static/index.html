@@ -121,10 +121,20 @@
               <button class="icon-button danger" id="forceStopCrawl" title="强制中断" data-i18n-title="action.forceStopCrawl"><i data-lucide="octagon-x"></i></button>
             </div>
           </div>
+          <div class="preset-bar" id="presetBar">
+            <select id="presetSelect" aria-label="预设配置">
+              <option value="" data-i18n="preset.choose">选择预设…</option>
+            </select>
+            <button class="icon-button" id="savePreset" title="保存当前配置为预设" data-i18n-title="action.savePreset"><i data-lucide="bookmark-plus"></i></button>
+            <button class="icon-button" id="deletePreset" title="删除选中预设" data-i18n-title="action.deletePreset"><i data-lucide="trash-2"></i></button>
+          </div>
           <label data-i18n-label="field.rootUrl">
             Root URL
             <input id="rootUrl" placeholder="https://steamcommunity.com/id/..." data-i18n-placeholder="placeholder.rootUrl" />
           </label>
+          <div class="recent-roots" id="recentRoots" style="display:none">
+            <span class="muted" data-i18n="section.recentRoots">最近扫描</span>
+          </div>
           <div class="two-col">
             <label data-i18n-label="field.depth">
               层数

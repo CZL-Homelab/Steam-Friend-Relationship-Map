@@ -555,6 +555,118 @@ function startTimer() {
   }, 1000);
 }
 
+// ── Recent roots ──────────────────────────────────────────────────
+
+function saveRecentRoot(url, name, avatar) {
+  let roots = [];
+  try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  roots = roots.filter(r => r.url !== url);
+  roots.unshift({ url, name, avatar });
+  if (roots.length > 5) roots = roots.slice(0, 5);
+  try { localStorage.setItem("sfm_recent_roots", JSON.stringify(roots)); } catch { /* */ }
+  renderRecentRoots();
+}
+
+function renderRecentRoots() {
+  let roots = [];
+  try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  const container = $("recentRoots");
+  if (!roots.length) { container.style.display = "none"; return; }
+  container.style.display = "flex";
+  container.querySelectorAll(".recent-root-chip").forEach(c => c.remove());
+  roots.forEach(r => {
+    const chip = document.createElement("div");
+    chip.className = "recent-root-chip";
+    chip.title = r.url;
+    chip.innerHTML = `<img src="${escapeHtml(r.avatar || '')}" alt="" onerror="this.style.display='none'"><div class="chip-info"><div class="chip-name">${escapeHtml(r.name || r.url)}</div><div class="chip-url">${escapeHtml(r.url)}</div></div>`;
+    chip.addEventListener("click", () => {
+      $("rootUrl").value = r.url;
+      $("graphRoot").value = "";
+    });
+    container.appendChild(chip);
+  });
+}
+
+// ── Presets ───────────────────────────────────────────────────────
+
+const PRESET_KEY = "sfm_presets";
+const LAST_CONFIG_KEY = "sfm_last_config";
+
+function getCurrentConfig() {
+  return {
+    root_url: $("rootUrl").value,
+    max_depth: $("maxDepth").value,
+    max_nodes: $("maxNodes").value,
+    delay_ms: $("delayMs").value,
+    cache_valid_days: $("cacheValidDays").value,
+    friend_count_min: $("crawlFriendCountMin").value,
+    friend_count_max: $("crawlFriendCountMax").value,
+    prior_pool_min_links: $("crawlPriorPoolMinLinks").value,
+  };
+}
+
+function applyConfig(cfg) {
+  if (!cfg) return;
+  const fields = ["root_url","max_depth","max_nodes","delay_ms","cache_valid_days","friend_count_min","friend_count_max","prior_pool_min_links"];
+  const ids = ["rootUrl","maxDepth","maxNodes","delayMs","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"];
+  fields.forEach((f, i) => { if (cfg[f] !== undefined) $(ids[i]).value = cfg[f]; });
+}
+
+function loadPresets() {
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  const sel = $("presetSelect");
+  sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  Object.keys(presets).forEach(name => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.value = "";
+}
+
+function savePreset() {
+  const name = prompt(t("preset.promptName"));
+  if (!name || !name.trim()) return;
+  const cfg = getCurrentConfig();
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  presets[name.trim()] = cfg;
+  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+  loadPresets();
+  toast(t("preset.saved"));
+}
+
+function applyPreset(name) {
+  if (!name) return;
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  const cfg = presets[name];
+  if (cfg) { applyConfig(cfg); toast(t("preset.applied", { name })); }
+}
+
+function deletePreset() {
+  const name = $("presetSelect").value;
+  if (!name) return;
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  delete presets[name];
+  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+  loadPresets();
+  toast(t("preset.deleted"));
+}
+
+function autoSaveLastConfig() {
+  try { localStorage.setItem(LAST_CONFIG_KEY, JSON.stringify(getCurrentConfig())); } catch { /* */ }
+}
+
+function autoLoadLastConfig() {
+  let cfg = null;
+  try { cfg = JSON.parse(localStorage.getItem(LAST_CONFIG_KEY)); } catch { /* */ }
+  if (cfg) applyConfig(cfg);
+}
+
 function stopTimer() {
   clearInterval(timerInterval);
   timerInterval = null;
@@ -581,6 +693,7 @@ async function startCrawl() {
   if (friendMax) payload.friend_count_max = Number(friendMax);
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
   currentRunId = run.id;
+  saveRecentRoot(payload.root_url, run.root_steam_id, "");
   lastEventSeq = 0;
   $("crawlLogs").innerHTML = "";
   setProgress(1);
@@ -612,6 +725,13 @@ async function pollRun() {
     appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
     await loadGraph().catch(() => {});
     await loadDbStats().catch(() => {});
+    // 更新最近扫描的 Root 头像和昵称
+    if (currentGraph.nodes.length) {
+      const rootNode = currentGraph.nodes.find(n => n.id === run.root_steam_id);
+      if (rootNode) {
+        saveRecentRoot($("rootUrl").value || rootNode.profile_url, rootNode.label, rootNode.avatar);
+      }
+    }
     return;
   }
   pollTimer = setTimeout(pollRun, 1200);
@@ -921,6 +1041,15 @@ function wireEvents() {
   $("toggleConsole").addEventListener("click", () => {
     if (window._toggleConsole) window._toggleConsole();
   });
+  // Presets
+  $("presetSelect").addEventListener("change", () => applyPreset($("presetSelect").value));
+  $("savePreset").addEventListener("click", savePreset);
+  $("deletePreset").addEventListener("click", deletePreset);
+  // Auto-save last config on any crawl input change
+  ["rootUrl","maxDepth","maxNodes","delayMs","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"].forEach(id => {
+    $(id).addEventListener("change", autoSaveLastConfig);
+    $(id).addEventListener("input", autoSaveLastConfig);
+  });
 }
 
 // ── Resizable panels ──────────────────────────────────────────────
@@ -1095,6 +1224,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   initGraph();
   initResizeHandles();
   initConsole();
+  renderRecentRoots();
+  loadPresets();
+  autoLoadLastConfig();
   wireEvents();
   $("pathResult").dataset.state = "empty";
   loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));
