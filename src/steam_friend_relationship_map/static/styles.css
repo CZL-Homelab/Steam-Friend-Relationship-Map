@@ -987,12 +987,12 @@ body {
 }
 
 .project-actions input {
-  flex: 1;
+  flex: 5;
   min-width: 0;
 }
 
 .project-actions .secondary {
-  white-space: nowrap;
+  flex: 1;
   min-height: 38px;
   padding: 0 10px;
 }
