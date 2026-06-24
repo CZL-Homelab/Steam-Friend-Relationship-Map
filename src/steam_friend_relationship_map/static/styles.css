@@ -430,6 +430,22 @@ button svg {
   color: var(--ink);
 }
 
+.connection-detail {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.connection-detail.ok {
+  color: var(--teal);
+}
+
+.connection-detail.failed {
+  color: var(--rose);
+}
+
 .crawl-timer {
   display: flex;
   align-items: center;
