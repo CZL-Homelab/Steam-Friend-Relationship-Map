@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Steam 好友关系图谱</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.0.2" />
     <script src="/static/vendor/cytoscape.min.js"></script>
     <script src="/static/vendor/lucide.min.js"></script>
   </head>
@@ -444,6 +444,6 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=1.0.2"></script>
   </body>
 </html>

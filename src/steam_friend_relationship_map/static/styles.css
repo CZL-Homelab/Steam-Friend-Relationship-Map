@@ -84,7 +84,7 @@ textarea {
 .app-shell {
   display: grid;
   grid-template-columns: 1.5fr 6px 2fr 6px 1fr;
-  height: 100vh;
+  height: calc(100vh - var(--console-height, 0px));
   overflow: hidden;
 }
 

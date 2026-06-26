@@ -1194,12 +1194,10 @@ function initConsole() {
       panel.classList.remove("collapsed");
       handle.style.display = "";
       root.style.setProperty("--console-height", state.height + "px");
-      document.body.style.paddingBottom = state.height + "px";
     } else {
       panel.classList.add("collapsed");
       handle.style.display = "none";
       root.style.setProperty("--console-height", "0px");
-      document.body.style.paddingBottom = "0px";
     }
   }
 
@@ -1226,7 +1224,6 @@ function initConsole() {
       const newH = Math.max(60, Math.min(startH + delta, window.innerHeight * 0.6));
       state.height = newH;
       document.documentElement.style.setProperty("--console-height", newH + "px");
-      document.body.style.paddingBottom = newH + "px";
     }
 
     function onUp() {
