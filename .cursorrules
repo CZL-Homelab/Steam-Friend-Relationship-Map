@@ -15,6 +15,10 @@ This project is a locally run **Steam Friend Relationship Map Analysis & Visuali
 - **Frontend**: Single-Page Application (SPA) built with HTML5, Vanilla CSS, and ES6 JavaScript. Cytoscape.js renders the graph. Multi-language support is provided via `i18n.json` (Chinese/English).
 - **Environment & Dependency Management**: Python 3.12+ managed by `uv` (executed using `uv sync` and `uv run`).
 
+### 1.3 Data Isolation & Crawl Lifecycle
+- **Project Isolation**: The project supports multi-project management. All crawled nodes (`SteamUser`) and relationships (`STEAM_FRIEND`) in the Neo4j database are logically partitioned using a `project_id` property. Every database query in `neo4j_repo.py` and data mutation in `crawler.py` must strictly respect and be bounded by the current `project_id` context. Global queries or modifications without `project_id` scoping are strictly prohibited to prevent cross-project data pollution.
+- **Crawl Task Lifecycle**: The BFS crawling engine supports runtime task control (Pause, Graceful Stop, and Force Stop). All modifications to `crawler.py` or new execution controllers must preserve and handle these lifecycle states gracefully without breaking active task management.
+
 ---
 
 ## 2. Project Directory & File Structure
@@ -101,3 +105,41 @@ Security is the highest priority for this project. Developers must strictly foll
 * **Internationalization (i18n)**: All frontend texts, labels, and prompts must be defined in `static/i18n.json` and dynamically loaded, ensuring consistency between English and Chinese.
 * **Test-Driven Development**: When modifying the crawler (`crawler.py`) or the database repository (`neo4j_repo.py`), developers must run `pytest` to verify that all test suites pass.
 * **Code Style**: Adhere to PEP 8 for Python and camelCase for JavaScript. When editing files, **always preserve existing unrelated comments and docstrings**.
+
+---
+
+## 6. Branching & Development Workflow
+
+The repository follows a tiered branching model. All feature development must eventually go through a security check branch before merging into `main`.
+
+```
+dev-N (Feature Development)
+   ↓  PR / merge
+dev-base (Integration Branch)
+   ↓  Security Audit & Code Normalization
+security-check-before-main
+   ↓  Final Review (by another person)
+main (Production Branch)
+```
+
+### Workflow Steps
+1. Create a feature branch `dev-N` (or a descriptive name) from `dev-base`.
+2. Perform development and submit a PR to merge into `dev-base`.
+3. Once features accumulate on `dev-base`, create `security-check-before-main` from it.
+4. On `security-check-before-main`, execute:
+   - Security audit (according to the template in `SECURITY.md`).
+   - Fix any security vulnerabilities.
+   - Normalize code formatting and comments.
+   - Update the audit report in `SECURITY.md`.
+5. Submit `security-check-before-main` for final review by **another person** before merging into `main`.
+
+---
+
+## 7. Commit Message Conventions
+
+All commits must follow the bilingual commit format:
+* **Title (First Line)**: Chinese and English bilingual, Chinese first. 
+  * **Format**: `feat/fix/chore: 中文简述 / English brief`
+  * **Example**: `feat: 新增项目管理隔离功能 / feat: add project management isolation`
+* **Body**: One paragraph in Chinese and one paragraph in English, listing the key changes and justifications.
+
