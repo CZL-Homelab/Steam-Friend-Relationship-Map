@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .models import SteamUserRecord
+from .rate_limiter import AdaptiveRateLimiter
 
 
 STEAM_ID_RE = re.compile(r"^\d{17}$")
@@ -33,11 +34,13 @@ class SteamClient:
         *,
         base_url: str = "https://api.steampowered.com",
         client: httpx.AsyncClient | None = None,
+        rate_limiter: AdaptiveRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self._client = client
         self._owns_client = client is None
+        self.rate_limiter = rate_limiter
 
     async def __aenter__(self) -> "SteamClient":
         if self._client is None:
@@ -135,16 +138,26 @@ class SteamClient:
         last_error: Exception | None = None
         for attempt in range(retries):
             try:
+                if self.rate_limiter:
+                    await self.rate_limiter.wait()
                 response = await self._client.get(url, params=params)
                 # 429 和 5xx 通常是临时问题，做轻量退避后重试。
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < retries - 1:
+                    if self.rate_limiter:
+                        await self.rate_limiter.report_backoff()
                     await asyncio.sleep(0.8 * (attempt + 1))
                     continue
                 if response.status_code >= 400:
+                    if self.rate_limiter:
+                        await self.rate_limiter.report_backoff()
                     raise SteamApiError(f"Steam API 请求失败: HTTP {response.status_code}", response.status_code)
+                if self.rate_limiter:
+                    await self.rate_limiter.report_success()
                 return response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
+                if self.rate_limiter:
+                    await self.rate_limiter.report_backoff()
                 if attempt < retries - 1:
                     await asyncio.sleep(0.8 * (attempt + 1))
                     continue

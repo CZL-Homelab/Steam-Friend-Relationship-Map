@@ -9,6 +9,7 @@ from .logs import AppLogBuffer
 from .models import CrawlCreate, CrawlEvent, CrawlRun, CrawlStatus, FriendEdge, SteamUserRecord, utc_now_iso
 from .neo4j_repo import Neo4jRepository
 from .steam import SteamApiError, SteamClient, placeholder_user
+from .rate_limiter import AdaptiveRateLimiter
 
 
 @dataclass
@@ -109,6 +110,19 @@ class CrawlManager:
         return event
 
     async def _run_crawl(self, run: CrawlRun, payload: CrawlCreate, control: CrawlControl) -> None:
+        def on_delay_change(old_d: float, new_d: float, reason: str):
+            reason_cn = "请求成功" if reason == "success" else "发生重试/受限"
+            self.append_event(
+                run.id, "info", "limiter",
+                f"[限速器] {reason_cn}，延迟调整为 {int(new_d)}ms"
+            )
+
+        limiter = AdaptiveRateLimiter(
+            base_delay_ms=float(payload.delay_ms),
+            on_change_callback=on_delay_change
+        )
+        self.steam.rate_limiter = limiter
+
         # 按层处理 BFS，先统计候选人与前层用户池的连接数，再决定是否进入下一层。
         discovered: dict[str, int] = {run.root_steam_id: 0}
         expanded: set[str] = set()
@@ -257,8 +271,7 @@ class CrawlManager:
                         if edge_key not in edges_seen:
                             candidate_edges[friend_id].append(edge)
 
-                    if not used_cache and payload.delay_ms:
-                        await asyncio.sleep(payload.delay_ms / 1000)
+
 
                 # ── 内层循环后再次检查强制中断 ──
                 if control.force_stop:
@@ -342,8 +355,7 @@ class CrawlManager:
                                     friend_count_status = "public"
                                     friend_count = len(candidate_friends.friend_ids)
                                     self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public", project_id=self.project_id)
-                            if payload.delay_ms:
-                                await asyncio.sleep(payload.delay_ms / 1000)
+
 
                         if not self._friend_count_matches(friend_count, friend_count_status, payload):
                             friend_count_filtered_count += 1
@@ -460,6 +472,8 @@ class CrawlManager:
                 message=str(exc),
                 last_event=event.message,
             )
+        finally:
+            self.steam.rate_limiter = None
 
     @staticmethod
     def _friend_count_matches(friend_count: int | None, status: str, payload: CrawlCreate) -> bool:
