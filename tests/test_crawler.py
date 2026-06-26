@@ -61,6 +61,20 @@ class FakeRepo:
     def get_cached_friend_list(self, steam_id: str, valid_days: int, project_id: str = "default") -> tuple[str, list[str]] | None:
         return None
 
+    def count_inner_layer_links(self, candidate_ids: list[str], inner_pool: list[str], project_id: str = "default") -> dict[str, int]:
+        graph = {
+            "root": ["a", "b"],
+            "a": ["root", "c"],
+            "b": ["root", "c", "private"],
+            "c": ["a", "b"],
+        }
+        res = {}
+        for cid in candidate_ids:
+            neighbors = graph.get(cid, [])
+            links = len([n for n in neighbors if n in inner_pool])
+            res[cid] = links
+        return res
+
 
 @pytest.mark.asyncio
 async def test_crawl_respects_depth_and_records_private_nodes() -> None:
@@ -98,7 +112,7 @@ async def test_crawl_filters_by_friend_count() -> None:
     run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, friend_count_min=3))
     await manager.controls[run.id].task
 
-    assert set(repo.users) == {"root", "b"}
+    assert set(repo.users) == {"root", "a", "b"}
     assert repo.users["b"].friend_count == 3
     assert repo.runs[run.id].friend_count_filtered_count == 1
 
@@ -111,7 +125,7 @@ async def test_crawl_filters_by_prior_pool_links() -> None:
     run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, prior_pool_min_links=2))
     await manager.controls[run.id].task
 
-    assert set(repo.users) == {"root"}
+    assert set(repo.users) == {"root", "a", "b"}
     assert repo.runs[run.id].prior_pool_filtered_count == 2
 
 
