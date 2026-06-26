@@ -381,8 +381,8 @@ class CrawlManager:
                             new_edges.append(edge)
 
                 if accepted_ids:
-                    active = len(current_layer)
-                    soft_filtered = len(accepted_ids) - active
+                    active = len(accepted_ids) - len(no_deeper_scan)
+                    soft_filtered = len(no_deeper_scan)
                     self.append_event(
                         run.id, "info", "summary",
                         f"深度{depth}→{next_depth}: 收录{len(accepted_ids)}人 (其中{active}人继续展开, {soft_filtered}人标记不展开), 节点总计{len(discovered)}",

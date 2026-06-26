@@ -247,6 +247,7 @@ class Neo4jRepository:
                             ELSE user.last_scored_crawl_id
                         END,
                         u.friend_list_status = CASE
+                            WHEN user.friend_list_status = "unknown" THEN coalesce(u.friend_list_status, "unknown")
                             WHEN coalesce(u.friend_list_status, "unknown") = "private" THEN "private"
                             ELSE user.friend_list_status
                         END,
@@ -316,6 +317,8 @@ class Neo4jRepository:
             if not record:
                 return None
             status = record["status"] or "unknown"
+            if status == "unknown":
+                return None
             if status != "public":
                 return status, []
             
