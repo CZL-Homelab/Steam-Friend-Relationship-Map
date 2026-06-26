@@ -15,6 +15,10 @@ This project is a locally run **Steam Friend Relationship Map Analysis & Visuali
 - **Frontend**: Single-Page Application (SPA) built with HTML5, Vanilla CSS, and ES6 JavaScript. Cytoscape.js renders the graph. Multi-language support is provided via `i18n.json` (Chinese/English).
 - **Environment & Dependency Management**: Python 3.12+ managed by `uv` (executed using `uv sync` and `uv run`).
 
+### 1.3 Data Isolation & Crawl Lifecycle
+- **Project Isolation**: The project supports multi-project management. All crawled nodes (`SteamUser`) and relationships (`STEAM_FRIEND`) in the Neo4j database are logically partitioned using a `project_id` property. Every database query in `neo4j_repo.py` and data mutation in `crawler.py` must strictly respect and be bounded by the current `project_id` context. Global queries or modifications without `project_id` scoping are strictly prohibited to prevent cross-project data pollution.
+- **Crawl Task Lifecycle**: The BFS crawling engine supports runtime task control (Pause, Graceful Stop, and Force Stop). All modifications to `crawler.py` or new execution controllers must preserve and handle these lifecycle states gracefully without breaking active task management.
+
 ---
 
 ## 2. Project Directory & File Structure
