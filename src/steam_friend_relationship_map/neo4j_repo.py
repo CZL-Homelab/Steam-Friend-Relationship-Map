@@ -204,61 +204,64 @@ class Neo4jRepository:
         if not rows:
             return
         now = utc_now_iso()
+        batch_size = 1000
         with self.driver.session() as session:
             # 用户节点用 steam_id 幂等写入，备注/标签/分类由本工具维护，不被 Steam 资料覆盖。
-            session.run(
-                """
-                UNWIND $users AS user
-                MERGE (u:SteamUser {steam_id: user.steam_id})
-                ON CREATE SET u.first_seen_at = $now
-                SET u.last_seen_at = $now,
-                    u.project_id = CASE
-                        WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
-                        ELSE u.project_id
-                    END,
-                    u.persona_name = user.persona_name,
-                    u.profile_url = user.profile_url,
-                    u.avatar = user.avatar,
-                    u.avatar_medium = user.avatar_medium,
-                    u.avatar_full = user.avatar_full,
-                    u.visibility_state = user.visibility_state,
-                    u.profile_state = user.profile_state,
-                    u.friend_count = CASE
-                        WHEN user.friend_count IS NULL THEN u.friend_count
-                        ELSE user.friend_count
-                    END,
-                    u.friend_count_status = CASE
-                        WHEN user.friend_count_status IS NULL OR user.friend_count_status = "unknown" THEN coalesce(u.friend_count_status, "unknown")
-                        ELSE user.friend_count_status
-                    END,
-                    u.prior_pool_link_count = CASE
-                        WHEN user.prior_pool_link_count > coalesce(u.prior_pool_link_count, 0) THEN user.prior_pool_link_count
-                        ELSE coalesce(u.prior_pool_link_count, 0)
-                    END,
-                    u.root_closeness_score = CASE
-                        WHEN user.root_closeness_score > coalesce(u.root_closeness_score, 0) THEN user.root_closeness_score
-                        ELSE coalesce(u.root_closeness_score, 0)
-                    END,
-                    u.last_scored_crawl_id = CASE
-                        WHEN user.last_scored_crawl_id = "" THEN coalesce(u.last_scored_crawl_id, "")
-                        ELSE user.last_scored_crawl_id
-                    END,
-                    u.friend_list_status = CASE
-                        WHEN coalesce(u.friend_list_status, "unknown") = "private" THEN "private"
-                        ELSE user.friend_list_status
-                    END,
-                    u.depth_min = CASE
-                        WHEN u.depth_min IS NULL OR user.depth_min < u.depth_min THEN user.depth_min
-                        ELSE u.depth_min
-                    END,
-                    u.note = coalesce(u.note, ""),
-                    u.tags = coalesce(u.tags, []),
-                    u.category = coalesce(u.category, "")
-                """,
-                users=rows,
-                now=now,
-                project_id=project_id,
-            ).consume()
+            for i in range(0, len(rows), batch_size):
+                batch_rows = rows[i : i + batch_size]
+                session.run(
+                    """
+                    UNWIND $users AS user
+                    MERGE (u:SteamUser {steam_id: user.steam_id})
+                    ON CREATE SET u.first_seen_at = $now
+                    SET u.last_seen_at = $now,
+                        u.project_id = CASE
+                            WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
+                            ELSE u.project_id
+                        END,
+                        u.persona_name = user.persona_name,
+                        u.profile_url = user.profile_url,
+                        u.avatar = user.avatar,
+                        u.avatar_medium = user.avatar_medium,
+                        u.avatar_full = user.avatar_full,
+                        u.visibility_state = user.visibility_state,
+                        u.profile_state = user.profile_state,
+                        u.friend_count = CASE
+                            WHEN user.friend_count IS NULL THEN u.friend_count
+                            ELSE user.friend_count
+                        END,
+                        u.friend_count_status = CASE
+                            WHEN user.friend_count_status IS NULL OR user.friend_count_status = "unknown" THEN coalesce(u.friend_count_status, "unknown")
+                            ELSE user.friend_count_status
+                        END,
+                        u.prior_pool_link_count = CASE
+                            WHEN user.prior_pool_link_count > coalesce(u.prior_pool_link_count, 0) THEN user.prior_pool_link_count
+                            ELSE coalesce(u.prior_pool_link_count, 0)
+                        END,
+                        u.root_closeness_score = CASE
+                            WHEN user.root_closeness_score > coalesce(u.root_closeness_score, 0) THEN user.root_closeness_score
+                            ELSE coalesce(u.root_closeness_score, 0)
+                        END,
+                        u.last_scored_crawl_id = CASE
+                            WHEN user.last_scored_crawl_id = "" THEN coalesce(u.last_scored_crawl_id, "")
+                            ELSE user.last_scored_crawl_id
+                        END,
+                        u.friend_list_status = CASE
+                            WHEN coalesce(u.friend_list_status, "unknown") = "private" THEN "private"
+                            ELSE user.friend_list_status
+                        END,
+                        u.depth_min = CASE
+                            WHEN u.depth_min IS NULL OR user.depth_min < u.depth_min THEN user.depth_min
+                            ELSE u.depth_min
+                        END,
+                        u.note = coalesce(u.note, ""),
+                        u.tags = coalesce(u.tags, []),
+                        u.category = coalesce(u.category, "")
+                    """,
+                    users=batch_rows,
+                    now=now,
+                    project_id=project_id,
+                ).consume()
     def mark_friend_list_status(
         self,
         steam_id: str,
@@ -331,24 +334,27 @@ class Neo4jRepository:
         if not rows:
             return
         now = utc_now_iso()
+        batch_size = 1000
         with self.driver.session() as session:
             # Steam 好友关系按无向边处理，避免 A-B 和 B-A 重复出现。
-            session.run(
-                """
-                UNWIND $edges AS edge
-                MATCH (a:SteamUser {steam_id: edge.from_id})
-                MATCH (b:SteamUser {steam_id: edge.to_id})
-                MERGE (a)-[r:STEAM_FRIEND]-(b)
-                ON CREATE SET r.first_seen_at = $now
-                SET r.last_seen_at = $now,
-                    r.crawl_id = edge.crawl_id,
-                    r.source_depth = edge.source_depth,
-                    r.project_id = $project_id
-                """,
-                edges=rows,
-                now=now,
-                project_id=project_id,
-            ).consume()
+            for i in range(0, len(rows), batch_size):
+                batch_rows = rows[i : i + batch_size]
+                session.run(
+                    """
+                    UNWIND $edges AS edge
+                    MATCH (a:SteamUser {steam_id: edge.from_id})
+                    MATCH (b:SteamUser {steam_id: edge.to_id})
+                    MERGE (a)-[r:STEAM_FRIEND]-(b)
+                    ON CREATE SET r.first_seen_at = $now
+                    SET r.last_seen_at = $now,
+                        r.crawl_id = edge.crawl_id,
+                        r.source_depth = edge.source_depth,
+                        r.project_id = $project_id
+                    """,
+                    edges=batch_rows,
+                    now=now,
+                    project_id=project_id,
+                ).consume()
 
     def patch_user(self, steam_id: str, *, note: str | None = None, tags: list[str] | None = None, category: str | None = None) -> None:
         fields: dict[str, Any] = {}
