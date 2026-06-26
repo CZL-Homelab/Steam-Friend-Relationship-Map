@@ -271,6 +271,7 @@ class Neo4jRepository:
         *,
         friend_count: int | None = None,
         friend_count_status: str | None = None,
+        friend_ids: list[str] | None = None,
         project_id: str = "",
     ) -> None:
         with self.driver.session() as session:
@@ -290,6 +291,10 @@ class Neo4jRepository:
                         WHEN $friend_count_status IS NULL THEN coalesce(u.friend_count_status, "unknown")
                         ELSE $friend_count_status
                     END,
+                    u.friend_ids = CASE
+                        WHEN $friend_ids IS NULL THEN u.friend_ids
+                        ELSE $friend_ids
+                    END,
                     u.friend_list_fetched_at = $now,
                     u.last_seen_at = $now
                 """,
@@ -297,6 +302,7 @@ class Neo4jRepository:
                 status=status,
                 friend_count=friend_count,
                 friend_count_status=friend_count_status,
+                friend_ids=friend_ids,
                 project_id=project_id,
                 now=utc_now_iso(),
             ).consume()
@@ -310,7 +316,7 @@ class Neo4jRepository:
                 """
                 MATCH (u:SteamUser {steam_id: $steam_id})
                 WHERE u.friend_list_fetched_at >= $cutoff_time
-                RETURN u.friend_list_status AS status
+                RETURN u.friend_list_status AS status, u.friend_ids AS friend_ids
                 """,
                 steam_id=steam_id,
                 cutoff_time=cutoff_time,
@@ -323,14 +329,11 @@ class Neo4jRepository:
             if status != "public":
                 return status, []
             
-            friends = session.run(
-                """
-                MATCH (u:SteamUser {steam_id: $steam_id})-[r:STEAM_FRIEND]-(f:SteamUser)
-                RETURN DISTINCT f.steam_id AS friend_id
-                """,
-                steam_id=steam_id,
-            )
-            return status, [row["friend_id"] for row in friends]
+            friend_ids = record["friend_ids"]
+            if friend_ids is None:
+                # 兼容旧版本数据：若没有保存的完整好友列表属性，视为缓存失效，触发重新抓取以进行自愈
+                return None
+            return status, list(friend_ids)
 
     def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         rows = [edge.model_dump(mode="json") for edge in edges]

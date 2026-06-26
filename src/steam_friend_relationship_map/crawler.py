@@ -250,12 +250,12 @@ class CrawlManager:
 
                         if friends.private:
                             private_count += 1
-                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private", project_id=self.project_id)
+                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private", friend_ids=[], project_id=self.project_id)
                             self.append_event(run.id, "warn", "private", f"[API] 私密: {current_id}")
                             self.repo.update_crawl_run(run.id, private_count=private_count)
                             continue
 
-                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public", project_id=self.project_id)
+                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public", friend_ids=friends.friend_ids, project_id=self.project_id)
                         friend_ids = friends.friend_ids
                         self.append_event(run.id, "info", "expand", f"  └ API返回: {len(friend_ids)} 位好友")
 
@@ -350,11 +350,11 @@ class CrawlManager:
                             else:
                                 if candidate_friends.private:
                                     friend_count_status = "private"
-                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private", project_id=self.project_id)
+                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private", friend_ids=[], project_id=self.project_id)
                                 else:
                                     friend_count_status = "public"
                                     friend_count = len(candidate_friends.friend_ids)
-                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public", project_id=self.project_id)
+                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public", friend_ids=candidate_friends.friend_ids, project_id=self.project_id)
 
 
                         if not self._friend_count_matches(friend_count, friend_count_status, payload):
