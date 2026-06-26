@@ -120,7 +120,8 @@ class Neo4jRepository:
             records = list(session.run(
                 """
                 MATCH (p:Project)
-                OPTIONAL MATCH (u:SteamUser {project_id: p.id})
+                OPTIONAL MATCH (u:SteamUser)
+                WHERE u.project_id = p.id OR EXISTS { (u)-[:STEAM_FRIEND {project_id: p.id}]-() }
                 OPTIONAL MATCH ()-[r:STEAM_FRIEND {project_id: p.id}]-()
                 OPTIONAL MATCH (c:CrawlRun {project_id: p.id})
                 RETURN p,
@@ -324,11 +325,10 @@ class Neo4jRepository:
             
             friends = session.run(
                 """
-                MATCH (u:SteamUser {steam_id: $steam_id})-[r:STEAM_FRIEND {project_id: $project_id}]-(f:SteamUser)
-                RETURN f.steam_id AS friend_id
+                MATCH (u:SteamUser {steam_id: $steam_id})-[r:STEAM_FRIEND]-(f:SteamUser)
+                RETURN DISTINCT f.steam_id AS friend_id
                 """,
                 steam_id=steam_id,
-                project_id=project_id,
             )
             return status, [row["friend_id"] for row in friends]
 
@@ -418,7 +418,8 @@ class Neo4jRepository:
         limit = max(1, min(limit, 2000))
         filters = []
         params: dict[str, Any] = {"limit": limit, "project_id": project_id}
-        filters.append("coalesce(n.project_id, '') IN ['', $project_id]")
+        if not root:
+            filters.append("(coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $project_id}]-() })")
         if query:
             params["query"] = query.lower()
             filters.append("(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)")
@@ -448,8 +449,10 @@ class Neo4jRepository:
             if root:
                 params["root"] = root
                 # Root 查询只取指定层数内的子图，防止前端一次渲染过大的全库图。
+                # 过滤路径中的关系必须属于该项目，节点自身不再受限于 u.project_id (因为用户节点在 Neo4j 中是全局唯一的)
                 node_query = f"""
                 MATCH p=(r:SteamUser {{steam_id: $root}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
+                WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
                 WITH DISTINCT n
                 {where}
                 RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
@@ -581,7 +584,7 @@ class Neo4jRepository:
                 session.run(
                     """
                     MATCH (n:SteamUser)
-                    WHERE coalesce(n.project_id, '') IN ['', $project_id]
+                    WHERE coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $project_id}]-() }
                     RETURN n, COUNT { (n)-[:STEAM_FRIEND]-() } AS degree
                     ORDER BY degree DESC
                     LIMIT $limit
@@ -595,7 +598,11 @@ class Neo4jRepository:
     def get_db_stats(self, project_id: str = "default") -> DbStats:
         with self.driver.session() as session:
             steam_users = session.run(
-                "MATCH (u:SteamUser) WHERE coalesce(u.project_id, '') IN ['', $pid] RETURN count(u) AS count",
+                """
+                MATCH (u:SteamUser)
+                WHERE coalesce(u.project_id, '') IN ['', $pid] OR EXISTS { (u)-[:STEAM_FRIEND {project_id: $pid}]-() }
+                RETURN count(u) AS count
+                """,
                 pid=project_id,
             ).single()["count"]
             relationships = session.run(
@@ -629,7 +636,11 @@ class Neo4jRepository:
             nodes = [
                 dict(record["n"])
                 for record in session.run(
-                    "MATCH (n:SteamUser) WHERE coalesce(n.project_id, '') IN ['', $pid] RETURN n ORDER BY n.depth_min, n.persona_name",
+                    """
+                    MATCH (n:SteamUser)
+                    WHERE coalesce(n.project_id, '') IN ['', $pid] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $pid}]-() }
+                    RETURN n ORDER BY n.depth_min, n.persona_name
+                    """,
                     pid=project_id,
                 )
             ]
