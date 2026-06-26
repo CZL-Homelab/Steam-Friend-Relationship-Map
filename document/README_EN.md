@@ -156,6 +156,7 @@ main (production)
 > - Project structure, implementation details, and wording may not follow best practices.
 > - Code logic may contain AI hallucinations, redundancy, or inelegant implementations.
 > - Security and edge cases may not have been thoroughly reviewed by humans.
+> - **Vibe Coding Rules Requirement**: When utilizing AI (including Vibe Coding mode) for development, **it is mandatory to instruct the AI agent to first read and strictly adhere to all guidelines in `.cursorrules`** (including credential security, log redaction, bilingual commits, and branching workflows) before writing any code.
 >
 > As a **public** repository, this AI-generation attribute is disclosed so users can assess code quality and suitability. Issues and PRs to point out problems and improvements are welcome.
 
