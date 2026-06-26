@@ -158,6 +158,11 @@ textarea {
   color: var(--teal);
 }
 
+[data-theme="dark"] .theme-toggle:hover {
+  border-color: hsl(172, 40%, 45%);
+  color: hsl(172, 40%, 45%);
+}
+
 .brand-mark {
   display: grid;
   place-items: center;
