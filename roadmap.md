@@ -28,7 +28,6 @@ graph TD
     subgraph Phase3["🟠 阶段 3: 易用性与部署分发拓展 (长期规划)"]
         H["Docker-compose 一键容器化"]
         I["Neo4j AuraDB 云数据库适配"]
-        J["PyInstaller 单机运行包 (.exe/.app)"]
     end
 
     Phase1 --> Phase2
@@ -36,7 +35,7 @@ graph TD
 
     class A,B,C,D p1;
     class E,F,G p2;
-    class H,I,J p3;
+    class H,I p3;
 ```
 
 ---
@@ -96,9 +95,6 @@ graph TD
 2. **云端 Neo4j 支持 (AuraDB)**
    - **内容**：支持 Bolt 协议下的加密远程连接（`neo4j+s://`），测试与 Neo4j AuraDB 云数据库的兼容性。
    - **收益**：支持云端持久化存储，无需在本地运行数据库。
-3. **自动打包为桌面单机版应用**
-   - **内容**：使用 PyInstaller 打包 Python 后端，并配合轻量级嵌入式壳体（如 Pywebview 或 Electron），打包为 `.exe` (Windows) 和 `.app` (macOS)。
-   - **收益**：双击即可运行，完全对普通玩家隐藏命令行操作。
 
 ---
 
@@ -115,4 +111,3 @@ graph TD
 | **Phase 2** | ECharts 图表可视化面板 | ⭐⭐ | 🟡 中等 (Medium) | `app.js`, `index.html` |
 | **Phase 3** | Docker 容器化一键部署 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | 部署脚本 |
 | **Phase 3** | 云端 Neo4j AuraDB 支持 | ⭐⭐⭐ | 🟢 简单 (Easy) | `settings.py` |
-| **Phase 3** | 单机版桌面应用打包 | ⭐⭐ | 🔴 困难 (Hard) | 构建打包工具 |
