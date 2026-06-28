@@ -1047,6 +1047,21 @@ function focusAnalysisCandidate(steamId, candidates) {
   if (node.length) {
     node.addClass("analysis-focus");
     cy.center(node);
+    fillProfile(node.data().node);
+  } else if (candidate) {
+    fillProfile({
+      id: candidate.steam_id,
+      label: candidate.label,
+      avatar: candidate.avatar,
+      profile_url: candidate.profile_url,
+      friend_count: candidate.friend_count,
+      depth_min: candidate.depth,
+      friend_list_status: "unknown",
+      friend_count_status: "unknown",
+      note: "",
+      tags: [],
+      category: ""
+    });
   }
   for (const evidence of candidate?.evidence || []) {
     const evidenceNode = cy.getElementById(evidence.id);
