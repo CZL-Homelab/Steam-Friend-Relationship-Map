@@ -33,7 +33,9 @@ from .models import (
     UserPatch,
     utc_now_iso,
 )
-from .neo4j_repo import Neo4jRepository
+from .graph_repo import IGraphRepository
+from .neo4j_repo import Neo4jRepositoryImpl
+from .kuzu_repo import KuzuRepositoryImpl
 from .secrets import SecretStorageError, SecretStore
 from .settings import Settings, clear_settings_cache, get_settings
 from .steam import SteamApiError, SteamClient
@@ -42,6 +44,9 @@ from .steam import SteamApiError, SteamClient
 STATIC_DIR = Path(__file__).parent / "static"
 ENV_PATH = Path.cwd() / ".env"
 ENV_KEYS = {
+    "graph_db_engine": "GRAPH_DB_ENGINE",
+    "kuzu_db_path": "KUZU_DB_PATH",
+    "kuzu_buffer_pool_size_gb": "KUZU_BUFFER_POOL_SIZE_GB",
     "neo4j_uri": "NEO4J_URI",
     "neo4j_user": "NEO4J_USER",
     "app_host": "APP_HOST",
@@ -54,9 +59,26 @@ ENV_KEYS = {
 }
 
 
+def get_repository(settings: Settings) -> IGraphRepository:
+    engine = settings.graph_db_engine.lower()
+    if engine == "kuzu":
+        return KuzuRepositoryImpl(
+            db_path=settings.kuzu_db_path,
+            buffer_pool_size_gb=settings.kuzu_buffer_pool_size_gb,
+        )
+    elif engine == "neo4j":
+        return Neo4jRepositoryImpl(
+            uri=settings.neo4j_uri,
+            user=settings.neo4j_user,
+            password=settings.neo4j_password,
+        )
+    else:
+        raise ValueError(f"Unsupported graph database engine: {engine}")
+
+
 def create_app(
     settings: Settings | None = None,
-    repo: Neo4jRepository | None = None,
+    repo: IGraphRepository | None = None,
     steam: SteamClient | None = None,
     secret_store: SecretStore | None = None,
 ) -> FastAPI:
@@ -67,7 +89,11 @@ def create_app(
     log_buffer = AppLogBuffer()
     log_buffer.set_secret_values([settings.steam_api_key, settings.neo4j_password])
     install_log_handler(log_buffer)
-    repo = repo or Neo4jRepository(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
+    repo = repo or get_repository(settings)
+    try:
+        repo.ensure_schema()
+    except Exception as exc:
+        log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
     steam = steam or SteamClient(settings.steam_api_key)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
 
@@ -78,7 +104,11 @@ def create_app(
         clear_settings_cache()
         settings = get_settings()
         log_buffer.set_secret_values([settings.steam_api_key, settings.neo4j_password])
-        repo = old_repo if provided_repo is not None else Neo4jRepository(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
+        repo = old_repo if provided_repo is not None else get_repository(settings)
+        try:
+            repo.ensure_schema()
+        except Exception as exc:
+            log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
         steam = old_steam if provided_steam is not None else SteamClient(settings.steam_api_key)
         manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
         app.state.repo = repo
@@ -101,6 +131,9 @@ def create_app(
             secure_store_available = False
             message = message or str(exc)
         return PublicSettings(
+            graph_db_engine=settings.graph_db_engine,
+            kuzu_db_path=settings.kuzu_db_path,
+            kuzu_buffer_pool_size_gb=settings.kuzu_buffer_pool_size_gb,
             neo4j_uri=settings.neo4j_uri,
             neo4j_user=settings.neo4j_user,
             app_host=settings.app_host,
@@ -271,9 +304,7 @@ def create_app(
         if not pid:
             raise HTTPException(status_code=400, detail="项目 ID 不能为空")
         # Ensure the project exists
-        with repo.driver.session() as session:
-            exists = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=pid).single()
-        if exists is None:
+        if not repo.project_exists(pid):
             # Auto-create if not exists
             repo.create_project(ProjectCreate(name=pid), project_id=pid)
             log_buffer.append("info", "project", f"项目已自动创建: {pid}")
