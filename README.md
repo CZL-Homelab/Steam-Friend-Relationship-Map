@@ -56,7 +56,7 @@
 | ----------------- | -------------------------------------------------------- |
 | Steam 账号        | 用来申请 Steam Web API Key                               |
 | Steam Web API Key | 用来调用公开 Steam Web API，建议通过网页保存到系统凭据库 |
-| Neo4j Desktop     | 用来运行本地图数据库                                     |
+| Neo4j Desktop (可选) | 若选用 Neo4j 引擎，则用来运行本地数据库并使用 Bloom 探索；若使用默认的 Kùzu 引擎则免安装 |
 | uv                | 用来管理 Python 环境和依赖                               |
 | Python 3.12+      | 项目运行环境，`uv` 会自动使用/管理                       |
 
@@ -173,6 +173,60 @@ main (生产分支)
 `.env`、Steam API Key、Neo4j 密码、数据库备份、导出文件、截图和手动备注可能包含敏感信息。公开仓库、提交 Issue、分享截图或发布数据集前，请先删除密钥、密码、个人备注和可识别的关系数据。
 
 这不是法律建议。是否可以抓取、保存、分析或公开分享某些数据，需要使用者根据自己的使用场景自行判断并承担责任。
+
+## 💾 图数据库“双引擎”配置与选型指南
+
+本项目采用**图数据库“双引擎”架构**，支持进程内嵌入式运行与外部专业数据库服务，用户可根据场景自由切换：
+
+### 双引擎特性对比
+
+| 维度 | Kùzu (默认) | Neo4j |
+| :--- | :--- | :--- |
+| **激活参数** | `GRAPH_DB_ENGINE=kuzu` | `GRAPH_DB_ENGINE=neo4j` |
+| **使用场景** | 本地轻量化使用、快速开发与验证、CI 自动化测试 | 大规模社交分析、协同可视化探索、长期持久化存储 |
+| **部署门槛** | **零门槛** (在应用运行进程内由 Python 直接拉起) | **中门槛** (需独立安装运行 Neo4j Desktop 或外部 AuraDB 服务) |
+| **外部生态** | 无独立可视化客户端，不支持 Neo4j 原生算法包 | 支持 Neo4j Bloom, Browser 等专业图探索生态 |
+| **开源许可** | MIT License (非常宽松商业友好) | GPL v3 / 闭源企业授权限制 |
+
+### 切换配置说明
+
+您可通过修改本地 `.env` 配置文件（或启动后的前端网页设置面板）自由切换引擎，前端配置字段会随引擎自动联动切换隐藏：
+
+#### 1. 使用 Kùzu 嵌入式图数据库 (默认)
+数据默认保存在本地 `./data/graph_kuzu` 下。
+```ini
+GRAPH_DB_ENGINE=kuzu
+KUZU_DB_PATH=./data/graph_kuzu         # 数据存储文件路径
+KUZU_BUFFER_POOL_SIZE_GB=1             # 限制 Kùzu 占用物理内存的最大缓冲池大小
+```
+
+#### 2. 使用 Neo4j 独立图数据库
+连接外部运行中的 Neo4j 数据库服务：
+```ini
+GRAPH_DB_ENGINE=neo4j
+NEO4J_URI=bolt://localhost:7687        # 数据库 Bolt 连接地址
+NEO4J_USER=neo4j                       # 用户名
+```
+> [!NOTE]
+> 为保护隐私安全，Neo4j 密码**不推荐**写入 `.env`，应在 Web UI 启动后在设置中保存，它会自动加密写入系统底层钥匙串/凭据管理器中。
+
+#### 3. 双库数据一键迁移工具 (CLI)
+如果您之前使用的是 Neo4j 并且想将所有社交网络数据、好友关系、自定义项目、标签、备注等迁移到 Kùzu 嵌入式数据库（或者相反），项目已内置了专门的跨库迁移工具。
+
+在终端中运行如下命令即可完成数据单向一键迁移：
+
+*   **从 Neo4j 迁移至 Kùzu (推荐)**：
+    ```bash
+    uv run python -m steam_friend_relationship_map.migration --from-engine neo4j --to-engine kuzu
+    ```
+*   **从 Kùzu 迁移至 Neo4j**：
+    ```bash
+    uv run python -m steam_friend_relationship_map.migration --from-engine kuzu --to-engine neo4j
+    ```
+*   **参数与重写选项**：
+    *   `--project-id <id>`: 可选，只迁移特定项目 ID（留空默认迁移所有项目）。
+    *   `--neo4j-uri` / `--neo4j-user` / `--kuzu-db-path`: 重写对应的连接配置参数。
+    *   若命令行中没有传入 Neo4j 密码，工具会自动尝试从钥匙串凭据管理器中提取；若未提取到则会有安全命令行输入提示。
 
 ## 网页端安全配置说明
 
@@ -456,6 +510,28 @@ RETURN p
 ```
 
 其中 `$root`、`$from`、`$to` 要替换成真实 SteamID。
+
+## 📊 使用 Kùzu Explorer 可视化探索图数据
+
+因为 Kùzu 属于嵌入式图数据库，默认没有运行独立的图管理服务。如果您需要直观调试、运行自定义 Cypher 语句或探索节点关系，可使用 Kùzu 官方提供的 **Kùzu Explorer** 可视化调试面板。
+
+项目已内置了支持一键启动的可视化环境配置，最方便的方式是通过 Docker 一键拉起：
+
+### 一键启动可视化面板 (推荐)
+
+在项目根目录下，直接在终端中运行如下 Docker 命令（注意将本地数据库绝对路径映射入容器内）：
+
+```bash
+docker run -p 8080:8000 \
+  -v "$(pwd)/data/graph_kuzu:/database" \
+  --name kuzu-explorer \
+  --rm \
+  kuzudb/kuzu-explorer:latest
+```
+
+> [!TIP]
+> * 启动后，打开浏览器访问 **[http://localhost:8080](http://localhost:8080)** 即可进入 Kùzu Explorer 可视化管理后台。
+> * 进入后可在顶部的 Cypher 输入框中直接输入任意标准查询（如 `MATCH (u:SteamUser) RETURN u LIMIT 50`）绘制本地图谱。
 
 ## 常见问题
 
