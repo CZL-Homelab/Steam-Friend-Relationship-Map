@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Steam 好友关系图谱</title>
-    <link rel="stylesheet" href="/static/styles.css?v=1.0.5" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.0.6" />
     <script src="/static/vendor/cytoscape.min.js"></script>
     <script src="/static/vendor/lucide.min.js"></script>
   </head>
@@ -354,7 +354,7 @@
             <img id="profileAvatar" alt="" hidden />
             <div class="profile-title-group">
               <h3 id="profileName" data-i18n="profile.empty">选择一个节点</h3>
-              <span id="profileUrlLabel" class="profile-url-label"><i data-lucide="external-link" style="width: 12px; height: 12px; flex-shrink: 0;"></i>Steam profile</span>
+              <span id="profileUrlLabel" class="profile-url-label"><i data-lucide="external-link" style="width: 12px; height: 12px; flex-shrink: 0;"></i><span id="profileUrlText">Steam profile</span></span>
             </div>
           </a>
           <div class="profile-body">
@@ -467,6 +467,6 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="/static/app.js?v=1.0.4"></script>
+    <script src="/static/app.js?v=1.0.5"></script>
   </body>
 </html>

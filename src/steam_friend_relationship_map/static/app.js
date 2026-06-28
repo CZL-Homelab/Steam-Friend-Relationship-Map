@@ -117,7 +117,7 @@ function applyTranslations() {
     node.textContent = statusText(node.dataset.status);
   });
   updateGraphSummary();
-  if (!selectedNode) $("profileUrl").textContent = t("profile.steamProfile");
+  if ($("profileUrlText")) $("profileUrlText").textContent = t("profile.steamProfile");
   if ($("pathResult").dataset.state === "empty") $("pathResult").textContent = t("path.empty");
   if ($("pathResult").dataset.state === "no-path") $("pathResult").textContent = t("path.noPath");
   if (!$("crawlLogs").children.length) $("lastEvent").textContent = t("log.empty");
