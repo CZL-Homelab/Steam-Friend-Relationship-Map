@@ -250,7 +250,6 @@ function initGraph() {
     pixelRatio: 1.0,           // 避免在高分屏（如 Mac Retina）下因超高分辨率渲染导致的严重卡顿
     motionBlur: false,          // 禁用动态模糊以节省渲染开销
     textureOnViewport: true,    // 缩放/平移时将视口作为纹理渲染，极大提升操作流畅度
-    hideEdgesOnViewport: true,  // 拖拽/缩放时隐藏关系边，减少高频绘制开销
     boxSelectionEnabled: false, // 禁用多选框以减少鼠标事件计算开销
     style: [
       {
