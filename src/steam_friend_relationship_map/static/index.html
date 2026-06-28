@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Steam 好友关系图谱</title>
-    <link rel="stylesheet" href="/static/styles.css?v=1.0.3" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.0.5" />
     <script src="/static/vendor/cytoscape.min.js"></script>
     <script src="/static/vendor/lucide.min.js"></script>
   </head>
@@ -74,22 +74,41 @@
             Steam API Key
             <input id="steamApiKeyInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
           </label>
-          <div class="secret-state">
-            <span>Neo4j Password</span>
-            <strong id="neo4jSecretState" data-i18n="secret.unknown">未知</strong>
+          <label>
+            <span>数据库引擎 / Graph Engine</span>
+            <select id="settingsGraphDbEngine">
+              <option value="kuzu">Kùzu</option>
+              <option value="neo4j">Neo4j</option>
+            </select>
+          </label>
+          <div id="kuzuSettingsGroup">
+            <label>
+              KÙZU_DB_PATH
+              <input id="settingsKuzuDbPath" placeholder="./data/graph_kuzu" />
+            </label>
+            <label>
+              KÙZU_BUFFER_POOL_SIZE_GB
+              <input id="settingsKuzuBufferPoolSizeGb" type="number" min="1" max="64" placeholder="1" />
+            </label>
           </div>
-          <label data-i18n-label="field.neo4jPassword">
-            Neo4j 密码
-            <input id="neo4jPasswordInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
-          </label>
-          <label>
-            NEO4J_URI
-            <input id="settingsNeo4jUri" placeholder="bolt://localhost:7687" />
-          </label>
-          <label>
-            NEO4J_USER
-            <input id="settingsNeo4jUser" placeholder="neo4j" />
-          </label>
+          <div id="neo4jSettingsGroup">
+            <div class="secret-state">
+              <span>Neo4j Password</span>
+              <strong id="neo4jSecretState" data-i18n="secret.unknown">未知</strong>
+            </div>
+            <label data-i18n-label="field.neo4jPassword">
+              Neo4j 密码
+              <input id="neo4jPasswordInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
+            </label>
+            <label>
+              NEO4J_URI
+              <input id="settingsNeo4jUri" placeholder="bolt://localhost:7687" />
+            </label>
+            <label>
+              NEO4J_USER
+              <input id="settingsNeo4jUser" placeholder="neo4j" />
+            </label>
+          </div>
           <button class="secondary compact" id="saveSettings"><i data-lucide="shield-check"></i><span data-i18n="action.saveSettings">保存安全配置</span></button>
           <p class="hint" id="settingsMessage"></p>
         </section>
@@ -105,7 +124,7 @@
               <strong id="steamStatus" data-status="unknown">未知</strong>
             </div>
             <div>
-              <span class="muted">Neo4j</span>
+              <span class="muted" id="dbStatusLabel">Database</span>
               <strong id="neo4jStatus" data-status="unknown">未知</strong>
             </div>
           </div>
@@ -331,10 +350,14 @@
 
       <aside class="inspector">
         <section class="profile-card" id="profileCard">
-          <img id="profileAvatar" alt="" hidden />
+          <a id="profileHeaderLink" href="#" target="_blank" rel="noreferrer" class="profile-header-link">
+            <img id="profileAvatar" alt="" hidden />
+            <div class="profile-title-group">
+              <h3 id="profileName" data-i18n="profile.empty">选择一个节点</h3>
+              <span id="profileUrlLabel" class="profile-url-label"><i data-lucide="external-link" style="width: 12px; height: 12px; flex-shrink: 0;"></i>Steam profile</span>
+            </div>
+          </a>
           <div class="profile-body">
-            <h3 id="profileName" data-i18n="profile.empty">选择一个节点</h3>
-            <a id="profileUrl" href="#" target="_blank" rel="noreferrer">Steam profile</a>
             <dl>
               <div><dt>SteamID</dt><dd id="profileSteamId">-</dd></div>
               <div><dt data-i18n="metric.degree">度数</dt><dd id="profileDegree">0</dd></div>
@@ -410,7 +433,7 @@
           <ol id="topDegreeList" class="rank-list"></ol>
         </section>
 
-        <section class="panel">
+        <section class="panel" id="bloomCypherPanel">
           <div class="panel-title">
             <span data-i18n="section.bloomCypher">Bloom Cypher 查询</span>
             <button class="icon-button" id="copyBloom" title="复制查询" data-i18n-title="action.copyBloom"><i data-lucide="copy"></i></button>
@@ -444,6 +467,6 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="/static/app.js?v=1.0.2"></script>
+    <script src="/static/app.js?v=1.0.4"></script>
   </body>
 </html>

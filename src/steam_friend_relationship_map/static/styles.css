@@ -515,30 +515,65 @@ button svg {
 }
 
 .profile-card {
-  overflow: hidden;
+  padding: 14px;
+}
+
+.profile-header-link {
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+  margin-bottom: 12px;
 }
 
 .profile-card img {
-  width: 100%;
-  height: 160px;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
   object-fit: cover;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
   background: var(--avatar-placeholder);
 }
 
 .profile-card img[hidden] {
+  display: none !important;
+}
+
+.profile-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  flex-grow: 1;
+}
+
+.profile-title-group h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-url-label {
+  font-size: 12px;
+  color: var(--blue);
   display: none;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-body {
-  padding: 14px;
-}
-
-.profile-body a {
-  display: inline-block;
-  margin-top: 4px;
-  color: var(--blue);
-  font-size: 13px;
-  overflow-wrap: anywhere;
+  padding: 0;
 }
 
 dl {

@@ -375,8 +375,15 @@ function fillProfile(node) {
   $("profileAvatar").hidden = !node.avatar;
   if (node.avatar) $("profileAvatar").src = node.avatar;
   $("profileName").textContent = node.label || statusText("unknown");
-  $("profileUrl").href = node.profile_url || "#";
-  $("profileUrl").textContent = node.profile_url || t("profile.steamProfile");
+  if (node.id) {
+    $("profileHeaderLink").href = node.profile_url || "#";
+    $("profileHeaderLink").setAttribute("target", "_blank");
+    $("profileUrlLabel").style.display = "flex";
+  } else {
+    $("profileHeaderLink").href = "#";
+    $("profileHeaderLink").removeAttribute("target");
+    $("profileUrlLabel").style.display = "none";
+  }
   $("profileSteamId").textContent = node.id || "-";
   $("profileDegree").textContent = node.degree ?? 0;
   $("profileFriendCount").textContent = node.friend_count ?? "-";
@@ -467,10 +474,37 @@ function secretLabel(configured, fromEnv) {
   return configured ? t("secret.configured") : t("secret.missing");
 }
 
+function toggleEngineSettings(engine) {
+  if (engine === "kuzu") {
+    $("kuzuSettingsGroup").style.display = "block";
+    $("neo4jSettingsGroup").style.display = "none";
+    if ($("bloomCypherPanel")) {
+      $("bloomCypherPanel").style.display = "none";
+    }
+  } else {
+    $("kuzuSettingsGroup").style.display = "none";
+    $("neo4jSettingsGroup").style.display = "block";
+    if ($("bloomCypherPanel")) {
+      $("bloomCypherPanel").style.display = "block";
+    }
+  }
+  if ($("dbStatusLabel")) {
+    $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
+  }
+}
+
 async function loadSettings() {
   const settings = await api("/api/settings");
+  const engine = settings.graph_db_engine || "kuzu";
+  $("settingsGraphDbEngine").value = engine;
+  $("settingsKuzuDbPath").value = settings.kuzu_db_path || "";
+  $("settingsKuzuBufferPoolSizeGb").value = settings.kuzu_buffer_pool_size_gb || 1;
   $("settingsNeo4jUri").value = settings.neo4j_uri || "";
   $("settingsNeo4jUser").value = settings.neo4j_user || "";
+  toggleEngineSettings(engine);
+  if ($("dbStatusLabel")) {
+    $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
+  }
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
@@ -481,16 +515,34 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  clearFieldErrors(["settingsNeo4jUri", "settingsNeo4jUser"]);
-  if (!$("settingsNeo4jUri").value.trim()) {
-    setFieldError("settingsNeo4jUri", t("validation.required"));
-    throw new Error(t("validation.fixFields"));
+  clearFieldErrors(["settingsKuzuDbPath", "settingsKuzuBufferPoolSizeGb", "settingsNeo4jUri", "settingsNeo4jUser"]);
+  const engine = $("settingsGraphDbEngine").value;
+  
+  if (engine === "kuzu") {
+    if (!$("settingsKuzuDbPath").value.trim()) {
+      setFieldError("settingsKuzuDbPath", t("validation.required"));
+      throw new Error(t("validation.fixFields"));
+    }
+    const poolSize = parseInt($("settingsKuzuBufferPoolSizeGb").value);
+    if (isNaN(poolSize) || poolSize < 1 || poolSize > 64) {
+      setFieldError("settingsKuzuBufferPoolSizeGb", "Must be between 1 and 64 GB");
+      throw new Error(t("validation.fixFields"));
+    }
+  } else {
+    if (!$("settingsNeo4jUri").value.trim()) {
+      setFieldError("settingsNeo4jUri", t("validation.required"));
+      throw new Error(t("validation.fixFields"));
+    }
+    if (!$("settingsNeo4jUser").value.trim()) {
+      setFieldError("settingsNeo4jUser", t("validation.required"));
+      throw new Error(t("validation.fixFields"));
+    }
   }
-  if (!$("settingsNeo4jUser").value.trim()) {
-    setFieldError("settingsNeo4jUser", t("validation.required"));
-    throw new Error(t("validation.fixFields"));
-  }
+
   const payload = {
+    graph_db_engine: engine,
+    kuzu_db_path: $("settingsKuzuDbPath").value.trim(),
+    kuzu_buffer_pool_size_gb: parseInt($("settingsKuzuBufferPoolSizeGb").value) || 1,
     neo4j_uri: $("settingsNeo4jUri").value.trim(),
     neo4j_user: $("settingsNeo4jUser").value.trim(),
   };
@@ -1028,6 +1080,7 @@ function wireEvents() {
   document.querySelectorAll(".lang-button").forEach((button) => {
     button.addEventListener("click", () => setLanguage(button.dataset.lang));
   });
+  $("settingsGraphDbEngine").addEventListener("change", (event) => toggleEngineSettings(event.target.value));
   $("testSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, testSettings).catch(() => {}));
   $("loadSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, loadSettings).catch(() => {}));
   $("saveSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, saveSettings).catch(() => {}));
