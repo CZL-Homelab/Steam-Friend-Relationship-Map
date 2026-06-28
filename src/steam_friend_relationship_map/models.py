@@ -126,6 +126,9 @@ class SettingsTestResult(BaseModel):
 
 
 class PublicSettings(BaseModel):
+    graph_db_engine: str
+    kuzu_db_path: str
+    kuzu_buffer_pool_size_gb: int
     neo4j_uri: str
     neo4j_user: str
     app_host: str
@@ -144,6 +147,9 @@ class PublicSettings(BaseModel):
 
 
 class SettingsPatch(BaseModel):
+    graph_db_engine: str | None = None
+    kuzu_db_path: str | None = None
+    kuzu_buffer_pool_size_gb: int | None = Field(default=None, ge=1, le=64)
     neo4j_uri: str | None = None
     neo4j_user: str | None = None
     app_host: str | None = None

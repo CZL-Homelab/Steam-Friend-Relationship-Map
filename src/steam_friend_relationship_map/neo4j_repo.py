@@ -6,6 +6,7 @@ from typing import Any
 from datetime import UTC, datetime, timedelta
 
 from neo4j import GraphDatabase
+from .graph_repo import IGraphRepository
 from .models import (
     CrawlRun,
     CrawlStatus,
@@ -25,7 +26,7 @@ from .models import (
 )
 
 
-class Neo4jRepository:
+class Neo4jRepositoryImpl(IGraphRepository):
     """Neo4j 数据访问层。
 
     Security note: Cypher 查询中深度值经过 ``_safe_depth()`` 校验后以 f-string
@@ -114,6 +115,11 @@ class Neo4jRepository:
                 pid=project_id,
             ).consume()
         return True
+
+    def project_exists(self, project_id: str) -> bool:
+        with self.driver.session() as session:
+            result = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=project_id).single()
+            return result is not None
 
     def list_projects(self) -> ProjectListResponse:
         with self.driver.session() as session:

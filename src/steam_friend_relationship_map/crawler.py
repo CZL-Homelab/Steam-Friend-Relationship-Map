@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .logs import AppLogBuffer
 from .models import CrawlCreate, CrawlEvent, CrawlRun, CrawlStatus, FriendEdge, SteamUserRecord, utc_now_iso
-from .neo4j_repo import Neo4jRepository
+from .graph_repo import IGraphRepository
 from .steam import SteamApiError, SteamClient, placeholder_user
 from .rate_limiter import AdaptiveRateLimiter
 
@@ -21,7 +21,7 @@ class CrawlControl:
 
 
 class CrawlManager:
-    def __init__(self, repo: Neo4jRepository, steam: SteamClient, logs: AppLogBuffer | None = None, project_id: str = "default") -> None:
+    def __init__(self, repo: IGraphRepository, steam: SteamClient, logs: AppLogBuffer | None = None, project_id: str = "default") -> None:
         self.repo = repo
         self.steam = steam
         self.logs = logs
