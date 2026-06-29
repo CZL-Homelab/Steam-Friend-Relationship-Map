@@ -4,305 +4,371 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Steam 好友关系图谱</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.0.6" />
     <script src="/static/vendor/cytoscape.min.js"></script>
     <script src="/static/vendor/lucide.min.js"></script>
   </head>
   <body>
     <main class="app-shell">
       <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">S</div>
-          <div>
-            <h1 data-i18n="app.title">Steam 好友关系图谱</h1>
-            <p data-i18n="app.subtitle">Neo4j 本地图数据库</p>
-          </div>
-        </div>
-        <div class="language-switch" role="group" aria-label="Language">
-          <button class="lang-button active" data-lang="zh-CN">中文</button>
-          <button class="lang-button" data-lang="en">English</button>
-        </div>
-
-        <button class="theme-toggle" id="themeToggle" title="切换主题" data-i18n-title="action.toggleTheme">
-          <i data-lucide="sun-moon"></i>
-        </button>
-
-        <section class="panel project-panel">
-          <div class="panel-title">
-            <span data-i18n="section.project">项目管理</span>
-            <button class="icon-button" id="refreshProjects" title="刷新项目列表" data-i18n-title="action.refreshProjects"><i data-lucide="refresh-cw"></i></button>
-          </div>
-          <div class="project-info" id="activeProjectInfo">
-            <span class="muted" data-i18n="project.current">当前项目</span>
-            <strong id="activeProjectName">默认项目</strong>
-          </div>
-          <div class="project-actions">
-            <input id="newProjectName" placeholder="新项目名称" data-i18n-placeholder="placeholder.projectName" maxlength="80" />
-            <button class="secondary compact" id="createProject"><i data-lucide="plus"></i><span data-i18n="action.createProject">新建</span></button>
-          </div>
-          <div class="project-list" id="projectList">
-            <div class="project-item active" data-project-id="default">
-              <span>默认项目</span>
-              <span class="project-meta">0 节点 · 0 关系</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel guide-panel">
-          <details open>
-            <summary data-i18n="section.guide">新手引导</summary>
-            <ol class="guide-list">
-              <li data-i18n="guide.step1">先保存 Steam API Key。</li>
-              <li data-i18n="guide.step2">再填写 Neo4j 连接和密码。</li>
-              <li data-i18n="guide.step3">点击连接测试，确认 Steam 和 Neo4j 正常。</li>
-              <li data-i18n="guide.step4">首次建议 Depth=1、Nodes=200。</li>
-            </ol>
-            <p class="hint" data-i18n="guide.security">敏感信息会保存到系统凭据库，页面不会回显原文。</p>
-          </details>
-        </section>
-
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.secureSettings">安全配置</span>
-            <button class="icon-button" id="loadSettings" title="刷新配置" data-i18n-title="action.refreshSettings"><i data-lucide="settings"></i></button>
-          </div>
-          <div class="secret-state">
-            <span>Steam Key</span>
-            <strong id="steamSecretState" data-i18n="secret.unknown">未知</strong>
-          </div>
-          <label data-i18n-label="field.steamApiKey">
-            Steam API Key
-            <input id="steamApiKeyInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
-          </label>
-          <div class="secret-state">
-            <span>Neo4j Password</span>
-            <strong id="neo4jSecretState" data-i18n="secret.unknown">未知</strong>
-          </div>
-          <label data-i18n-label="field.neo4jPassword">
-            Neo4j 密码
-            <input id="neo4jPasswordInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
-          </label>
-          <label>
-            NEO4J_URI
-            <input id="settingsNeo4jUri" placeholder="bolt://localhost:7687" />
-          </label>
-          <label>
-            NEO4J_USER
-            <input id="settingsNeo4jUser" placeholder="neo4j" />
-          </label>
-          <button class="secondary compact" id="saveSettings"><i data-lucide="shield-check"></i><span data-i18n="action.saveSettings">保存安全配置</span></button>
-          <p class="hint" id="settingsMessage"></p>
-        </section>
-
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.connection">连接</span>
-            <button class="icon-button" id="testSettings" title="测试连接" data-i18n-title="action.testConnection"><i data-lucide="plug-zap"></i></button>
-          </div>
-          <div class="status-grid">
-            <div>
-              <span class="muted">Steam</span>
-              <strong id="steamStatus" data-status="unknown">未知</strong>
-              <p class="connection-detail" id="steamStatusDetail" data-i18n="connection.notTested">尚未测试</p>
+        <div class="sidebar-header">
+          <div class="brand">
+            <div class="brand-mark">
+              <img src="/static/favicon.svg" alt="Logo" style="width: 100%; height: 100%; display: block;" />
             </div>
             <div>
-              <span class="muted">Neo4j</span>
-              <strong id="neo4jStatus" data-status="unknown">未知</strong>
-              <p class="connection-detail" id="neo4jStatusDetail" data-i18n="connection.notTested">尚未测试</p>
+              <h1 data-i18n="app.title">Steam 好友关系图谱</h1>
+              <p data-i18n="app.subtitle">Neo4j 本地图数据库</p>
             </div>
           </div>
-        </section>
+          <div class="sidebar-controls">
+            <div class="language-switch" role="group" aria-label="Language">
+              <button class="lang-button active" data-lang="zh-CN">中文</button>
+              <button class="lang-button" data-lang="en">English</button>
+            </div>
+            <button class="theme-toggle" id="themeToggle" title="切换主题" data-i18n-title="action.toggleTheme">
+              <i data-lucide="sun-moon"></i>
+            </button>
+          </div>
+        </div>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.crawl">抓取</span>
-            <div class="crawl-actions">
-              <button class="icon-button" id="pauseCrawl" title="暂停" data-i18n-title="action.pauseCrawl" style="display:none"><i data-lucide="pause"></i></button>
-              <button class="icon-button" id="resumeCrawl" title="继续" data-i18n-title="action.resumeCrawl" style="display:none"><i data-lucide="play"></i></button>
-              <button class="icon-button" id="cancelCrawl" title="停止扫描" data-i18n-title="action.cancelCrawl"><i data-lucide="square"></i></button>
-              <button class="icon-button danger" id="forceStopCrawl" title="强制中断" data-i18n-title="action.forceStopCrawl"><i data-lucide="octagon-x"></i></button>
+        <div class="sidebar-tabs">
+          <button class="tab-button active" data-target="tabCrawl">
+            <i data-lucide="radar"></i>
+            <span data-i18n="tab.crawl">抓取</span>
+          </button>
+          <button class="tab-button" data-target="tabFilter">
+            <i data-lucide="filter"></i>
+            <span data-i18n="tab.filter">筛选</span>
+          </button>
+          <button class="tab-button" data-target="tabSettings">
+            <i data-lucide="settings"></i>
+            <span data-i18n="tab.settings">设置</span>
+          </button>
+        </div>
+
+        <div class="sidebar-tabs-container">
+          <div class="sidebar-tab-slider" id="sidebarTabSlider" data-active-index="0">
+            <div class="sidebar-tab-content" id="tabCrawl">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.connection">连接</span>
+              <button class="icon-button" id="testSettings" title="测试连接" data-i18n-title="action.testConnection"><i data-lucide="plug-zap"></i></button>
             </div>
-          </div>
-          <div class="preset-bar" id="presetBar">
-            <select id="presetSelect" aria-label="预设配置">
-              <option value="" data-i18n="preset.choose">选择预设…</option>
-            </select>
-            <button class="icon-button" id="savePreset" title="保存当前配置为预设" data-i18n-title="action.savePreset"><i data-lucide="bookmark-plus"></i></button>
-            <button class="icon-button" id="deletePreset" title="删除选中预设" data-i18n-title="action.deletePreset"><i data-lucide="trash-2"></i></button>
-          </div>
-          <label data-i18n-label="field.rootUrl">
-            Root URL
-            <input id="rootUrl" placeholder="https://steamcommunity.com/id/..." data-i18n-placeholder="placeholder.rootUrl" />
-          </label>
-          <details class="subsection recent-roots-drawer" id="recentRootsDrawer">
-            <summary><span data-i18n="section.recentRoots">最近扫描</span><span class="muted" id="recentRootsCount"></span></summary>
-            <div class="recent-roots-list" id="recentRootsList"></div>
-          </details>
-          <div class="two-col">
-            <label data-i18n-label="field.depth">
-              层数
-              <input id="maxDepth" type="number" min="1" max="4" value="1" />
+            <div class="status-grid">
+              <div>
+                <span class="muted">Steam</span>
+                <strong id="steamStatus" data-status="unknown">未知</strong>
+                <p class="connection-detail" id="steamStatusDetail" data-i18n="connection.notTested">尚未测试</p>
+              </div>
+              <div>
+                <span class="muted" id="dbStatusLabel">Database</span>
+                <strong id="neo4jStatus" data-status="unknown">未知</strong>
+                <p class="connection-detail" id="neo4jStatusDetail" data-i18n="connection.notTested">尚未测试</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.crawl">抓取</span>
+              <div class="crawl-actions">
+                <button class="icon-button" id="pauseCrawl" title="暂停" data-i18n-title="action.pauseCrawl" style="display:none"><i data-lucide="pause"></i></button>
+                <button class="icon-button" id="resumeCrawl" title="继续" data-i18n-title="action.resumeCrawl" style="display:none"><i data-lucide="play"></i></button>
+                <button class="icon-button" id="cancelCrawl" title="停止扫描" data-i18n-title="action.cancelCrawl"><i data-lucide="square"></i></button>
+                <button class="icon-button danger" id="forceStopCrawl" title="强制中断" data-i18n-title="action.forceStopCrawl"><i data-lucide="octagon-x"></i></button>
+              </div>
+            </div>
+            <div class="preset-bar" id="presetBar">
+              <select id="presetSelect" aria-label="预设配置">
+                <option value="" data-i18n="preset.choose">选择预设…</option>
+              </select>
+              <button class="icon-button" id="savePreset" title="保存当前配置为预设" data-i18n-title="action.savePreset"><i data-lucide="bookmark-plus"></i></button>
+              <button class="icon-button" id="deletePreset" title="删除选中预设" data-i18n-title="action.deletePreset"><i data-lucide="trash-2"></i></button>
+            </div>
+            <label data-i18n-label="field.rootUrl">
+              Root URL
+              <input id="rootUrl" placeholder="https://steamcommunity.com/id/..." data-i18n-placeholder="placeholder.rootUrl" />
             </label>
-            <label data-i18n-label="field.nodes">
-              节点数
-              <input id="maxNodes" type="number" min="1" max="10000" value="200" />
-            </label>
-          </div>
-          <div class="two-col">
-            <label data-i18n-label="field.delay">
-              延迟 ms
-              <input id="delayMs" type="number" min="0" max="10000" value="500" />
-            </label>
-            <label data-i18n-label="field.cacheValidDays">
-              好友列表缓存天数
-              <input id="cacheValidDays" type="number" min="0" value="14" />
-            </label>
+            <details class="subsection recent-roots-drawer" id="recentRootsDrawer">
+              <summary><span data-i18n="section.recentRoots">最近扫描</span><span class="muted" id="recentRootsCount"></span></summary>
+              <div class="recent-roots-list" id="recentRootsList"></div>
+            </details>
+            <div class="two-col">
+              <label data-i18n-label="field.depth">
+                层数
+                <input id="maxDepth" type="number" min="1" max="4" value="1" />
+              </label>
+              <label data-i18n-label="field.nodes">
+                节点数
+                <input id="maxNodes" type="number" min="1" max="10000" value="200" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label data-i18n-label="field.delay">
+                延迟 ms
+                <input id="delayMs" type="number" min="0" max="10000" value="500" />
+              </label>
+              <label data-i18n-label="field.cacheValidDays">
+                好友列表缓存天数
+                <input id="cacheValidDays" type="number" min="0" value="14" />
+              </label>
+            </div>
             <p class="hint" data-i18n="hint.cacheValidDays">已抓取的好友列表在此天数内跳过重复请求（0=每次重新抓取）。</p>
-          </div>
-          <details class="subsection" open>
-            <summary data-i18n="section.preScanFilters">扫描前筛选</summary>
+            <details class="subsection" open>
+              <summary data-i18n="section.preScanFilters">扫描前筛选</summary>
+              <div class="two-col">
+                <label data-i18n-label="field.friendCountMin">
+                  最小好友数
+                  <input id="crawlFriendCountMin" type="number" min="0" placeholder="100" />
+                </label>
+                <label data-i18n-label="field.friendCountMax">
+                  最大好友数
+                  <input id="crawlFriendCountMax" type="number" min="0" placeholder="500" />
+                </label>
+              </div>
+              <label data-i18n-label="field.priorPoolMinLinks">
+                前层朋友圈连接阈值
+                <input id="crawlPriorPoolMinLinks" type="number" min="0" value="0" />
+              </label>
+              <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不限制。设为 N 时，与 0~当前层 用户连接数不足 N 的候选人仍会收录但不继续展开（标记为孤岛）。</p>
+              <p class="hint" data-i18n="filter.preScanHint">好友数/跨层连接不达标的候选人仍会收录，但标记为"不展开"，不会扫描其下一层好友。</p>
+            </details>
+            <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span data-i18n="action.startCrawl">开始抓取</span></button>
+            <div class="progress-bar" aria-label="crawl progress">
+              <div id="crawlProgressBar"></div>
+            </div>
+            <div class="hint" id="lastEvent" data-i18n="log.empty">暂无日志</div>
+            <div class="crawl-timer" id="crawlTimer" style="display:none">
+              <span data-i18n="metric.elapsed">耗时</span>
+              <strong id="elapsedTime">00:00</strong>
+              <span class="muted" id="crawlUtcTime"></span>
+            </div>
+            <div class="progress">
+              <div class="progress-row"><span data-i18n="metric.status">状态</span><strong id="crawlStatus" data-status="idle">空闲</strong></div>
+              <div class="progress-row"><span data-i18n="metric.nodes">节点</span><strong id="nodeCount">0</strong></div>
+              <div class="progress-row"><span data-i18n="metric.edges">关系</span><strong id="edgeCount">0</strong></div>
+              <div class="progress-row"><span data-i18n="metric.private">私密</span><strong id="privateCount">0</strong></div>
+              <div class="progress-row"><span data-i18n="metric.filtered">已筛掉</span><strong id="filteredCount">0</strong></div>
+            </div>
+            <details class="log-drawer" id="logDrawer" open>
+              <summary data-i18n="section.logs">抓取日志</summary>
+              <div class="crawl-log-actions" style="display: flex; gap: 6px; margin: 8px 0; align-items: center;">
+                <select id="crawlLogLevel" aria-label="crawl log level" style="width: auto; height: 28px; padding: 2px 4px; font-size: 11px; margin-top: 0;">
+                  <option value="" data-i18n="log.levelAll">全部</option>
+                  <option value="info">info</option>
+                  <option value="warn">warn</option>
+                  <option value="error">error</option>
+                </select>
+                <button class="mini-button" id="clearCrawlLogs" data-i18n="action.clearLogs" style="height: 28px; padding: 0 8px; font-size: 11px; margin-left: auto;">清空</button>
+              </div>
+              <div class="log-list" id="crawlLogs"></div>
+            </details>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.dbStats">数据库状态</span>
+              <div class="dbstats-controls">
+                <select id="dbStatsInterval" aria-label="刷新间隔">
+                  <option value="0" data-i18n="dbstats.manual">手动</option>
+                  <option value="500">0.5s</option>
+                  <option value="1000">1s</option>
+                  <option value="2000" selected>2s</option>
+                  <option value="5000">5s</option>
+                </select>
+                <button class="icon-button" id="refreshDbStats" title="刷新数据库状态" data-i18n-title="action.refreshDbStats"><i data-lucide="database"></i></button>
+              </div>
+            </div>
+            <div class="progress">
+              <div class="progress-row"><span>SteamUser</span><strong id="dbSteamUsers">0</strong></div>
+              <div class="progress-row"><span>STEAM_FRIEND</span><strong id="dbRelationships">0</strong></div>
+              <div class="progress-row"><span>CrawlRun</span><strong id="dbCrawlRuns">0</strong></div>
+            </div>
+            <p class="hint" data-i18n="dbStats.hint">Neo4j Explore 当前画布不一定等于数据库总数。</p>
+          </section>
+        </div>
+
+        <div class="sidebar-tab-content" id="tabFilter">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.filters">筛选</span>
+              <button class="icon-button" id="refreshGraph" title="刷新图谱" data-i18n-title="action.refreshGraph"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <label data-i18n-label="field.rootSteamId">
+              Root SteamID
+              <input id="graphRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
+            </label>
+            <div class="two-col">
+              <label data-i18n-label="field.depth">
+                层数
+                <input id="graphDepth" type="number" min="0" max="4" value="2" />
+              </label>
+              <label data-i18n-label="field.limit">
+                限制
+                <input id="graphLimit" type="number" min="1" max="2000" value="500" />
+              </label>
+            </div>
+            <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; margin: -4px 0 8px 0; font-size: 0.85em; cursor: pointer; color: var(--text-secondary);">
+              <input type="checkbox" id="graphLimitToggle" style="width: auto; margin: 0; cursor: pointer;" />
+              <span data-i18n-text="field.noLimit">解除 2000 节点限制</span>
+            </label>
+            <label data-i18n-label="field.search">
+              搜索
+              <input id="graphSearch" placeholder="昵称 / SteamID" data-i18n-placeholder="placeholder.search" />
+            </label>
+            <label data-i18n-label="field.category">
+              分类
+              <input id="graphCategory" placeholder="现实 / 游戏群 / ..." data-i18n-placeholder="placeholder.category" />
+            </label>
             <div class="two-col">
               <label data-i18n-label="field.friendCountMin">
                 最小好友数
-                <input id="crawlFriendCountMin" type="number" min="0" placeholder="100" />
+                <input id="graphFriendCountMin" type="number" min="0" />
               </label>
               <label data-i18n-label="field.friendCountMax">
                 最大好友数
-                <input id="crawlFriendCountMax" type="number" min="0" placeholder="500" />
+                <input id="graphFriendCountMax" type="number" min="0" />
               </label>
             </div>
             <label data-i18n-label="field.priorPoolMinLinks">
               前层朋友圈连接阈值
-              <input id="crawlPriorPoolMinLinks" type="number" min="0" value="0" />
+              <input id="graphPriorPoolMinLinks" type="number" min="0" value="0" />
             </label>
-            <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不限制。设为 N 时，与 0~当前层 用户连接数不足 N 的候选人仍会收录但不继续展开（标记为孤岛）。</p>
-            <p class="hint" data-i18n="filter.preScanHint">好友数/跨层连接不达标的候选人仍会收录，但标记为"不展开"，不会扫描其下一层好友。</p>
-          </details>
-          <button class="primary" id="startCrawl"><i data-lucide="radar"></i><span data-i18n="action.startCrawl">开始抓取</span></button>
-          <div class="progress-bar" aria-label="crawl progress">
-            <div id="crawlProgressBar"></div>
-          </div>
-          <div class="hint" id="lastEvent" data-i18n="log.empty">暂无日志</div>
-          <div class="crawl-timer" id="crawlTimer" style="display:none">
-            <span data-i18n="metric.elapsed">耗时</span>
-            <strong id="elapsedTime">00:00</strong>
-            <span class="muted" id="crawlUtcTime"></span>
-          </div>
-          <div class="progress">
-            <div class="progress-row"><span data-i18n="metric.status">状态</span><strong id="crawlStatus" data-status="idle">空闲</strong></div>
-            <div class="progress-row"><span data-i18n="metric.nodes">节点</span><strong id="nodeCount">0</strong></div>
-            <div class="progress-row"><span data-i18n="metric.edges">关系</span><strong id="edgeCount">0</strong></div>
-            <div class="progress-row"><span data-i18n="metric.private">私密</span><strong id="privateCount">0</strong></div>
-            <div class="progress-row"><span data-i18n="metric.filtered">已筛掉</span><strong id="filteredCount">0</strong></div>
-          </div>
-          <details class="log-drawer" id="logDrawer" open>
-            <summary data-i18n="section.logs">抓取日志</summary>
-            <div class="log-list" id="crawlLogs"></div>
-          </details>
-        </section>
-
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.dbStats">数据库状态</span>
-            <div class="dbstats-controls">
-              <select id="dbStatsInterval" aria-label="刷新间隔">
-                <option value="0" data-i18n="dbstats.manual">手动</option>
-                <option value="500">0.5s</option>
-                <option value="1000">1s</option>
-                <option value="2000" selected>2s</option>
-                <option value="5000">5s</option>
-              </select>
-              <button class="icon-button" id="refreshDbStats" title="刷新数据库状态" data-i18n-title="action.refreshDbStats"><i data-lucide="database"></i></button>
+            <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不筛选。设为 N 时，只显示与更靠近 Root 的层中至少 N 个不同用户有连接的人员。</p>
+            <div class="two-col">
+              <label data-i18n-label="field.sortBy">
+                排序
+                <select id="graphSortBy">
+                  <option value="depth" data-i18n="sort.depth">层数</option>
+                  <option value="degree" data-i18n="sort.degree">度数</option>
+                  <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
+                  <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
+                  <option value="closeness" data-i18n="sort.closeness">紧密度</option>
+                </select>
+              </label>
+              <label data-i18n-label="field.sortDir">
+                方向
+                <select id="graphSortDir">
+                  <option value="asc" data-i18n="sort.asc">升序</option>
+                  <option value="desc" data-i18n="sort.desc">降序</option>
+                </select>
+              </label>
             </div>
-          </div>
-          <div class="progress">
-            <div class="progress-row"><span>SteamUser</span><strong id="dbSteamUsers">0</strong></div>
-            <div class="progress-row"><span>STEAM_FRIEND</span><strong id="dbRelationships">0</strong></div>
-            <div class="progress-row"><span>CrawlRun</span><strong id="dbCrawlRuns">0</strong></div>
-          </div>
-          <p class="hint" data-i18n="dbStats.hint">Neo4j Explore 当前画布不一定等于数据库总数。</p>
-        </section>
+            <div class="two-col">
+              <label data-i18n-label="field.sizeBy">
+                头像大小
+                <select id="graphSizeBy">
+                  <option value="degree" data-i18n="sort.degree">度数</option>
+                  <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
+                  <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
+                  <option value="closeness" data-i18n="sort.closeness">紧密度</option>
+                </select>
+              </label>
+              <label data-i18n-label="field.layoutBias">
+                布局
+                <select id="graphLayoutBias">
+                  <option value="cose" data-i18n="layout.cose">自然网络</option>
+                  <option value="closeness" data-i18n="layout.closeness">紧密度靠中心</option>
+                </select>
+              </label>
+            </div>
+          </section>
+        </div>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.filters">筛选</span>
-            <button class="icon-button" id="refreshGraph" title="刷新图谱" data-i18n-title="action.refreshGraph"><i data-lucide="refresh-cw"></i></button>
-          </div>
-          <label data-i18n-label="field.rootSteamId">
-            Root SteamID
-            <input id="graphRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <div class="two-col">
-            <label data-i18n-label="field.depth">
-              层数
-              <input id="graphDepth" type="number" min="0" max="4" value="2" />
+        <div class="sidebar-tab-content" id="tabSettings">
+          <section class="panel project-panel">
+            <div class="panel-title">
+              <span data-i18n="section.project">项目管理</span>
+              <button class="icon-button" id="refreshProjects" title="刷新项目列表" data-i18n-title="action.refreshProjects"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="project-info" id="activeProjectInfo">
+              <span class="muted" data-i18n="project.current">当前项目</span>
+              <strong id="activeProjectName">默认项目</strong>
+            </div>
+            <div class="project-actions">
+              <input id="newProjectName" placeholder="新项目名称" data-i18n-placeholder="placeholder.projectName" maxlength="80" />
+              <button class="secondary compact" id="createProject"><i data-lucide="plus"></i><span data-i18n="action.createProject">新建</span></button>
+            </div>
+            <div class="project-list" id="projectList">
+              <div class="project-item active" data-project-id="default">
+                <span>默认项目</span>
+                <span class="project-meta">0 节点 · 0 关系</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel guide-panel">
+            <details open>
+              <summary data-i18n="section.guide">新手引导</summary>
+              <ol class="guide-list">
+                <li data-i18n="guide.step1">先保存 Steam API Key。</li>
+                <li data-i18n="guide.step2">再填写 Neo4j 连接和密码。</li>
+                <li data-i18n="guide.step3">点击连接测试，确认 Steam 和 Neo4j 正常。</li>
+                <li data-i18n="guide.step4">首次建议 Depth=1、Nodes=200。</li>
+              </ol>
+              <p class="hint" data-i18n="guide.security">敏感信息会保存到系统凭据库，页面不会回显原文。</p>
+            </details>
+          </section>
+
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.secureSettings">安全配置</span>
+              <button class="icon-button" id="loadSettings" title="刷新配置" data-i18n-title="action.refreshSettings"><i data-lucide="settings"></i></button>
+            </div>
+            <div class="secret-state">
+              <span>Steam Key</span>
+              <strong id="steamSecretState" data-i18n="secret.unknown">未知</strong>
+            </div>
+            <label data-i18n-label="field.steamApiKey">
+              Steam API Key
+              <input id="steamApiKeyInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
             </label>
-            <label data-i18n-label="field.limit">
-              限制
-              <input id="graphLimit" type="number" min="1" max="2000" value="500" />
-            </label>
-          </div>
-          <label data-i18n-label="field.search">
-            搜索
-            <input id="graphSearch" placeholder="昵称 / SteamID" data-i18n-placeholder="placeholder.search" />
-          </label>
-          <label data-i18n-label="field.category">
-            分类
-            <input id="graphCategory" placeholder="现实 / 游戏群 / ..." data-i18n-placeholder="placeholder.category" />
-          </label>
-          <div class="two-col">
-            <label data-i18n-label="field.friendCountMin">
-              最小好友数
-              <input id="graphFriendCountMin" type="number" min="0" />
-            </label>
-            <label data-i18n-label="field.friendCountMax">
-              最大好友数
-              <input id="graphFriendCountMax" type="number" min="0" />
-            </label>
-          </div>
-          <label data-i18n-label="field.priorPoolMinLinks">
-            前层朋友圈连接阈值
-            <input id="graphPriorPoolMinLinks" type="number" min="0" value="0" />
-          </label>
-          <p class="hint" data-i18n="hint.priorPoolLinks">默认 0 不筛选。设为 N 时，只显示与更靠近 Root 的层中至少 N 个不同用户有连接的人员。</p>
-          <div class="two-col">
-            <label data-i18n-label="field.sortBy">
-              排序
-              <select id="graphSortBy">
-                <option value="depth" data-i18n="sort.depth">层数</option>
-                <option value="degree" data-i18n="sort.degree">度数</option>
-                <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
-                <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
-                <option value="closeness" data-i18n="sort.closeness">紧密度</option>
+            <span class="field-hint" style="display: block; font-size: 0.8em; color: var(--text-secondary); margin-top: -6px; margin-bottom: 8px;" data-i18n-text="guide.steamApiKeyHint">
+              支持配置多个 API Key 轮询以分担请求限制，用逗号或空格分隔。
+            </span>
+            <label>
+              <span>数据库引擎 / Graph Engine</span>
+              <select id="settingsGraphDbEngine">
+                <option value="kuzu">Kùzu</option>
+                <option value="neo4j">Neo4j</option>
               </select>
             </label>
-            <label data-i18n-label="field.sortDir">
-              方向
-              <select id="graphSortDir">
-                <option value="asc" data-i18n="sort.asc">升序</option>
-                <option value="desc" data-i18n="sort.desc">降序</option>
-              </select>
-            </label>
+            <div id="kuzuSettingsGroup">
+              <label>
+                KÙZU_DB_PATH
+                <input id="settingsKuzuDbPath" placeholder="./data/graph_kuzu" />
+              </label>
+              <label>
+                KÙZU_BUFFER_POOL_SIZE_GB
+                <input id="settingsKuzuBufferPoolSizeGb" type="number" min="1" max="64" placeholder="1" />
+              </label>
+            </div>
+            <div id="neo4jSettingsGroup">
+              <div class="secret-state">
+                <span>Neo4j Password</span>
+                <strong id="neo4jSecretState" data-i18n="secret.unknown">未知</strong>
+              </div>
+              <label data-i18n-label="field.neo4jPassword">
+                Neo4j 密码
+                <input id="neo4jPasswordInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
+              </label>
+              <label>
+                NEO4J_URI
+                <input id="settingsNeo4jUri" placeholder="bolt://localhost:7687" />
+              </label>
+              <label>
+                NEO4J_USER
+                <input id="settingsNeo4jUser" placeholder="neo4j" />
+              </label>
+            </div>
+            <button class="secondary compact" id="saveSettings"><i data-lucide="shield-check"></i><span data-i18n="action.saveSettings">保存安全配置</span></button>
+            <p class="hint" id="settingsMessage"></p>
+          </section>
+        </div>
           </div>
-          <div class="two-col">
-            <label data-i18n-label="field.sizeBy">
-              头像大小
-              <select id="graphSizeBy">
-                <option value="degree" data-i18n="sort.degree">度数</option>
-                <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
-                <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
-                <option value="closeness" data-i18n="sort.closeness">紧密度</option>
-              </select>
-            </label>
-            <label data-i18n-label="field.layoutBias">
-              布局
-              <select id="graphLayoutBias">
-                <option value="cose" data-i18n="layout.cose">自然网络</option>
-                <option value="closeness" data-i18n="layout.closeness">紧密度靠中心</option>
-              </select>
-            </label>
-          </div>
-        </section>
+        </div>
       </aside>
       <div class="resize-handle" id="resizeHandleLeft" aria-label="拖拽调整左侧栏宽度"></div>
 
@@ -327,16 +393,24 @@
             <strong data-i18n="graph.emptyTitle">暂无图谱</strong>
             <span data-i18n="graph.emptyHint">完成抓取或刷新图谱后会显示节点。</span>
           </div>
+          <div id="graphLoading" class="graph-loading hidden">
+            <div class="spinner"></div>
+            <span data-i18n="graph.rendering">图谱渲染中...</span>
+          </div>
         </div>
       </section>
       <div class="resize-handle" id="resizeHandleRight" aria-label="拖拽调整右侧栏宽度"></div>
 
       <aside class="inspector">
         <section class="profile-card" id="profileCard">
-          <img id="profileAvatar" alt="" hidden />
+          <a id="profileHeaderLink" href="#" target="_blank" rel="noreferrer" class="profile-header-link">
+            <img id="profileAvatar" alt="" hidden />
+            <div class="profile-title-group">
+              <h3 id="profileName" data-i18n="profile.empty">选择一个节点</h3>
+              <span id="profileUrlLabel" class="profile-url-label"><i data-lucide="external-link" class="icon-inline"></i><span id="profileUrlText">Steam profile</span></span>
+            </div>
+          </a>
           <div class="profile-body">
-            <h3 id="profileName" data-i18n="profile.empty">选择一个节点</h3>
-            <a id="profileUrl" href="#" target="_blank" rel="noreferrer">Steam profile</a>
             <dl>
               <div><dt>SteamID</dt><dd id="profileSteamId">-</dd></div>
               <div><dt data-i18n="metric.degree">度数</dt><dd id="profileDegree">0</dd></div>
@@ -361,67 +435,92 @@
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.friendCircles">朋友圈分析</span>
-            <button class="icon-button" id="loadFriendCircles" title="分析朋友圈" data-i18n-title="action.analyzeCircles"><i data-lucide="users-round"></i></button>
-          </div>
-          <label data-i18n-label="field.rootSteamId">
-            Root SteamID
-            <input id="analysisRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <div class="two-col">
-            <label data-i18n-label="field.maxDepth">
-              最大层数
-              <input id="analysisMaxDepth" type="number" min="2" max="4" value="3" />
+        <div class="inspector-tabs">
+          <button class="ins-tab-button active" data-target="insTabPath">
+            <i data-lucide="route"></i>
+            <span data-i18n="instab.path">路径与社交圈</span>
+          </button>
+          <button class="ins-tab-button" data-target="insTabRank">
+            <i data-lucide="bar-chart-3"></i>
+            <span data-i18n="instab.rank">影响力</span>
+          </button>
+          <button class="ins-tab-button" data-target="insTabCypher" id="insTabCypherBtn">
+            <i data-lucide="database"></i>
+            <span data-i18n="instab.cypher">高级</span>
+          </button>
+        </div>
+
+        <div class="inspector-tabs-container">
+          <div class="inspector-tab-slider" id="inspectorTabSlider" data-active-index="0">
+            <div class="inspector-tab-content" id="insTabPath">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.shortestPath">最短路径</span>
+              <button class="icon-button" id="findPath" title="查询路径" data-i18n-title="action.findPath"><i data-lucide="route"></i></button>
+            </div>
+            <label data-i18n-label="field.from">
+              起点
+              <input id="pathFrom" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
             </label>
-            <label data-i18n-label="field.minMutual">
-              最少共同连接
-              <input id="analysisMinMutual" type="number" min="0" value="2" />
+            <label data-i18n-label="field.to">
+              终点
+              <input id="pathTo" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
             </label>
-          </div>
-          <label data-i18n-label="field.limit">
-            限制
-            <input id="analysisLimit" type="number" min="1" max="100" value="30" />
-          </label>
-          <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
-          <ol id="friendCircleList" class="rank-list"></ol>
-        </section>
+            <div id="pathResult" class="path-result" data-i18n="path.empty">未选择路径</div>
+          </section>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.shortestPath">最短路径</span>
-            <button class="icon-button" id="findPath" title="查询路径" data-i18n-title="action.findPath"><i data-lucide="route"></i></button>
-          </div>
-          <label data-i18n-label="field.from">
-            起点
-            <input id="pathFrom" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <label data-i18n-label="field.to">
-            终点
-            <input id="pathTo" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <div id="pathResult" class="path-result" data-i18n="path.empty">未选择路径</div>
-        </section>
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.friendCircles">朋友圈分析</span>
+              <button class="icon-button" id="loadFriendCircles" title="分析朋友圈" data-i18n-title="action.analyzeCircles"><i data-lucide="users-round"></i></button>
+            </div>
+            <label data-i18n-label="field.rootSteamId">
+              Root SteamID
+              <input id="analysisRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
+            </label>
+            <div class="two-col">
+              <label data-i18n-label="field.maxDepth">
+                最大层数
+                <input id="analysisMaxDepth" type="number" min="2" max="4" value="3" />
+              </label>
+              <label data-i18n-label="field.minMutual">
+                最少共同连接
+                <input id="analysisMinMutual" type="number" min="0" value="2" />
+              </label>
+            </div>
+            <label data-i18n-label="field.limit">
+              限制
+              <input id="analysisLimit" type="number" min="1" max="100" value="30" />
+            </label>
+            <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
+            <ol id="friendCircleList" class="rank-list"></ol>
+          </section>
+        </div>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.centralNodes">中心节点</span>
-            <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
-          </div>
-          <ol id="topDegreeList" class="rank-list"></ol>
-        </section>
+        <div class="inspector-tab-content" id="insTabRank">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.centralNodes">中心节点</span>
+              <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
+            </div>
+            <ol id="topDegreeList" class="rank-list"></ol>
+          </section>
+        </div>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.bloomCypher">Bloom Cypher 查询</span>
-            <button class="icon-button" id="copyBloom" title="复制查询" data-i18n-title="action.copyBloom"><i data-lucide="copy"></i></button>
-          </div>
-          <p class="hint" data-i18n="bloom.hint">复制以下 Cypher 语句到 Neo4j Bloom / Browser 搜索框，可做高级图探索；$root、$from、$to 替换为实际 SteamID。</p>
-          <textarea id="bloomQuery" rows="7" readonly>MATCH p=(r:SteamUser {steam_id:$root})-[:STEAM_FRIEND*1..3]-(n) RETURN p LIMIT 500
+        <div class="inspector-tab-content" id="insTabCypher">
+          <section class="panel" id="bloomCypherPanel">
+            <div class="panel-title">
+              <span data-i18n="section.bloomCypher">Bloom Cypher 查询</span>
+              <button class="icon-button" id="copyBloom" title="复制查询" data-i18n-title="action.copyBloom"><i data-lucide="copy"></i></button>
+            </div>
+            <p class="hint" data-i18n="bloom.hint">复制以下 Cypher 语句到 Neo4j Bloom / Browser 搜索框，可做高级图探索；$root、$from、$to 替换为实际 SteamID。</p>
+            <textarea id="bloomQuery" rows="7" readonly>MATCH p=(r:SteamUser {steam_id:$root})-[:STEAM_FRIEND*1..3]-(n) RETURN p LIMIT 500
 
 MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:SteamUser {steam_id:$to})) RETURN p</textarea>
-        </section>
+          </section>
+        </div>
+          </div>
+        </div>
       </aside>
     </main>
 
@@ -446,6 +545,6 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=1.0.8"></script>
   </body>
 </html>
