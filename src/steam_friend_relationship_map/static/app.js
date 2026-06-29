@@ -36,7 +36,7 @@ let lastSystemLogSeq = 0;
 
 async function loadI18n() {
   try {
-    const response = await fetch("/static/i18n.json");
+    const response = await fetch(`/static/i18n.json?t=${Date.now()}`);
     if (response.ok) i18n = await response.json();
   } catch {
     i18n = { "zh-CN": FALLBACK_ZH, en: {} };
