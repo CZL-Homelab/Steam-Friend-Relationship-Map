@@ -97,6 +97,34 @@ Security is the highest priority for this project. Developers must strictly foll
 * **Private Profile Handling**: If a user's friend list is private (returning 401/403/404 or indicated as private), mark the node's list status as `private`, skip it, and stop expanding from it. Do not attempt privilege escalation.
 * **Compliance**: Ensure query intervals (default delay `300-500ms`) respect Steam API rate limits, avoiding harassment or unauthorized tracking.
 
+### 4.4 Incident Response (If Secrets or Data are Leaked / 如果密钥或数据泄露)
+* If sensitive credentials or real relationship graph data are accidentally leaked:
+  1. **Revoke Keys**: Immediately revoke or reset the Steam Web API Key.
+  2. **Change Passwords**: Modify the Neo4j Desktop database password.
+  3. **Remove Exposures**: Delete public files, screenshots, Issues, or release packages containing the secret.
+  4. **Purge Git History**: Inspect Git history and use history purging tools (e.g., `git-filter-repo` or BFG Repo-Cleaner) to completely remove committed secrets from history.
+  5. **Data Deletion**: If personal relationship notes or unauthorized data are leaked, delete the data and notify the affected users immediately.
+
+### 4.5 Reporting Security Issues (报告安全问题)
+* Never paste raw API keys, passwords, cookies, database dumps, or personally identifiable information (PII) in public issues.
+* Use sanitized, mocked, or placeholder examples to describe the security problem.
+* If available, prioritize using GitHub Security Advisories for private and secure reporting.
+
+### 4.6 Code Security & Implementation Constraints (代码安全与实现约束)
+All code changes must strictly adhere to the following security design patterns validated during audits:
+* **No Shell Execution**: The codebase must not call raw shell execution commands. Do not use `os.system`, `subprocess` modules, `eval()`, or `exec()` in any Python files.
+* **Cypher Injection Prevention**:
+  - All user inputs in Cypher queries must be bound as parameters (e.g., `$param`).
+  - *Exception*: BFS crawl depth values must be validated and clamped via `_safe_depth()` static method before formatting/concatenation.
+* **Environment Configuration Protection**:
+  - When writing variables to `.env` or updating settings (e.g., `patch_settings`), all trailing or embedded newline (`\n`) and carriage return (`\r`) characters must be stripped to prevent CRLF injection.
+* **CSRF Middleware Integrity**:
+  - All state-modifying requests (POST, PATCH, DELETE) must verify the HTTP `Origin` header. Only allow origin match against localhost and the configured host/port. Allow empty `Origin` only for same-origin requests.
+* **API Payload Validation**:
+  - Always implement rigid type and range validations on API schemas using Pydantic models. Custom validation layers (like `validate_crawl_payload` or `validateGraphFilters`) must check parameters on both frontend and backend boundaries.
+* **Secret Masking on Retrieval**:
+  - System configuration endpoints (like `/api/settings`) must only return metadata status (e.g. `configured: true/false`) and must never expose the raw text of API keys or database passwords.
+
 ---
 
 ## 5. Development & Code Quality Guidelines
