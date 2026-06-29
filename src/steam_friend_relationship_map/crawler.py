@@ -29,28 +29,57 @@ class CrawlManager:
         self.controls: dict[str, CrawlControl] = {}
         self.events: dict[str, list[CrawlEvent]] = {}
         self.event_seq: dict[str, int] = {}
+        self.run_history: list[str] = []
+        self._lock = asyncio.Lock()
+
+    def _gc_completed_runs(self) -> None:
+        completed_run_ids = []
+        for rid in self.run_history:
+            ctrl = self.controls.get(rid)
+            if ctrl is None or (ctrl.task is not None and ctrl.task.done()):
+                completed_run_ids.append(rid)
+        
+        if len(completed_run_ids) > 10:
+            to_remove = completed_run_ids[:-10]
+            for rid in to_remove:
+                self.controls.pop(rid, None)
+                self.events.pop(rid, None)
+                self.event_seq.pop(rid, None)
+                if rid in self.run_history:
+                    self.run_history.remove(rid)
+
+    def has_active_crawl(self) -> bool:
+        for control in self.controls.values():
+            if control.task is not None and not control.task.done():
+                return True
+        return False
 
     async def create_crawl(self, payload: CrawlCreate) -> CrawlRun:
-        root_steam_id = await self.steam.resolve_steam_id(payload.root_url)
-        run = CrawlRun(
-            id=str(uuid.uuid4()),
-            root_steam_id=root_steam_id,
-            max_depth=payload.max_depth,
-            max_nodes=payload.max_nodes,
-            status=CrawlStatus.pending,
-            started_at=utc_now_iso(),
-            nodes_discovered=0,
-            edges_discovered=0,
-        )
-        self.repo.ensure_schema()
-        self.repo.start_crawl_run(run, self.project_id)
-        self.events[run.id] = []
-        self.event_seq[run.id] = 0
-        control = CrawlControl()
-        self.controls[run.id] = control
-        self.append_event(run.id, "info", "created", "抓取任务已创建")
-        control.task = asyncio.create_task(self._run_crawl(run, payload, control))
-        return run
+        async with self._lock:
+            self._gc_completed_runs()
+            if self.has_active_crawl():
+                raise RuntimeError("已有活跃的抓取任务在运行中，请先停止或等待其完成。")
+            root_steam_id = await self.steam.resolve_steam_id(payload.root_url)
+            run = CrawlRun(
+                id=str(uuid.uuid4()),
+                root_steam_id=root_steam_id,
+                max_depth=payload.max_depth,
+                max_nodes=payload.max_nodes,
+                status=CrawlStatus.pending,
+                started_at=utc_now_iso(),
+                nodes_discovered=0,
+                edges_discovered=0,
+            )
+            self.repo.ensure_schema()
+            self.repo.start_crawl_run(run, self.project_id)
+            self.events[run.id] = []
+            self.event_seq[run.id] = 0
+            control = CrawlControl()
+            self.controls[run.id] = control
+            self.run_history.append(run.id)
+            self.append_event(run.id, "info", "created", "抓取任务已创建")
+            control.task = asyncio.create_task(self._run_crawl(run, payload, control))
+            return run
 
     def cancel(self, run_id: str) -> bool:
         """优雅停止：完成当前层后停止，数据保留。"""
@@ -133,6 +162,7 @@ class CrawlManager:
         filtered_count = 0
         friend_count_filtered_count = 0
         prior_pool_filtered_count = 0
+        consecutive_auth_errors = 0
         try:
             event = self.append_event(run.id, "info", "root", "正在抓取 Root 用户资料")
             self.repo.update_crawl_run(
@@ -242,10 +272,17 @@ class CrawlManager:
                     else:
                         try:
                             friends = await self.steam.get_friend_list(current_id)
+                            consecutive_auth_errors = 0
                         except SteamApiError as exc:
                             error_count += 1
                             self.append_event(run.id, "error", "friends", f"[API错误] {current_id}: {exc}")
                             self.repo.update_crawl_run(run.id, error_count=error_count)
+                            if exc.status_code in {401, 403}:
+                                consecutive_auth_errors += 1
+                                if consecutive_auth_errors >= 5:
+                                    raise RuntimeError("Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。")
+                            else:
+                                consecutive_auth_errors = 0
                             continue
 
                         if friends.private:
@@ -345,8 +382,15 @@ class CrawlManager:
                         else:
                             try:
                                 candidate_friends = await self.steam.get_friend_list(friend_id)
-                            except SteamApiError:
+                                consecutive_auth_errors = 0
+                            except SteamApiError as exc:
                                 friend_count_status = "error"
+                                if exc.status_code in {401, 403}:
+                                    consecutive_auth_errors += 1
+                                    if consecutive_auth_errors >= 5:
+                                        raise RuntimeError("Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。")
+                                else:
+                                    consecutive_auth_errors = 0
                             else:
                                 if candidate_friends.private:
                                     friend_count_status = "private"

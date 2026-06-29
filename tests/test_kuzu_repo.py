@@ -130,3 +130,47 @@ def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert len(analysis.candidates) >= 1
     candidate_ids = [c.steam_id for c in analysis.candidates]
     assert "4" in candidate_ids
+
+
+def test_kuzu_cypher_injection_prevention(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+
+    users = [
+        SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
+        SteamUserRecord(steam_id="injection\\' OR 1=1 OR n.steam_id=\\'", persona_name="Hacker", depth_min=1),
+    ]
+    repo.upsert_users(users, "default")
+
+    graph = repo.get_graph(root="injection\\' OR 1=1 OR n.steam_id=\\'", depth=1, limit=10, project_id="default")
+    assert len(graph.nodes) == 1
+    assert graph.nodes[0].id == "injection\\' OR 1=1 OR n.steam_id=\\'"
+
+
+def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+
+    users = [
+        SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
+        SteamUserRecord(steam_id="2", persona_name="Bob", depth_min=1),
+    ]
+    repo.upsert_users(users, "default")
+
+    patches = [
+        {"steam_id": "1", "note": "Alice's note", "tags": ["CS2"], "category": "friend"},
+        {"steam_id": "2", "note": "Bob's note", "tags": ["Dota2"], "category": "colleague"},
+    ]
+    repo.bulk_patch_users(patches)
+
+    graph = repo.get_graph(root=None, depth=1, limit=10, project_id="default")
+    alice = [n for n in graph.nodes if n.id == "1"][0]
+    bob = [n for n in graph.nodes if n.id == "2"][0]
+
+    assert alice.note == "Alice's note"
+    assert alice.tags == ["CS2"]
+    assert alice.category == "friend"
+
+    assert bob.note == "Bob's note"
+    assert bob.tags == ["Dota2"]
+    assert bob.category == "colleague"

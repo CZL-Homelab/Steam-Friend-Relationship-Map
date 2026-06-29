@@ -160,3 +160,48 @@ def test_project_switch_strips_crlf() -> None:
         assert args[1] == "ACTIVE_PROJECT"
         assert args[2] == "testinjectedname"
 
+
+def test_app_endpoints_blocked_during_crawl() -> None:
+    from unittest.mock import MagicMock
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    
+    app.state.manager.has_active_crawl = MagicMock(return_value=True)
+    client = TestClient(app)
+    
+    # 1. Test patch settings
+    resp = client.patch("/api/settings", json={"default_max_depth": 3})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+    
+    # 2. Test set secret
+    resp = client.post("/api/settings/secrets", json={"name": "steam_api_key", "value": "test"})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+    
+    # 3. Test delete secret
+    resp = client.delete("/api/settings/secrets/steam_api_key")
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+    # 4. Test delete project
+    resp = client.delete("/api/projects/test-project")
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+    # 5. Test switch project
+    resp = client.post("/api/projects/switch", json={"name": "test-project"})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+
+def test_app_crawls_conflict_returns_409() -> None:
+    from unittest.mock import AsyncMock
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    
+    app.state.manager.create_crawl = AsyncMock(side_effect=RuntimeError("已有活跃的抓取任务在运行中"))
+    client = TestClient(app)
+    
+    resp = client.post("/api/crawls", json={"root_url": "root", "max_depth": 2})
+    assert resp.status_code == 409
+    assert "已有活跃的抓取任务在运行中" in resp.json()["detail"]
+

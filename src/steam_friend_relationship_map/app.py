@@ -214,6 +214,8 @@ def create_app(
 
     @app.patch("/api/settings", response_model=PublicSettings)
     async def patch_settings(payload: SettingsPatch) -> PublicSettings:
+        if manager.has_active_crawl():
+            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
         ENV_PATH.touch(exist_ok=True)
         data = payload.model_dump(exclude_none=True)
         for field, value in data.items():
@@ -228,6 +230,8 @@ def create_app(
 
     @app.post("/api/settings/secrets", response_model=PublicSettings)
     async def set_secret(payload: SecretUpdate) -> PublicSettings:
+        if manager.has_active_crawl():
+            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
         try:
             secret_store.set(payload.name, payload.value)
         except SecretStorageError as exc:
@@ -238,6 +242,8 @@ def create_app(
 
     @app.delete("/api/settings/secrets/{name}", response_model=PublicSettings)
     async def delete_secret(name: str) -> PublicSettings:
+        if manager.has_active_crawl():
+            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
         try:
             secret_store.delete(name)
         except SecretStorageError as exc:
@@ -285,6 +291,8 @@ def create_app(
 
     @app.delete("/api/projects/{project_id}")
     async def delete_project(project_id: str) -> dict[str, bool]:
+        if manager.has_active_crawl():
+            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再删除项目。")
         if project_id == "default":
             raise HTTPException(status_code=400, detail="无法删除默认项目")
         ok = repo.delete_project(project_id)
@@ -299,6 +307,8 @@ def create_app(
 
     @app.post("/api/projects/switch")
     async def switch_project(payload: ProjectCreate) -> ProjectListResponse:
+        if manager.has_active_crawl():
+            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再切换项目。")
         """Switch active project. payload.name = project_id"""
         pid = payload.name.strip().replace("\n", "").replace("\r", "")
         if not pid:
@@ -321,6 +331,9 @@ def create_app(
         try:
             log_buffer.append("info", "crawl", "正在创建抓取任务")
             return await manager.create_crawl(payload)
+        except RuntimeError as exc:
+            log_buffer.append("warn", "crawl", f"抓取任务创建冲突: {exc}")
+            raise HTTPException(status_code=409, detail=safe_detail(exc)) from exc
         except SteamApiError as exc:
             log_buffer.append("warn", "crawl", f"抓取任务创建失败: {exc}")
             raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
