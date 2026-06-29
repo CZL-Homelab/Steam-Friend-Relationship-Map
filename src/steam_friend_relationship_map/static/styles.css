@@ -849,6 +849,21 @@ dd {
   color: var(--amber);
 }
 
+.log-tag-info {
+  color: var(--teal);
+  font-weight: 700;
+}
+
+.log-tag-warn {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.log-tag-error {
+  color: var(--rose);
+  font-weight: 700;
+}
+
 .analysis-focus {
   border-color: var(--blue) !important;
   border-width: 5px !important;

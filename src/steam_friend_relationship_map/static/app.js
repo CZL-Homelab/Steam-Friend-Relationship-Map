@@ -213,12 +213,41 @@ async function api(path, options = {}) {
   }
 }
 
+function formatLogTime(isoString) {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    const pad = (n) => String(n).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const min = pad(d.getMinutes());
+    const ss = pad(d.getSeconds());
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  } catch {
+    return isoString;
+  }
+}
+
 function appendLog(listId, level, source, message, time = new Date().toISOString()) {
   const list = $(listId);
+  if (!list) return;
   const row = document.createElement("div");
   row.className = `log-item log-${level}`;
   row.dataset.level = level;
-  row.innerHTML = `<span class="log-meta">${escapeHtml(time)} · ${escapeHtml(source)}</span><span>${escapeHtml(message)}</span>`;
+  
+  const formattedTime = formatLogTime(time);
+  const levelTag = level ? ` <span class="log-tag-${level}">[${level.toUpperCase()}]</span>` : "";
+  row.innerHTML = `<span class="log-meta">${escapeHtml(formattedTime)}${levelTag} · ${escapeHtml(source)}</span><span>${escapeHtml(message)}</span>`;
+  
+  if (listId === "crawlLogs" && $("crawlLogLevel")) {
+    const selectedLevel = $("crawlLogLevel").value;
+    if (selectedLevel && level !== selectedLevel) {
+      row.style.display = "none";
+    }
+  }
+  
   list.appendChild(row);
   while (list.children.length > 300) list.removeChild(list.firstElementChild);
   list.scrollTop = list.scrollHeight;
@@ -1261,6 +1290,25 @@ function wireEvents() {
   $("presetSelect").addEventListener("change", () => applyPreset($("presetSelect").value));
   $("savePreset").addEventListener("click", savePreset);
   $("deletePreset").addEventListener("click", deletePreset);
+  // Crawl logs local filtering and clearing
+  if ($("crawlLogLevel")) {
+    $("crawlLogLevel").addEventListener("change", () => {
+      const selectedLevel = $("crawlLogLevel").value;
+      document.querySelectorAll("#crawlLogs .log-item").forEach((row) => {
+        if (!selectedLevel) {
+          row.style.display = "";
+        } else {
+          row.style.display = row.dataset.level === selectedLevel ? "" : "none";
+        }
+      });
+    });
+  }
+  if ($("clearCrawlLogs")) {
+    $("clearCrawlLogs").addEventListener("click", () => {
+      $("crawlLogs").innerHTML = "";
+      toast(t("toast.logsCleared"));
+    });
+  }
   // Auto-save last config on any crawl input change
   ["rootUrl","maxDepth","maxNodes","delayMs","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"].forEach(id => {
     $(id).addEventListener("change", autoSaveLastConfig);

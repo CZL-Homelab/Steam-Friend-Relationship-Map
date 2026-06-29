@@ -150,6 +150,15 @@
             </div>
             <details class="log-drawer" id="logDrawer" open>
               <summary data-i18n="section.logs">抓取日志</summary>
+              <div class="crawl-log-actions" style="display: flex; gap: 6px; margin: 8px 0; align-items: center;">
+                <select id="crawlLogLevel" aria-label="crawl log level" style="width: auto; height: 28px; padding: 2px 4px; font-size: 11px; margin-top: 0;">
+                  <option value="" data-i18n="log.levelAll">全部</option>
+                  <option value="info">info</option>
+                  <option value="warn">warn</option>
+                  <option value="error">error</option>
+                </select>
+                <button class="mini-button" id="clearCrawlLogs" data-i18n="action.clearLogs" style="height: 28px; padding: 0 8px; font-size: 11px; margin-left: auto;">清空</button>
+              </div>
               <div class="log-list" id="crawlLogs"></div>
             </details>
           </section>
