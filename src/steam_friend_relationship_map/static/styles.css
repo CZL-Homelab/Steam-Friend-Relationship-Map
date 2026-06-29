@@ -1082,16 +1082,18 @@ body {
 
 .preset-bar select {
   flex: 1;
-  min-height: 32px;
+  height: 32px;
   min-width: 0;
   padding: 4px 6px;
   font-size: 12px;
+  box-sizing: border-box;
 }
 
 .preset-bar .icon-button {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 /* ── Recent roots (collapsible) ───────────────────────────────────── */
@@ -1207,12 +1209,16 @@ body {
 .project-actions input {
   flex: 5;
   min-width: 0;
+  height: 2.125rem;
+  box-sizing: border-box;
 }
 
 .project-actions .secondary {
   flex: 1;
-  min-height: 38px;
+  height: 2.125rem;
   padding: 0 10px;
+  margin-top: 0;
+  box-sizing: border-box;
 }
 
 .project-list {
