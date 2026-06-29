@@ -217,14 +217,9 @@ textarea {
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
   width: 2.5rem;
   height: 2.5rem;
-  border-radius: 0.5rem;
-  background: var(--ink);
-  color: var(--brand-fg);
-  font-weight: 800;
+  flex-shrink: 0;
 }
 
 h1,
