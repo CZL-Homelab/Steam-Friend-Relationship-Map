@@ -449,7 +449,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
         project_id: str = "default",
     ) -> GraphResponse:
         depth = self._safe_depth(depth)
-        limit = max(1, min(limit, 2000))
+        limit = max(1, min(limit, 100000))
         filters = []
         params: dict[str, Any] = {"limit": limit, "project_id": project_id}
         if not root:

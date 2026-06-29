@@ -630,7 +630,7 @@ class KuzuRepositoryImpl(IGraphRepository):
     ) -> GraphResponse:
         # Kùzu depth clamp
         depth = max(0, min(depth, 4))
-        limit = max(1, min(limit, 2000))
+        limit = max(1, min(limit, 100000))
         filters = []
         params = {"project_id": project_id}
 

@@ -374,7 +374,7 @@ def create_app(
     async def get_graph(
         root: str | None = None,
         depth: Annotated[int, Query(ge=0, le=4)] = 2,
-        limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+        limit: Annotated[int, Query(ge=1, le=100000)] = 500,
         q: str | None = None,
         category: str | None = None,
         friend_count_min: Annotated[int | None, Query(ge=0)] = None,

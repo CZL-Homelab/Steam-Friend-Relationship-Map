@@ -1258,6 +1258,24 @@ function wireEvents() {
   $("systemLogLevel").addEventListener("change", () => loadSystemLogs(true).catch(() => {}));
   $("graphSizeBy").addEventListener("change", () => renderGraph(currentGraph));
   $("graphLayoutBias").addEventListener("change", runLayout);
+  
+  // Graph Limit Toggle logic
+  const limitInput = $("graphLimit");
+  const limitToggle = $("graphLimitToggle");
+  if (limitInput && limitToggle) {
+    const savedNoLimit = localStorage.getItem("sfm_no_limit") === "true";
+    limitToggle.checked = savedNoLimit;
+    limitInput.max = savedNoLimit ? 100000 : 2000;
+    
+    limitToggle.addEventListener("change", () => {
+      const isChecked = limitToggle.checked;
+      localStorage.setItem("sfm_no_limit", isChecked);
+      limitInput.max = isChecked ? 100000 : 2000;
+      if (!isChecked && Number(limitInput.value) > 2000) {
+        limitInput.value = 2000;
+      }
+    });
+  }
   $("exportJson").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("json")).catch(() => {}));
   $("exportCsv").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("csv")).catch(() => {}));
   $("copyBloom").addEventListener("click", (event) =>
