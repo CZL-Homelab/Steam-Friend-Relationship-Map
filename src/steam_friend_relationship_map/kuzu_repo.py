@@ -499,10 +499,9 @@ class KuzuRepositoryImpl(IGraphRepository):
                     """
                     MATCH (a:SteamUser {steam_id: $from_id})
                     MATCH (b:SteamUser {steam_id: $to_id})
-                    MERGE (a)-[r:STEAM_FRIEND]->(b)
+                    MERGE (a)-[r:STEAM_FRIEND {project_id: $project_id}]->(b)
                     ON CREATE SET r.crawl_id = $crawl_id,
-                                  r.source_depth = $source_depth,
-                                  r.project_id = $project_id
+                                  r.source_depth = $source_depth
                     """,
                     {
                         "from_id": from_id,

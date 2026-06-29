@@ -147,6 +147,27 @@ def test_kuzu_cypher_injection_prevention(temp_kuzu_repo: KuzuRepositoryImpl) ->
     assert graph.nodes[0].id == "injection\\' OR 1=1 OR n.steam_id=\\'"
 
 
+def test_kuzu_relationships_are_isolated_by_project(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+
+    users = [
+        SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
+        SteamUserRecord(steam_id="2", persona_name="Bob", depth_min=1),
+    ]
+    edge = FriendEdge(from_id="1", to_id="2", crawl_id="run-1", source_depth=0)
+
+    repo.upsert_users(users, "project-a")
+    repo.upsert_relationships([edge], "project-a")
+    assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="project-a").edges) == 1
+    assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="project-b").edges) == 0
+
+    repo.upsert_users(users, "project-b")
+    repo.upsert_relationships([edge], "project-b")
+    assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="project-a").edges) == 1
+    assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="project-b").edges) == 1
+
+
 def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()

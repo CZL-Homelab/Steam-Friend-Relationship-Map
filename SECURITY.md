@@ -16,6 +16,7 @@
 - Settings payloads use strict validation for graph engine and numeric ranges.
 - Secret names are restricted to `steam_api_key` and `neo4j_password`.
 - Neo4j and Kuzu queries parameterize user-controlled values; only validated depth values and controlled assignment names are interpolated.
+- Friend relationships are merged with `project_id` as part of the relationship identity to avoid cross-project edge reuse or overwrite.
 - Frontend HTML rendering escapes user and API-sourced text before inserting markup.
 - Logs redact configured secret values, key/password query fragments, Authorization headers, and Cookie headers.
 - Exported graph data is local-only and documented as sensitive personal data.
@@ -46,6 +47,18 @@ Most dynamic HTML already used `escapeHtml`, but single quotes were not encoded 
 
 Fix: `escapeHtml` now escapes single quotes and analysis row text is escaped before insertion.
 
+### Fixed: Cross-Project Relationship Merge Pollution
+
+Friend relationships were previously merged only by endpoint pair. When the same Steam user pair appeared in multiple projects, Neo4j could overwrite the relationship `project_id`, while Kuzu could reuse the existing relationship and hide the edge from the later project.
+
+Fix: Neo4j and Kuzu now merge `STEAM_FRIEND` relationships with `project_id` included in the relationship pattern. Tests cover Kuzu cross-project edge isolation and Neo4j query shape.
+
+### Fixed: Dependabot Vulnerability Alerts
+
+GitHub reported Starlette and pydantic-settings alerts through `uv.lock`.
+
+Fix: Dependabot updates were adopted before this final audit. Runtime versions are now `starlette 1.3.1`, `pydantic-settings 2.14.2`, and `fastapi 0.136.3`. The codebase does not use `request.form()`, `Form(...)`, `secrets_dir`, or `request.url.hostname` for security decisions.
+
 ### Restored: Formal Security Report
 
 `SECURITY.md` was missing while branch workflow documentation still required updating it before main.
@@ -63,6 +76,7 @@ Fix: this report restores the security audit artifact for final review.
 
 - `uv run pytest`
 - `node --check src/steam_friend_relationship_map/static/app.js`
+- `uv run python -c "import starlette, pydantic_settings, fastapi; ..."`
 - Static scan for shell execution, secret patterns, Cypher interpolation, frontend `innerHTML`, and tracked sensitive files.
 
 ## Final Assessment / 最终结论

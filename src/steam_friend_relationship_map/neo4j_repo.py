@@ -356,12 +356,11 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     UNWIND $edges AS edge
                     MATCH (a:SteamUser {steam_id: edge.from_id})
                     MATCH (b:SteamUser {steam_id: edge.to_id})
-                    MERGE (a)-[r:STEAM_FRIEND]-(b)
+                    MERGE (a)-[r:STEAM_FRIEND {project_id: $project_id}]-(b)
                     ON CREATE SET r.first_seen_at = $now
                     SET r.last_seen_at = $now,
                         r.crawl_id = edge.crawl_id,
-                        r.source_depth = edge.source_depth,
-                        r.project_id = $project_id
+                        r.source_depth = edge.source_depth
                     """,
                     edges=batch_rows,
                     now=now,
