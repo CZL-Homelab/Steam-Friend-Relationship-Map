@@ -118,6 +118,16 @@ function updateCytoscapeStyle() {
     .update();
 }
 
+function updateThemeToggleIcon(mode) {
+  const toggle = $("themeToggle");
+  if (!toggle) return;
+  let iconName = "sun-moon";
+  if (mode === "light") iconName = "sun";
+  else if (mode === "dark") iconName = "moon";
+  toggle.innerHTML = `<i data-lucide="${iconName}"></i>`;
+  if (window.lucide) window.lucide.createIcons();
+}
+
 function applyTheme(mode) {
   if (mode === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -129,6 +139,7 @@ function applyTheme(mode) {
   }
   localStorage.setItem("sfm_theme", mode);
   updateCytoscapeStyle();
+  updateThemeToggleIcon(mode);
 }
 
 function cycleTheme() {
