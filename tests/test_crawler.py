@@ -141,3 +141,73 @@ async def test_crawl_events_can_be_read_after_sequence() -> None:
     assert events
     assert all(event.seq > 1 for event in events)
     assert "secret" not in " ".join(event.message.lower() for event in events)
+
+
+@pytest.mark.asyncio
+async def test_crawl_concurrency_lock() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+
+    run1 = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0))
+    with pytest.raises(RuntimeError, match="已有活跃的抓取任务在运行中"):
+        await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0))
+
+    await manager.controls[run1.id].task
+
+
+@pytest.mark.asyncio
+async def test_crawl_memory_leak_gc() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+
+    runs = []
+    for _ in range(15):
+        run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=2, delay_ms=0))
+        await manager.controls[run.id].task
+        runs.append(run.id)
+
+    run_16 = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=2, delay_ms=0))
+    await manager.controls[run_16.id].task
+
+    for old_run_id in runs[:5]:
+        assert old_run_id not in manager.controls
+        assert old_run_id not in manager.events
+        assert old_run_id not in manager.event_seq
+
+    for recent_run_id in runs[5:]:
+        assert recent_run_id in manager.controls
+        assert recent_run_id in manager.events
+
+
+class MockAuthBreakerSteam:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def resolve_steam_id(self, value: str) -> str:
+        return value
+
+    async def get_player_summaries(self, steam_ids: list[str]) -> list[SteamUserRecord]:
+        return [placeholder_user(steam_id, 0) for steam_id in steam_ids]
+
+    async def get_friend_list(self, steam_id: str) -> FriendListResult:
+        self.calls += 1
+        if steam_id == "root":
+            return FriendListResult(steam_id="root", friend_ids=["f1", "f2", "f3", "f4", "f5"])
+        from steam_friend_relationship_map.steam import SteamApiError
+        raise SteamApiError("Unauthorized", status_code=401)
+
+
+@pytest.mark.asyncio
+async def test_crawl_auth_error_circuit_breaker() -> None:
+    repo = FakeRepo()
+    steam = MockAuthBreakerSteam()
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=2, max_nodes=100, delay_ms=0))
+    await manager.controls[run.id].task
+
+    finished = repo.runs[run.id]
+    assert finished.status == CrawlStatus.failed
+    assert "认证失败连续超过 5 次" in finished.message
+    # Check that error_count was incremented for each failed call
+    assert finished.error_count >= 5

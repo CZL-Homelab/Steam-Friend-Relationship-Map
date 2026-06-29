@@ -114,6 +114,11 @@ class IGraphRepository(ABC):
         pass
 
     @abstractmethod
+    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
+        """批量局部更新用户节点属性（备注、标签、分类）。"""
+        pass
+
+    @abstractmethod
     def count_inner_layer_links(
         self, candidate_ids: list[str], inner_pool_ids: list[str], project_id: str
     ) -> dict[str, int]:

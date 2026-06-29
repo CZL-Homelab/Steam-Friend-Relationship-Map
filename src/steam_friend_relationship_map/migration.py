@@ -131,18 +131,21 @@ def main():
                     )
                 dest_repo.upsert_users(user_records, project_id=pid)
                 
-                print("Restoring notes, tags, and categories...")
+                print("Restoring notes, tags, and categories in bulk...")
+                patches = []
                 for n in exported.nodes:
                     note = n.get("note")
                     tags = n.get("tags")
                     category = n.get("category")
                     if note or tags or category:
-                        dest_repo.patch_user(
-                            steam_id=n.get("steam_id"),
-                            note=note,
-                            tags=tags,
-                            category=category,
-                        )
+                        patches.append({
+                            "steam_id": n.get("steam_id"),
+                            "note": note,
+                            "tags": tags,
+                            "category": category,
+                        })
+                if patches:
+                    dest_repo.bulk_patch_users(patches)
             
             # Import relationships
             if exported.edges:

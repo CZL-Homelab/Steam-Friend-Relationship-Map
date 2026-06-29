@@ -387,6 +387,31 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 **fields,
             ).consume()
 
+    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
+        rows = []
+        for p in patches:
+            rows.append({
+                "steam_id": p.get("steam_id"),
+                "note": p.get("note"),
+                "tags": p.get("tags"),
+                "category": p.get("category"),
+            })
+        if not rows:
+            return
+        with self.driver.session() as session:
+            session.run(
+                """
+                UNWIND $patches AS patch
+                MATCH (u:SteamUser {steam_id: patch.steam_id})
+                SET u.note = CASE WHEN patch.note IS NOT NULL THEN patch.note ELSE u.note END,
+                    u.tags = CASE WHEN patch.tags IS NOT NULL THEN patch.tags ELSE u.tags END,
+                    u.category = CASE WHEN patch.category IS NOT NULL THEN patch.category ELSE u.category END,
+                    u.last_seen_at = $now
+                """,
+                patches=rows,
+                now=utc_now_iso(),
+            ).consume()
+
     def count_inner_layer_links(
         self, candidate_ids: list[str], inner_pool_ids: list[str], project_id: str
     ) -> dict[str, int]:
