@@ -213,26 +213,6 @@ textarea {
   background: var(--icon-bg);
   color: var(--muted);
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.theme-toggle:hover {
-  border-color: var(--teal);
-  color: var(--teal);
-  background: var(--surface-teal);
-  transform: scale(1.06);
-}
-
-.theme-toggle:active {
-  transform: scale(0.94);
-}
-
-.theme-toggle svg {
-  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.theme-toggle:hover svg {
-  transform: rotate(30deg);
 }
 
 .brand-mark {
@@ -345,16 +325,11 @@ textarea:focus {
 button {
   border: 0;
   cursor: pointer;
-  transition:
-    transform 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease,
-    opacity 120ms ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 button:active {
-  transform: translateY(1px);
+  transform: scale(0.97);
 }
 
 button:disabled {
@@ -1400,4 +1375,113 @@ body {
 .icon-inline[data-lucide] {
   width: 12px;
   height: 12px;
+}
+
+/* ── Interactive Micro-animations ───────────────────────────────── */
+
+/* 1. Small Actions (Icon Buttons, Tools, Theme Toggles, Lang Switches, Mini-Buttons) */
+.icon-button,
+.tool,
+.theme-toggle,
+.lang-button,
+.mini-button {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.icon-button:hover,
+.tool:hover,
+.theme-toggle:hover,
+.lang-button:hover,
+.mini-button:hover {
+  transform: scale(1.06) !important;
+  background: var(--surface-teal) !important;
+  border-color: var(--teal) !important;
+  color: var(--teal) !important;
+}
+
+.icon-button:active,
+.tool:active,
+.theme-toggle:active,
+.lang-button:active,
+.mini-button:active {
+  transform: scale(0.94) !important;
+}
+
+/* Icon rotation on hover for Small Actions */
+.icon-button svg,
+.icon-button [data-lucide],
+.tool svg,
+.tool [data-lucide],
+.theme-toggle svg,
+.theme-toggle [data-lucide],
+.mini-button svg,
+.mini-button [data-lucide] {
+  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+.icon-button:hover svg,
+.icon-button:hover [data-lucide],
+.tool:hover svg,
+.tool:hover [data-lucide],
+.theme-toggle:hover svg,
+.theme-toggle:hover [data-lucide],
+.mini-button:hover svg,
+.mini-button:hover [data-lucide] {
+  transform: rotate(15deg) !important;
+}
+
+/* Theme toggle special 30deg rotation override */
+.theme-toggle:hover svg,
+.theme-toggle:hover [data-lucide] {
+  transform: rotate(30deg) !important;
+}
+
+/* 2. Medium Actions (Tab Buttons, Chips) */
+.tab-button,
+.ins-tab-button,
+.recent-root-chip {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.tab-button:hover,
+.ins-tab-button:hover,
+.recent-root-chip:hover {
+  transform: scale(1.03) !important;
+}
+
+.tab-button:active,
+.ins-tab-button:active,
+.recent-root-chip:active {
+  transform: scale(0.97) !important;
+}
+
+/* Tab icon shift on hover */
+.tab-button svg,
+.tab-button [data-lucide],
+.ins-tab-button svg,
+.ins-tab-button [data-lucide] {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.tab-button:hover svg,
+.tab-button:hover [data-lucide],
+.ins-tab-button:hover svg,
+.ins-tab-button:hover [data-lucide] {
+  transform: translateY(-1px) scale(1.05) !important;
+}
+
+/* 3. Large Actions (Primary, Secondary Form Buttons) */
+.primary,
+.secondary {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.primary:hover,
+.secondary:hover {
+  transform: scale(1.015) !important;
+}
+
+.primary:active,
+.secondary:active {
+  transform: scale(0.985) !important;
 }
