@@ -1502,6 +1502,7 @@ body {
 .inspector-tabs-container {
   overflow: hidden;
   width: 100%;
+  flex-shrink: 0;
 }
 
 .sidebar-tab-slider,
