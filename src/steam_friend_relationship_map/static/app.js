@@ -1228,6 +1228,17 @@ function wireEvents() {
   $("toggleConsole").addEventListener("click", () => {
     if (window._toggleConsole) window._toggleConsole();
   });
+  // Sidebar Tabs switching
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = button.dataset.target;
+      document.querySelectorAll(".tab-button").forEach((b) => b.classList.remove("active"));
+      button.classList.add("active");
+      document.querySelectorAll(".sidebar-tab-content").forEach((content) => {
+        content.classList.toggle("hidden", content.id !== target);
+      });
+    });
+  });
   // Presets
   $("presetSelect").addEventListener("change", () => applyPreset($("presetSelect").value));
   $("savePreset").addEventListener("click", savePreset);
