@@ -1276,25 +1276,27 @@ function wireEvents() {
     if (window._toggleConsole) window._toggleConsole();
   });
   // Sidebar Tabs switching
-  document.querySelectorAll(".tab-button").forEach((button) => {
+  const sidebarSlider = $("sidebarTabSlider");
+  const sidebarButtons = document.querySelectorAll(".tab-button");
+  sidebarButtons.forEach((button, idx) => {
     button.addEventListener("click", () => {
-      const target = button.dataset.target;
-      document.querySelectorAll(".tab-button").forEach((b) => b.classList.remove("active"));
+      sidebarButtons.forEach((b) => b.classList.remove("active"));
       button.classList.add("active");
-      document.querySelectorAll(".sidebar-tab-content").forEach((content) => {
-        content.classList.toggle("hidden", content.id !== target);
-      });
+      if (sidebarSlider) {
+        sidebarSlider.dataset.activeIndex = idx;
+      }
     });
   });
   // Inspector Tabs switching
-  document.querySelectorAll(".ins-tab-button").forEach((button) => {
+  const inspectorSlider = $("inspectorTabSlider");
+  const inspectorButtons = document.querySelectorAll(".ins-tab-button");
+  inspectorButtons.forEach((button, idx) => {
     button.addEventListener("click", () => {
-      const target = button.dataset.target;
-      document.querySelectorAll(".ins-tab-button").forEach((b) => b.classList.remove("active"));
+      inspectorButtons.forEach((b) => b.classList.remove("active"));
       button.classList.add("active");
-      document.querySelectorAll(".inspector-tab-content").forEach((content) => {
-        content.classList.toggle("hidden", content.id !== target);
-      });
+      if (inspectorSlider) {
+        inspectorSlider.dataset.activeIndex = idx;
+      }
     });
   });
   // Presets

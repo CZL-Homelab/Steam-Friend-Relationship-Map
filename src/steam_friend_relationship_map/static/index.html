@@ -48,7 +48,9 @@
           </button>
         </div>
 
-        <div class="sidebar-tab-content" id="tabCrawl">
+        <div class="sidebar-tabs-container">
+          <div class="sidebar-tab-slider" id="sidebarTabSlider" data-active-index="0">
+            <div class="sidebar-tab-content" id="tabCrawl">
           <section class="panel">
             <div class="panel-title">
               <span data-i18n="section.connection">连接</span>
@@ -186,7 +188,7 @@
           </section>
         </div>
 
-        <div class="sidebar-tab-content hidden" id="tabFilter">
+        <div class="sidebar-tab-content" id="tabFilter">
           <section class="panel">
             <div class="panel-title">
               <span data-i18n="section.filters">筛选</span>
@@ -269,7 +271,7 @@
           </section>
         </div>
 
-        <div class="sidebar-tab-content hidden" id="tabSettings">
+        <div class="sidebar-tab-content" id="tabSettings">
           <section class="panel project-panel">
             <div class="panel-title">
               <span data-i18n="section.project">项目管理</span>
@@ -356,6 +358,8 @@
             <p class="hint" id="settingsMessage"></p>
           </section>
         </div>
+          </div>
+        </div>
       </aside>
       <div class="resize-handle" id="resizeHandleLeft" aria-label="拖拽调整左侧栏宽度"></div>
 
@@ -437,7 +441,9 @@
           </button>
         </div>
 
-        <div class="inspector-tab-content" id="insTabPath">
+        <div class="inspector-tabs-container">
+          <div class="inspector-tab-slider" id="inspectorTabSlider" data-active-index="0">
+            <div class="inspector-tab-content" id="insTabPath">
           <section class="panel">
             <div class="panel-title">
               <span data-i18n="section.shortestPath">最短路径</span>
@@ -482,7 +488,7 @@
           </section>
         </div>
 
-        <div class="inspector-tab-content hidden" id="insTabRank">
+        <div class="inspector-tab-content" id="insTabRank">
           <section class="panel">
             <div class="panel-title">
               <span data-i18n="section.centralNodes">中心节点</span>
@@ -492,7 +498,7 @@
           </section>
         </div>
 
-        <div class="inspector-tab-content hidden" id="insTabCypher">
+        <div class="inspector-tab-content" id="insTabCypher">
           <section class="panel" id="bloomCypherPanel">
             <div class="panel-title">
               <span data-i18n="section.bloomCypher">Bloom Cypher 查询</span>
@@ -503,6 +509,8 @@
 
 MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:SteamUser {steam_id:$to})) RETURN p</textarea>
           </section>
+        </div>
+          </div>
         </div>
       </aside>
     </main>

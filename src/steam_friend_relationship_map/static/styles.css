@@ -97,6 +97,7 @@ textarea {
   gap: 0.875rem;
   padding: 1rem;
   overflow-y: auto;
+  overflow-x: hidden;
   border-color: var(--line);
   min-width: 0;
 }
@@ -164,11 +165,21 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
+  width: 33.3333%;
+  flex-shrink: 0;
+  height: 0;
+  overflow: hidden;
 }
 
-.sidebar-tab-content.hidden,
-.inspector-tab-content.hidden {
-  display: none !important;
+/* Activate height only for active index panels */
+.sidebar-tab-slider[data-active-index="0"] #tabCrawl,
+.sidebar-tab-slider[data-active-index="1"] #tabFilter,
+.sidebar-tab-slider[data-active-index="2"] #tabSettings,
+.inspector-tab-slider[data-active-index="0"] #insTabPath,
+.inspector-tab-slider[data-active-index="1"] #insTabRank,
+.inspector-tab-slider[data-active-index="2"] #insTabCypher {
+  height: auto;
+  overflow: visible;
 }
 
 .brand {
@@ -1485,3 +1496,28 @@ body {
 .secondary:active {
   transform: scale(0.985) !important;
 }
+
+/* ── Tab Switch Sliders (Horizontal Swiping) ────────────────────── */
+.sidebar-tabs-container,
+.inspector-tabs-container {
+  overflow: hidden;
+  width: 100%;
+}
+
+.sidebar-tab-slider,
+.inspector-tab-slider {
+  display: flex;
+  align-items: flex-start;
+  width: 300%;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Sidebar Translations */
+.sidebar-tab-slider[data-active-index="0"] { transform: translateX(0); }
+.sidebar-tab-slider[data-active-index="1"] { transform: translateX(-33.3333%); }
+.sidebar-tab-slider[data-active-index="2"] { transform: translateX(-66.6666%); }
+
+/* Inspector Translations */
+.inspector-tab-slider[data-active-index="0"] { transform: translateX(0); }
+.inspector-tab-slider[data-active-index="1"] { transform: translateX(-33.3333%); }
+.inspector-tab-slider[data-active-index="2"] { transform: translateX(-66.6666%); }
