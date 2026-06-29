@@ -563,9 +563,22 @@ function toggleEngineSettings(engine) {
   if (engine === "kuzu") {
     $("kuzuSettingsGroup").style.display = "block";
     $("neo4jSettingsGroup").style.display = "none";
+    if ($("insTabCypherBtn")) {
+      $("insTabCypherBtn").style.display = "none";
+    }
+    const activeTabBtn = document.querySelector(".ins-tab-button.active");
+    if (activeTabBtn && activeTabBtn.dataset.target === "insTabCypher") {
+      const pathTabBtn = document.querySelector('.ins-tab-button[data-target="insTabPath"]');
+      if (pathTabBtn) {
+        pathTabBtn.click();
+      }
+    }
   } else {
     $("kuzuSettingsGroup").style.display = "none";
     $("neo4jSettingsGroup").style.display = "block";
+    if ($("insTabCypherBtn")) {
+      $("insTabCypherBtn").style.display = "inline-flex";
+    }
   }
   if ($("dbStatusLabel")) {
     $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
