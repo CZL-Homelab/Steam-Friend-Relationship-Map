@@ -403,6 +403,11 @@ button svg {
   animation: spin 700ms linear infinite;
 }
 
+.is-loading svg,
+.is-loading [data-lucide] {
+  display: none !important;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
