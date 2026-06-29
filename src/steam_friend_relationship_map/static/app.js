@@ -13,6 +13,7 @@ const FALLBACK_ZH = {
   "path.noPath": "没有路径",
   "profile.empty": "选择一个节点",
   "profile.steamProfile": "Steam 主页",
+  "connection.notTested": "尚未测试",
   "status.idle": "空闲",
   "status.unknown": "未知",
   "toast.rootRequired": "请输入 Root URL",
@@ -25,16 +26,18 @@ let pollTimer = null;
 let systemLogTimer = null;
 let timerInterval = null;
 let crawlStartTime = null;
+let dbStatsTimer = null;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
+let activeRenderId = 0;
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
 
 async function loadI18n() {
   try {
-    const response = await fetch("/static/i18n.json");
+    const response = await fetch(`/static/i18n.json?t=${Date.now()}`);
     if (response.ok) i18n = await response.json();
   } catch {
     i18n = { "zh-CN": FALLBACK_ZH, en: {} };
@@ -70,6 +73,62 @@ function initTheme() {
   });
 }
 
+function getCssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function updateCytoscapeStyle() {
+  if (!cy) return;
+  const ink = getCssVar("--ink");
+  const panel = getCssVar("--panel");
+  const teal = getCssVar("--teal");
+  const blue = getCssVar("--blue");
+  const rose = getCssVar("--rose");
+  const amber = getCssVar("--amber");
+  const muted = getCssVar("--muted");
+
+  cy.style()
+    .selector("node")
+    .style({
+      "background-color": teal,
+      "border-color": panel,
+      color: ink,
+      "text-background-color": panel,
+    })
+    .selector("node[status = 'private']")
+    .style({
+      "border-color": rose,
+    })
+    .selector("node.analysis-focus")
+    .style({
+      "border-color": blue,
+    })
+    .selector("node.analysis-evidence")
+    .style({
+      "border-color": amber,
+    })
+    .selector("edge")
+    .style({
+      "line-color": muted,
+    })
+    .selector(":selected")
+    .style({
+      "border-color": blue,
+      "line-color": blue,
+    })
+    .update();
+}
+
+function updateThemeToggleIcon(mode) {
+  const toggle = $("themeToggle");
+  if (!toggle) return;
+  let iconName = "sun-moon";
+  if (mode === "light") iconName = "sun";
+  else if (mode === "dark") iconName = "moon";
+  toggle.innerHTML = `<i data-lucide="${iconName}"></i>`;
+  if (window.lucide) window.lucide.createIcons();
+}
+
 function applyTheme(mode) {
   if (mode === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -80,6 +139,8 @@ function applyTheme(mode) {
     document.documentElement.toggleAttribute("data-theme", prefersDark);
   }
   localStorage.setItem("sfm_theme", mode);
+  updateCytoscapeStyle();
+  updateThemeToggleIcon(mode);
 }
 
 function cycleTheme() {
@@ -116,7 +177,7 @@ function applyTranslations() {
     node.textContent = statusText(node.dataset.status);
   });
   updateGraphSummary();
-  if (!selectedNode) $("profileUrl").textContent = t("profile.steamProfile");
+  if ($("profileUrlText")) $("profileUrlText").textContent = t("profile.steamProfile");
   if ($("pathResult").dataset.state === "empty") $("pathResult").textContent = t("path.empty");
   if ($("pathResult").dataset.state === "no-path") $("pathResult").textContent = t("path.noPath");
   if (!$("crawlLogs").children.length) $("lastEvent").textContent = t("log.empty");
@@ -130,6 +191,14 @@ function setStatus(id, status) {
   const node = $(id);
   node.dataset.status = status;
   node.textContent = statusText(status);
+}
+
+function setConnectionDetail(id, message, ok = null) {
+  const node = $(id);
+  if (!node) return;
+  node.textContent = message || t("connection.notTested");
+  node.classList.toggle("ok", ok === true);
+  node.classList.toggle("failed", ok === false);
 }
 
 function toast(message) {
@@ -164,12 +233,41 @@ async function api(path, options = {}) {
   }
 }
 
+function formatLogTime(isoString) {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    const pad = (n) => String(n).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const min = pad(d.getMinutes());
+    const ss = pad(d.getSeconds());
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+  } catch {
+    return isoString;
+  }
+}
+
 function appendLog(listId, level, source, message, time = new Date().toISOString()) {
   const list = $(listId);
+  if (!list) return;
   const row = document.createElement("div");
   row.className = `log-item log-${level}`;
   row.dataset.level = level;
-  row.innerHTML = `<span class="log-meta">${escapeHtml(time)} · ${escapeHtml(source)}</span><span>${escapeHtml(message)}</span>`;
+  
+  const formattedTime = formatLogTime(time);
+  const levelTag = level ? ` <span class="log-tag-${level}">[${level.toUpperCase()}]</span>` : "";
+  row.innerHTML = `<span class="log-meta">${escapeHtml(formattedTime)}${levelTag} · ${escapeHtml(source)}</span><span>${escapeHtml(message)}</span>`;
+  
+  if (listId === "crawlLogs" && $("crawlLogLevel")) {
+    const selectedLevel = $("crawlLogLevel").value;
+    if (selectedLevel && level !== selectedLevel) {
+      row.style.display = "none";
+    }
+  }
+  
   list.appendChild(row);
   while (list.children.length > 300) list.removeChild(list.firstElementChild);
   list.scrollTop = list.scrollHeight;
@@ -246,6 +344,10 @@ function initGraph() {
   cy = cytoscape({
     container: $("graph"),
     elements: [],
+    pixelRatio: 1.0,           // 避免在高分屏（如 Mac Retina）下因超高分辨率渲染导致的严重卡顿
+    motionBlur: false,          // 禁用动态模糊以节省渲染开销
+    textureOnViewport: true,    // 缩放/平移时将视口作为纹理渲染，极大提升操作流畅度
+    boxSelectionEnabled: false, // 禁用多选框以减少鼠标事件计算开销
     style: [
       {
         selector: "node",
@@ -296,6 +398,8 @@ function initGraph() {
     wheelSensitivity: 0.18,
   });
 
+  updateCytoscapeStyle();
+
   cy.on("tap", "node", (event) => {
     selectedNode = event.target.data().node;
     fillProfile(selectedNode);
@@ -310,6 +414,9 @@ function metricValue(node, metric) {
 }
 
 function renderGraph(data) {
+  activeRenderId++;
+  const renderId = activeRenderId;
+
   currentGraph = data;
   const sizeBy = $("graphSizeBy").value || "degree";
   const maxMetric = Math.max(1, ...data.nodes.map((node) => metricValue(node, sizeBy)));
@@ -328,14 +435,37 @@ function renderGraph(data) {
     })),
     ...data.edges.map((edge) => ({ data: { id: edge.id, source: edge.source, target: edge.target, strength: Math.max(1, edge.strength || 1) } })),
   ];
+
   cy.elements().remove();
-  cy.add(elements);
-  runLayout();
-  updateGraphSummary();
-  $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
-  if (!data.nodes.length) {
-    $("graphEmpty").querySelector("span").textContent = t("graph.emptyFiltered");
+
+  const loading = $("graphLoading");
+  if (loading) loading.classList.remove("hidden");
+
+  const chunkSize = 150;
+  let index = 0;
+
+  function addNextChunk() {
+    if (renderId !== activeRenderId) return;
+
+    if (index >= elements.length) {
+      runLayout();
+      updateGraphSummary();
+      $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
+      if (!data.nodes.length) {
+        $("graphEmpty").querySelector("span").textContent = t("graph.emptyFiltered");
+      }
+      if (loading) loading.classList.add("hidden");
+      return;
+    }
+
+    const chunk = elements.slice(index, index + chunkSize);
+    cy.add(chunk);
+    index += chunkSize;
+
+    setTimeout(addNextChunk, 10);
   }
+
+  addNextChunk();
 }
 
 function updateGraphSummary() {
@@ -348,10 +478,14 @@ function updateGraphSummary() {
 
 function runLayout() {
   const bias = $("graphLayoutBias")?.value || "cose";
+  const nodeCount = cy.nodes().length;
+  // 大图模式下（如节点数 >= 300）禁用过渡动画，直接生成最终布局，能极大防止浏览器主线程假死
+  const shouldAnimate = nodeCount < 300;
+
   if (bias === "closeness") {
     cy.layout({
       name: "concentric",
-      animate: "end",
+      animate: shouldAnimate ? "end" : false,
       animationDuration: 320,
       padding: 48,
       concentric: (node) => node.data("closeness") || node.data("degree") || 1,
@@ -361,11 +495,12 @@ function runLayout() {
   }
   cy.layout({
     name: "cose",
-    animate: "end",
+    animate: shouldAnimate ? "end" : false,
     animationDuration: 320,
     padding: 48,
     nodeRepulsion: 9000,
     idealEdgeLength: 90,
+    numIter: nodeCount > 500 ? 500 : 1000, // 大图下减少 cose 迭代次数以缩短运算耗时
   }).run();
 }
 
@@ -374,8 +509,15 @@ function fillProfile(node) {
   $("profileAvatar").hidden = !node.avatar;
   if (node.avatar) $("profileAvatar").src = node.avatar;
   $("profileName").textContent = node.label || statusText("unknown");
-  $("profileUrl").href = node.profile_url || "#";
-  $("profileUrl").textContent = node.profile_url || t("profile.steamProfile");
+  if (node.id) {
+    $("profileHeaderLink").href = node.profile_url || "#";
+    $("profileHeaderLink").setAttribute("target", "_blank");
+    $("profileUrlLabel").style.display = "flex";
+  } else {
+    $("profileHeaderLink").href = "#";
+    $("profileHeaderLink").removeAttribute("target");
+    $("profileUrlLabel").style.display = "none";
+  }
   $("profileSteamId").textContent = node.id || "-";
   $("profileDegree").textContent = node.degree ?? 0;
   $("profileFriendCount").textContent = node.friend_count ?? "-";
@@ -446,15 +588,64 @@ async function loadDbStats() {
   }
 }
 
+function startDbStatsPolling() {
+  stopDbStatsPolling();
+  const ms = parseInt($("dbStatsInterval").value) || 0;
+  if (ms < 500) return;
+  dbStatsTimer = setInterval(() => {
+    loadDbStats().catch(() => {});
+    loadProjects().catch(() => {});
+  }, ms);
+}
+
+function stopDbStatsPolling() {
+  clearInterval(dbStatsTimer);
+  dbStatsTimer = null;
+}
+
 function secretLabel(configured, fromEnv) {
   if (fromEnv) return t("secret.env");
   return configured ? t("secret.configured") : t("secret.missing");
 }
 
+function toggleEngineSettings(engine) {
+  if (engine === "kuzu") {
+    $("kuzuSettingsGroup").style.display = "block";
+    $("neo4jSettingsGroup").style.display = "none";
+    if ($("insTabCypherBtn")) {
+      $("insTabCypherBtn").style.display = "none";
+    }
+    const activeTabBtn = document.querySelector(".ins-tab-button.active");
+    if (activeTabBtn && activeTabBtn.dataset.target === "insTabCypher") {
+      const pathTabBtn = document.querySelector('.ins-tab-button[data-target="insTabPath"]');
+      if (pathTabBtn) {
+        pathTabBtn.click();
+      }
+    }
+  } else {
+    $("kuzuSettingsGroup").style.display = "none";
+    $("neo4jSettingsGroup").style.display = "block";
+    if ($("insTabCypherBtn")) {
+      $("insTabCypherBtn").style.display = "inline-flex";
+    }
+  }
+  if ($("dbStatusLabel")) {
+    $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
+  }
+}
+
 async function loadSettings() {
   const settings = await api("/api/settings");
+  const engine = settings.graph_db_engine || "kuzu";
+  $("settingsGraphDbEngine").value = engine;
+  $("settingsKuzuDbPath").value = settings.kuzu_db_path || "";
+  $("settingsKuzuBufferPoolSizeGb").value = settings.kuzu_buffer_pool_size_gb || 1;
   $("settingsNeo4jUri").value = settings.neo4j_uri || "";
   $("settingsNeo4jUser").value = settings.neo4j_user || "";
+  toggleEngineSettings(engine);
+  if ($("dbStatusLabel")) {
+    $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
+  }
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
@@ -465,16 +656,34 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  clearFieldErrors(["settingsNeo4jUri", "settingsNeo4jUser"]);
-  if (!$("settingsNeo4jUri").value.trim()) {
-    setFieldError("settingsNeo4jUri", t("validation.required"));
-    throw new Error(t("validation.fixFields"));
+  clearFieldErrors(["settingsKuzuDbPath", "settingsKuzuBufferPoolSizeGb", "settingsNeo4jUri", "settingsNeo4jUser"]);
+  const engine = $("settingsGraphDbEngine").value;
+  
+  if (engine === "kuzu") {
+    if (!$("settingsKuzuDbPath").value.trim()) {
+      setFieldError("settingsKuzuDbPath", t("validation.required"));
+      throw new Error(t("validation.fixFields"));
+    }
+    const poolSize = parseInt($("settingsKuzuBufferPoolSizeGb").value);
+    if (isNaN(poolSize) || poolSize < 1 || poolSize > 64) {
+      setFieldError("settingsKuzuBufferPoolSizeGb", "Must be between 1 and 64 GB");
+      throw new Error(t("validation.fixFields"));
+    }
+  } else {
+    if (!$("settingsNeo4jUri").value.trim()) {
+      setFieldError("settingsNeo4jUri", t("validation.required"));
+      throw new Error(t("validation.fixFields"));
+    }
+    if (!$("settingsNeo4jUser").value.trim()) {
+      setFieldError("settingsNeo4jUser", t("validation.required"));
+      throw new Error(t("validation.fixFields"));
+    }
   }
-  if (!$("settingsNeo4jUser").value.trim()) {
-    setFieldError("settingsNeo4jUser", t("validation.required"));
-    throw new Error(t("validation.fixFields"));
-  }
+
   const payload = {
+    graph_db_engine: engine,
+    kuzu_db_path: $("settingsKuzuDbPath").value.trim(),
+    kuzu_buffer_pool_size_gb: parseInt($("settingsKuzuBufferPoolSizeGb").value) || 1,
     neo4j_uri: $("settingsNeo4jUri").value.trim(),
     neo4j_user: $("settingsNeo4jUser").value.trim(),
   };
@@ -490,18 +699,24 @@ async function saveSettings() {
   $("steamApiKeyInput").value = "";
   $("neo4jPasswordInput").value = "";
   await loadSettings();
+  await testSettings({ silent: true });
   toast(t("toast.settingsSaved"));
 }
 
-async function testSettings() {
+async function testSettings({ silent = false } = {}) {
   setStatus("steamStatus", "testing");
   setStatus("neo4jStatus", "testing");
+  setConnectionDetail("steamStatusDetail", t("status.testing"));
+  setConnectionDetail("neo4jStatusDetail", t("status.testing"));
   const result = await api("/api/settings/test", { method: "POST", body: "{}" });
   setStatus("steamStatus", result.steam_ok ? "ok" : "failed");
   setStatus("neo4jStatus", result.neo4j_ok ? "ok" : "failed");
-  toast(`${result.steam_message} · ${result.neo4j_message}`);
+  setConnectionDetail("steamStatusDetail", result.steam_message, result.steam_ok);
+  setConnectionDetail("neo4jStatusDetail", result.neo4j_message, result.neo4j_ok);
+  if (!silent) toast(`${result.steam_message} · ${result.neo4j_message}`);
   appendSystemLog(result.steam_ok && result.neo4j_ok ? "info" : "warn", "settings", `${result.steam_message} · ${result.neo4j_message}`);
   await loadDbStats().catch(() => {});
+  return result;
 }
 
 function validateCrawlPayload() {
@@ -555,6 +770,128 @@ function startTimer() {
   }, 1000);
 }
 
+// ── Recent roots ──────────────────────────────────────────────────
+
+function saveRecentRoot(url, name, avatar, id) {
+  let roots = [];
+  try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  roots = roots.filter(r => r.url !== url);
+  roots.unshift({ url, name: name || url, avatar, id: id || "" });
+  if (roots.length > 10) roots = roots.slice(0, 10);
+  try { localStorage.setItem("sfm_recent_roots", JSON.stringify(roots)); } catch { /* */ }
+  renderRecentRoots();
+}
+
+function renderRecentRoots() {
+  let roots = [];
+  try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  const list = $("recentRootsList");
+  const count = $("recentRootsCount");
+  list.innerHTML = "";
+  if (!roots.length) {
+    count.textContent = "";
+    return;
+  }
+  count.textContent = ` (${roots.length})`;
+  roots.forEach(r => {
+    const chip = document.createElement("div");
+    chip.className = "recent-root-chip";
+    chip.title = r.url;
+    chip.innerHTML =
+      `<img src="${escapeHtml(r.avatar || '')}" alt="" onerror="this.style.display='none'">` +
+      `<div class="chip-info">` +
+        `<div class="chip-name">${escapeHtml(r.name || r.id || r.url)}</div>` +
+        `<div class="chip-meta"><span>${escapeHtml(r.id || '')}</span></div>` +
+        `<div class="chip-url">${escapeHtml(r.url)}</div>` +
+      `</div>`;
+    chip.addEventListener("click", () => {
+      $("rootUrl").value = r.url;
+      $("graphRoot").value = r.id || "";
+    });
+    list.appendChild(chip);
+  });
+}
+
+// ── Presets ───────────────────────────────────────────────────────
+
+const PRESET_KEY = "sfm_presets";
+const LAST_CONFIG_KEY = "sfm_last_config";
+
+function getCurrentConfig() {
+  return {
+    root_url: $("rootUrl").value,
+    max_depth: $("maxDepth").value,
+    max_nodes: $("maxNodes").value,
+    delay_ms: $("delayMs").value,
+    cache_valid_days: $("cacheValidDays").value,
+    friend_count_min: $("crawlFriendCountMin").value,
+    friend_count_max: $("crawlFriendCountMax").value,
+    prior_pool_min_links: $("crawlPriorPoolMinLinks").value,
+  };
+}
+
+function applyConfig(cfg) {
+  if (!cfg) return;
+  const fields = ["root_url","max_depth","max_nodes","delay_ms","cache_valid_days","friend_count_min","friend_count_max","prior_pool_min_links"];
+  const ids = ["rootUrl","maxDepth","maxNodes","delayMs","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"];
+  fields.forEach((f, i) => { if (cfg[f] !== undefined) $(ids[i]).value = cfg[f]; });
+}
+
+function loadPresets() {
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  const sel = $("presetSelect");
+  sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+  Object.keys(presets).forEach(name => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.value = "";
+}
+
+function savePreset() {
+  const name = prompt(t("preset.promptName"));
+  if (!name || !name.trim()) return;
+  const cfg = getCurrentConfig();
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  presets[name.trim()] = cfg;
+  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+  loadPresets();
+  toast(t("preset.saved"));
+}
+
+function applyPreset(name) {
+  if (!name) return;
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  const cfg = presets[name];
+  if (cfg) { applyConfig(cfg); toast(t("preset.applied", { name })); }
+}
+
+function deletePreset() {
+  const name = $("presetSelect").value;
+  if (!name) return;
+  let presets = {};
+  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  delete presets[name];
+  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+  loadPresets();
+  toast(t("preset.deleted"));
+}
+
+function autoSaveLastConfig() {
+  try { localStorage.setItem(LAST_CONFIG_KEY, JSON.stringify(getCurrentConfig())); } catch { /* */ }
+}
+
+function autoLoadLastConfig() {
+  let cfg = null;
+  try { cfg = JSON.parse(localStorage.getItem(LAST_CONFIG_KEY)); } catch { /* */ }
+  if (cfg) applyConfig(cfg);
+}
+
 function stopTimer() {
   clearInterval(timerInterval);
   timerInterval = null;
@@ -581,6 +918,8 @@ async function startCrawl() {
   if (friendMax) payload.friend_count_max = Number(friendMax);
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
   currentRunId = run.id;
+  saveRecentRoot(payload.root_url, run.root_steam_id, "", run.root_steam_id);
+  startDbStatsPolling();
   lastEventSeq = 0;
   $("crawlLogs").innerHTML = "";
   setProgress(1);
@@ -607,11 +946,19 @@ async function pollRun() {
   await loadEvents().catch(() => {});
   if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
     stopTimer();
+    stopDbStatsPolling();
     updateCrawlButtons(run.status);
     toast(run.message || statusText(run.status));
     appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
     await loadGraph().catch(() => {});
     await loadDbStats().catch(() => {});
+    // 更新最近扫描的 Root 头像和昵称
+    if (currentGraph.nodes.length) {
+      const rootNode = currentGraph.nodes.find(n => n.id === run.root_steam_id);
+      if (rootNode) {
+        saveRecentRoot($("rootUrl").value || rootNode.profile_url, rootNode.label, rootNode.avatar, rootNode.id);
+      }
+    }
     return;
   }
   pollTimer = setTimeout(pollRun, 1200);
@@ -657,6 +1004,7 @@ async function forceStopCrawl() {
   if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
   await api(`/api/crawls/${currentRunId}/force-stop`, { method: "POST", body: "{}" });
   stopTimer();
+  stopDbStatsPolling();
   toast(t("toast.forceStop"));
 }
 
@@ -837,6 +1185,21 @@ function focusAnalysisCandidate(steamId, candidates) {
   if (node.length) {
     node.addClass("analysis-focus");
     cy.center(node);
+    fillProfile(node.data().node);
+  } else if (candidate) {
+    fillProfile({
+      id: candidate.steam_id,
+      label: candidate.label,
+      avatar: candidate.avatar,
+      profile_url: candidate.profile_url,
+      friend_count: candidate.friend_count,
+      depth_min: candidate.depth,
+      friend_list_status: "unknown",
+      friend_count_status: "unknown",
+      note: "",
+      tags: [],
+      category: ""
+    });
   }
   for (const evidence of candidate?.evidence || []) {
     const evidenceNode = cy.getElementById(evidence.id);
@@ -879,10 +1242,16 @@ function wireEvents() {
   document.querySelectorAll(".lang-button").forEach((button) => {
     button.addEventListener("click", () => setLanguage(button.dataset.lang));
   });
+  $("settingsGraphDbEngine").addEventListener("change", (event) => toggleEngineSettings(event.target.value));
   $("testSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, testSettings).catch(() => {}));
   $("loadSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, loadSettings).catch(() => {}));
   $("saveSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, saveSettings).catch(() => {}));
   $("refreshDbStats").addEventListener("click", (event) => withButtonState(event.currentTarget, loadDbStats).catch(() => {}));
+  $("dbStatsInterval").addEventListener("change", () => {
+    if (currentRunId && ["running", "paused"].includes($("crawlStatus").dataset.status || "")) {
+      startDbStatsPolling();
+    }
+  });
   $("startCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, startCrawl).catch(() => {}));
   $("cancelCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, cancelCrawl).catch(() => {}));
   $("forceStopCrawl").addEventListener("click", (event) => withButtonState(event.currentTarget, forceStopCrawl).catch(() => {}));
@@ -904,6 +1273,24 @@ function wireEvents() {
   $("systemLogLevel").addEventListener("change", () => loadSystemLogs(true).catch(() => {}));
   $("graphSizeBy").addEventListener("change", () => renderGraph(currentGraph));
   $("graphLayoutBias").addEventListener("change", runLayout);
+  
+  // Graph Limit Toggle logic
+  const limitInput = $("graphLimit");
+  const limitToggle = $("graphLimitToggle");
+  if (limitInput && limitToggle) {
+    const savedNoLimit = localStorage.getItem("sfm_no_limit") === "true";
+    limitToggle.checked = savedNoLimit;
+    limitInput.max = savedNoLimit ? 100000 : 2000;
+    
+    limitToggle.addEventListener("change", () => {
+      const isChecked = limitToggle.checked;
+      localStorage.setItem("sfm_no_limit", isChecked);
+      limitInput.max = isChecked ? 100000 : 2000;
+      if (!isChecked && Number(limitInput.value) > 2000) {
+        limitInput.value = 2000;
+      }
+    });
+  }
   $("exportJson").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("json")).catch(() => {}));
   $("exportCsv").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("csv")).catch(() => {}));
   $("copyBloom").addEventListener("click", (event) =>
@@ -920,6 +1307,58 @@ function wireEvents() {
   $("themeToggle").addEventListener("click", cycleTheme);
   $("toggleConsole").addEventListener("click", () => {
     if (window._toggleConsole) window._toggleConsole();
+  });
+  // Sidebar Tabs switching
+  const sidebarSlider = $("sidebarTabSlider");
+  const sidebarButtons = document.querySelectorAll(".tab-button");
+  sidebarButtons.forEach((button, idx) => {
+    button.addEventListener("click", () => {
+      sidebarButtons.forEach((b) => b.classList.remove("active"));
+      button.classList.add("active");
+      if (sidebarSlider) {
+        sidebarSlider.dataset.activeIndex = idx;
+      }
+    });
+  });
+  // Inspector Tabs switching
+  const inspectorSlider = $("inspectorTabSlider");
+  const inspectorButtons = document.querySelectorAll(".ins-tab-button");
+  inspectorButtons.forEach((button, idx) => {
+    button.addEventListener("click", () => {
+      inspectorButtons.forEach((b) => b.classList.remove("active"));
+      button.classList.add("active");
+      if (inspectorSlider) {
+        inspectorSlider.dataset.activeIndex = idx;
+      }
+    });
+  });
+  // Presets
+  $("presetSelect").addEventListener("change", () => applyPreset($("presetSelect").value));
+  $("savePreset").addEventListener("click", savePreset);
+  $("deletePreset").addEventListener("click", deletePreset);
+  // Crawl logs local filtering and clearing
+  if ($("crawlLogLevel")) {
+    $("crawlLogLevel").addEventListener("change", () => {
+      const selectedLevel = $("crawlLogLevel").value;
+      document.querySelectorAll("#crawlLogs .log-item").forEach((row) => {
+        if (!selectedLevel) {
+          row.style.display = "";
+        } else {
+          row.style.display = row.dataset.level === selectedLevel ? "" : "none";
+        }
+      });
+    });
+  }
+  if ($("clearCrawlLogs")) {
+    $("clearCrawlLogs").addEventListener("click", () => {
+      $("crawlLogs").innerHTML = "";
+      toast(t("toast.logsCleared"));
+    });
+  }
+  // Auto-save last config on any crawl input change
+  ["rootUrl","maxDepth","maxNodes","delayMs","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"].forEach(id => {
+    $(id).addEventListener("change", autoSaveLastConfig);
+    $(id).addEventListener("input", autoSaveLastConfig);
   });
 }
 
@@ -1031,12 +1470,10 @@ function initConsole() {
       panel.classList.remove("collapsed");
       handle.style.display = "";
       root.style.setProperty("--console-height", state.height + "px");
-      document.body.style.paddingBottom = state.height + "px";
     } else {
       panel.classList.add("collapsed");
       handle.style.display = "none";
       root.style.setProperty("--console-height", "0px");
-      document.body.style.paddingBottom = "0px";
     }
   }
 
@@ -1063,7 +1500,6 @@ function initConsole() {
       const newH = Math.max(60, Math.min(startH + delta, window.innerHeight * 0.6));
       state.height = newH;
       document.documentElement.style.setProperty("--console-height", newH + "px");
-      document.body.style.paddingBottom = newH + "px";
     }
 
     function onUp() {
@@ -1095,9 +1531,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   initGraph();
   initResizeHandles();
   initConsole();
+  renderRecentRoots();
+  loadPresets();
+  autoLoadLastConfig();
   wireEvents();
   $("pathResult").dataset.state = "empty";
-  loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));
+  loadSettings()
+    .then(() => testSettings({ silent: true }))
+    .catch((error) => appendSystemLog("error", "settings", error.message));
   loadGraph().catch(() => {});
   loadDbStats().catch((error) => appendSystemLog("error", "db", error.message));
   loadTopDegree().catch((error) => appendSystemLog("error", "stats", error.message));

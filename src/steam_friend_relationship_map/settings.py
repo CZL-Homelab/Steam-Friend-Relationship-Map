@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     steam_api_key: str = Field(default="", alias="STEAM_API_KEY")
+    graph_db_engine: str = Field(default="kuzu", alias="GRAPH_DB_ENGINE")
+    kuzu_db_path: str = Field(default="./data/graph_kuzu", alias="KUZU_DB_PATH")
+    kuzu_buffer_pool_size_gb: int = Field(default=1, alias="KUZU_BUFFER_POOL_SIZE_GB")
     neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", alias="NEO4J_USER")
     neo4j_password: str = Field(default="", alias="NEO4J_PASSWORD")

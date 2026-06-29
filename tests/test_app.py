@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from steam_friend_relationship_map.app import create_app
 from steam_friend_relationship_map.models import DbStats, ExportResponse, FriendCircleAnalysisResponse, FriendCircleCandidate, GraphEdge, GraphNode, GraphResponse
 from steam_friend_relationship_map.settings import Settings
-from steam_friend_relationship_map.steam import SteamClient
+from steam_friend_relationship_map.steam import SteamApiError, SteamClient
 
 
 class FakeRepo:
@@ -14,6 +14,9 @@ class FakeRepo:
 
     def ensure_schema(self) -> None:
         pass
+
+    def test_connection(self) -> str:
+        return "Neo4j 连接正常"
 
     def ensure_default_project(self) -> str:
         return "default"
@@ -30,6 +33,9 @@ class FakeRepo:
 
     def delete_project(self, project_id: str) -> bool:
         return project_id != "default"
+
+    def project_exists(self, project_id: str) -> bool:
+        return True
 
     def get_graph(self, **_: object) -> GraphResponse:
         return GraphResponse(
@@ -76,6 +82,33 @@ class FakeSecretStore:
         self.values.pop(name, None)
 
 
+class FakeSteam:
+    def __init__(self, exc: Exception | None = None) -> None:
+        self.exc = exc
+
+    async def aclose(self) -> None:
+        pass
+
+    async def resolve_steam_id(self, value: str) -> str:
+        return value
+
+    async def get_player_summaries(self, steam_ids: list[str]) -> list[object]:
+        if self.exc:
+            raise self.exc
+        return []
+
+    async def get_friend_list(self, steam_id: str) -> object:
+        raise NotImplementedError
+
+
+class FailingRepo(FakeRepo):
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def ensure_schema(self) -> None:
+        raise self.exc
+
+
 def test_graph_endpoint_uses_repo() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
@@ -120,6 +153,50 @@ def test_secret_api_does_not_echo_secret() -> None:
     assert "super-secret" not in response.text
 
 
+def test_settings_test_reports_missing_steam_key() -> None:
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(SteamApiError("缺少 STEAM_API_KEY")), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post("/api/settings/test", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["steam_ok"] is False
+    assert body["steam_reason"] == "missing_key"
+    assert "未配置 Steam API Key" in body["steam_message"]
+
+
+def test_settings_test_reports_invalid_steam_key() -> None:
+    app = create_app(settings=Settings(steam_api_key="bad-key"), repo=FakeRepo(), steam=FakeSteam(SteamApiError("Steam API 请求失败: HTTP 403", 403)), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post("/api/settings/test", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["steam_ok"] is False
+    assert body["steam_reason"] == "invalid_key"
+    assert "Steam API Key 无效" in body["steam_message"]
+
+
+def test_settings_test_reports_neo4j_server_unavailable() -> None:
+    app = create_app(
+        settings=Settings(STEAM_API_KEY="key", NEO4J_PASSWORD="pw"),
+        repo=FailingRepo(RuntimeError("Failed to establish connection to localhost:7687")),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post("/api/settings/test", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["neo4j_ok"] is False
+    assert body["neo4j_reason"] == "server_unavailable"
+    assert "请确认 Neo4j Desktop/Server 已启动" in body["neo4j_message"]
+
+
 def test_logs_endpoint_redacts_sensitive_values() -> None:
     app = create_app(settings=Settings(steam_api_key="abcd1234abcd1234abcd1234abcd1234", neo4j_password="pw-secret"), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
@@ -142,3 +219,63 @@ def test_friend_circle_analysis_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["candidates"][0]["steam_id"] == "candidate"
+
+
+def test_project_switch_strips_crlf() -> None:
+    from unittest.mock import patch
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    with patch("steam_friend_relationship_map.app.set_key") as mock_set_key:
+        response = client.post("/api/projects/switch", json={"name": "test\r\ninjected\nname"})
+        assert response.status_code == 200
+        mock_set_key.assert_called_once()
+        args, _ = mock_set_key.call_args
+        assert args[1] == "ACTIVE_PROJECT"
+        assert args[2] == "testinjectedname"
+
+
+def test_app_endpoints_blocked_during_crawl() -> None:
+    from unittest.mock import MagicMock
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    
+    app.state.manager.has_active_crawl = MagicMock(return_value=True)
+    client = TestClient(app)
+    
+    # 1. Test patch settings
+    resp = client.patch("/api/settings", json={"default_max_depth": 3})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+    
+    # 2. Test set secret
+    resp = client.post("/api/settings/secrets", json={"name": "steam_api_key", "value": "test"})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+    
+    # 3. Test delete secret
+    resp = client.delete("/api/settings/secrets/steam_api_key")
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+    # 4. Test delete project
+    resp = client.delete("/api/projects/test-project")
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+    # 5. Test switch project
+    resp = client.post("/api/projects/switch", json={"name": "test-project"})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+
+def test_app_crawls_conflict_returns_409() -> None:
+    from unittest.mock import AsyncMock
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    
+    app.state.manager.create_crawl = AsyncMock(side_effect=RuntimeError("已有活跃的抓取任务在运行中"))
+    client = TestClient(app)
+    
+    resp = client.post("/api/crawls", json={"root_url": "root", "max_depth": 2})
+    assert resp.status_code == 409
+    assert "已有活跃的抓取任务在运行中" in resp.json()["detail"]
+
