@@ -31,6 +31,9 @@ class FakeRepo:
     def delete_project(self, project_id: str) -> bool:
         return project_id != "default"
 
+    def project_exists(self, project_id: str) -> bool:
+        return True
+
     def get_graph(self, **_: object) -> GraphResponse:
         return GraphResponse(
             nodes=[GraphNode(id="root", label="Root", degree=1)],
@@ -142,3 +145,18 @@ def test_friend_circle_analysis_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["candidates"][0]["steam_id"] == "candidate"
+
+
+def test_project_switch_strips_crlf() -> None:
+    from unittest.mock import patch
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    with patch("steam_friend_relationship_map.app.set_key") as mock_set_key:
+        response = client.post("/api/projects/switch", json={"name": "test\r\ninjected\nname"})
+        assert response.status_code == 200
+        mock_set_key.assert_called_once()
+        args, _ = mock_set_key.call_args
+        assert args[1] == "ACTIVE_PROJECT"
+        assert args[2] == "testinjectedname"
+

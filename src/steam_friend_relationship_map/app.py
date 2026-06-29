@@ -300,7 +300,7 @@ def create_app(
     @app.post("/api/projects/switch")
     async def switch_project(payload: ProjectCreate) -> ProjectListResponse:
         """Switch active project. payload.name = project_id"""
-        pid = payload.name.strip()
+        pid = payload.name.strip().replace("\n", "").replace("\r", "")
         if not pid:
             raise HTTPException(status_code=400, detail="项目 ID 不能为空")
         # Ensure the project exists
