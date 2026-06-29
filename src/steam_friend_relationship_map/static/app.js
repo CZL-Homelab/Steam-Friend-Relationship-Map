@@ -29,6 +29,7 @@ let dbStatsTimer = null;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
+let activeRenderId = 0;
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
@@ -364,6 +365,9 @@ function metricValue(node, metric) {
 }
 
 function renderGraph(data) {
+  activeRenderId++;
+  const renderId = activeRenderId;
+
   currentGraph = data;
   const sizeBy = $("graphSizeBy").value || "degree";
   const maxMetric = Math.max(1, ...data.nodes.map((node) => metricValue(node, sizeBy)));
@@ -382,14 +386,37 @@ function renderGraph(data) {
     })),
     ...data.edges.map((edge) => ({ data: { id: edge.id, source: edge.source, target: edge.target, strength: Math.max(1, edge.strength || 1) } })),
   ];
+
   cy.elements().remove();
-  cy.add(elements);
-  runLayout();
-  updateGraphSummary();
-  $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
-  if (!data.nodes.length) {
-    $("graphEmpty").querySelector("span").textContent = t("graph.emptyFiltered");
+
+  const loading = $("graphLoading");
+  if (loading) loading.classList.remove("hidden");
+
+  const chunkSize = 150;
+  let index = 0;
+
+  function addNextChunk() {
+    if (renderId !== activeRenderId) return;
+
+    if (index >= elements.length) {
+      runLayout();
+      updateGraphSummary();
+      $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
+      if (!data.nodes.length) {
+        $("graphEmpty").querySelector("span").textContent = t("graph.emptyFiltered");
+      }
+      if (loading) loading.classList.add("hidden");
+      return;
+    }
+
+    const chunk = elements.slice(index, index + chunkSize);
+    cy.add(chunk);
+    index += chunkSize;
+
+    setTimeout(addNextChunk, 10);
   }
+
+  addNextChunk();
 }
 
 function updateGraphSummary() {

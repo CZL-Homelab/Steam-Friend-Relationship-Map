@@ -28,6 +28,7 @@
   --graph-bg: #ffffff;
   --avatar-placeholder: #eef0f3;
   --danger-bg: #fef2f2;
+  --bg-rgb: 249, 249, 251;
 }
 
 [data-theme="dark"] {
@@ -60,6 +61,7 @@
   --graph-bg: #171a21;
   --avatar-placeholder: #213c4f;
   --danger-bg: #3d1c1c;
+  --bg-rgb: 23, 26, 33;
 }
 
 * {
@@ -1221,4 +1223,38 @@ body {
   .project-actions {
     flex-direction: column;
   }
+}
+
+/* ── Graph Async Loading Overlay ─────────────────────────────────── */
+
+.graph-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  background: rgba(var(--bg-rgb), 0.6);
+  backdrop-filter: blur(4px);
+  color: var(--teal);
+  font-weight: 650;
+  z-index: 50;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+  text-align: center;
+}
+
+.graph-loading.hidden {
+  opacity: 0;
+  pointer-events: none;
+  display: none !important;
+}
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: spin 700ms linear infinite;
+  margin: 0 auto;
 }
