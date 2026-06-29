@@ -22,18 +22,18 @@ async def test_adaptive_rate_limiter_aimd():
 
     assert limiter.current_delay_ms == 300.0
 
-    # 1. Test success (delay decreases by 10ms)
+    # 1. Test success (delay decreases by 12.5ms first time)
     await limiter.report_success()
-    assert limiter.current_delay_ms == 290.0
+    assert limiter.current_delay_ms == 287.5
     assert len(changes) == 1
-    assert changes[-1] == (300.0, 290.0, "success")
+    assert changes[-1] == (300.0, 287.5, "success")
 
     # 2. Test min cap
-    await limiter.report_success()  # 280
-    await limiter.report_success()  # 270
-    await limiter.report_success()  # 260
-    await limiter.report_success()  # 250
-    await limiter.report_success()  # should stay 250
+    await limiter.report_success()  # 275.625
+    await limiter.report_success()  # 264.34375
+    await limiter.report_success()  # 253.6265625
+    await limiter.report_success()  # 250.0 (capped)
+    await limiter.report_success()  # should stay 250.0
     assert limiter.current_delay_ms == 250.0
 
     # 3. Test backoff (multiply by 1.5)

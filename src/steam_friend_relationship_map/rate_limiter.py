@@ -33,10 +33,13 @@ class AdaptiveRateLimiter:
                 await asyncio.sleep(delay)
 
     async def report_success(self) -> None:
-        """报告请求成功，加性缩短延迟（加快）"""
+        """报告请求成功，使用非线性曲线缩短延迟（加快）"""
         async with self.lock:
             old_delay = self.current_delay_ms
-            new_delay = max(self.min_delay_ms, old_delay - self.decrease_step_ms)
+            # 比例渐进回收曲线：高延迟时恢复步长更大，低延迟时平缓趋近最小延迟
+            # 基础步长 10.0ms + (当前延迟与最小延迟差值) 的 5%
+            decrease_step = 10.0 + (old_delay - self.min_delay_ms) * 0.05
+            new_delay = max(self.min_delay_ms, old_delay - decrease_step)
             if new_delay != old_delay:
                 self.current_delay_ms = new_delay
                 if self.on_change_callback:
