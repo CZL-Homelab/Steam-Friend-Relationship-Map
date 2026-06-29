@@ -563,15 +563,9 @@ function toggleEngineSettings(engine) {
   if (engine === "kuzu") {
     $("kuzuSettingsGroup").style.display = "block";
     $("neo4jSettingsGroup").style.display = "none";
-    if ($("bloomCypherPanel")) {
-      $("bloomCypherPanel").style.display = "none";
-    }
   } else {
     $("kuzuSettingsGroup").style.display = "none";
     $("neo4jSettingsGroup").style.display = "block";
-    if ($("bloomCypherPanel")) {
-      $("bloomCypherPanel").style.display = "block";
-    }
   }
   if ($("dbStatusLabel")) {
     $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
