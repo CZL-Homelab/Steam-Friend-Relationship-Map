@@ -413,67 +413,88 @@
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.friendCircles">朋友圈分析</span>
-            <button class="icon-button" id="loadFriendCircles" title="分析朋友圈" data-i18n-title="action.analyzeCircles"><i data-lucide="users-round"></i></button>
-          </div>
-          <label data-i18n-label="field.rootSteamId">
-            Root SteamID
-            <input id="analysisRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <div class="two-col">
-            <label data-i18n-label="field.maxDepth">
-              最大层数
-              <input id="analysisMaxDepth" type="number" min="2" max="4" value="3" />
+        <div class="inspector-tabs">
+          <button class="ins-tab-button active" data-target="insTabPath">
+            <i data-lucide="route"></i>
+            <span data-i18n="instab.path">路径与社交圈</span>
+          </button>
+          <button class="ins-tab-button" data-target="insTabRank">
+            <i data-lucide="bar-chart-3"></i>
+            <span data-i18n="instab.rank">影响力</span>
+          </button>
+          <button class="ins-tab-button" data-target="insTabCypher">
+            <i data-lucide="database"></i>
+            <span data-i18n="instab.cypher">高级</span>
+          </button>
+        </div>
+
+        <div class="inspector-tab-content" id="insTabPath">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.shortestPath">最短路径</span>
+              <button class="icon-button" id="findPath" title="查询路径" data-i18n-title="action.findPath"><i data-lucide="route"></i></button>
+            </div>
+            <label data-i18n-label="field.from">
+              起点
+              <input id="pathFrom" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
             </label>
-            <label data-i18n-label="field.minMutual">
-              最少共同连接
-              <input id="analysisMinMutual" type="number" min="0" value="2" />
+            <label data-i18n-label="field.to">
+              终点
+              <input id="pathTo" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
             </label>
-          </div>
-          <label data-i18n-label="field.limit">
-            限制
-            <input id="analysisLimit" type="number" min="1" max="100" value="30" />
-          </label>
-          <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
-          <ol id="friendCircleList" class="rank-list"></ol>
-        </section>
+            <div id="pathResult" class="path-result" data-i18n="path.empty">未选择路径</div>
+          </section>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.shortestPath">最短路径</span>
-            <button class="icon-button" id="findPath" title="查询路径" data-i18n-title="action.findPath"><i data-lucide="route"></i></button>
-          </div>
-          <label data-i18n-label="field.from">
-            起点
-            <input id="pathFrom" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <label data-i18n-label="field.to">
-            终点
-            <input id="pathTo" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
-          </label>
-          <div id="pathResult" class="path-result" data-i18n="path.empty">未选择路径</div>
-        </section>
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.friendCircles">朋友圈分析</span>
+              <button class="icon-button" id="loadFriendCircles" title="分析朋友圈" data-i18n-title="action.analyzeCircles"><i data-lucide="users-round"></i></button>
+            </div>
+            <label data-i18n-label="field.rootSteamId">
+              Root SteamID
+              <input id="analysisRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
+            </label>
+            <div class="two-col">
+              <label data-i18n-label="field.maxDepth">
+                最大层数
+                <input id="analysisMaxDepth" type="number" min="2" max="4" value="3" />
+              </label>
+              <label data-i18n-label="field.minMutual">
+                最少共同连接
+                <input id="analysisMinMutual" type="number" min="0" value="2" />
+              </label>
+            </div>
+            <label data-i18n-label="field.limit">
+              限制
+              <input id="analysisLimit" type="number" min="1" max="100" value="30" />
+            </label>
+            <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
+            <ol id="friendCircleList" class="rank-list"></ol>
+          </section>
+        </div>
 
-        <section class="panel">
-          <div class="panel-title">
-            <span data-i18n="section.centralNodes">中心节点</span>
-            <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
-          </div>
-          <ol id="topDegreeList" class="rank-list"></ol>
-        </section>
+        <div class="inspector-tab-content hidden" id="insTabRank">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.centralNodes">中心节点</span>
+              <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
+            </div>
+            <ol id="topDegreeList" class="rank-list"></ol>
+          </section>
+        </div>
 
-        <section class="panel" id="bloomCypherPanel">
-          <div class="panel-title">
-            <span data-i18n="section.bloomCypher">Bloom Cypher 查询</span>
-            <button class="icon-button" id="copyBloom" title="复制查询" data-i18n-title="action.copyBloom"><i data-lucide="copy"></i></button>
-          </div>
-          <p class="hint" data-i18n="bloom.hint">复制以下 Cypher 语句到 Neo4j Bloom / Browser 搜索框，可做高级图探索；$root、$from、$to 替换为实际 SteamID。</p>
-          <textarea id="bloomQuery" rows="7" readonly>MATCH p=(r:SteamUser {steam_id:$root})-[:STEAM_FRIEND*1..3]-(n) RETURN p LIMIT 500
+        <div class="inspector-tab-content hidden" id="insTabCypher">
+          <section class="panel" id="bloomCypherPanel">
+            <div class="panel-title">
+              <span data-i18n="section.bloomCypher">Bloom Cypher 查询</span>
+              <button class="icon-button" id="copyBloom" title="复制查询" data-i18n-title="action.copyBloom"><i data-lucide="copy"></i></button>
+            </div>
+            <p class="hint" data-i18n="bloom.hint">复制以下 Cypher 语句到 Neo4j Bloom / Browser 搜索框，可做高级图探索；$root、$from、$to 替换为实际 SteamID。</p>
+            <textarea id="bloomQuery" rows="7" readonly>MATCH p=(r:SteamUser {steam_id:$root})-[:STEAM_FRIEND*1..3]-(n) RETURN p LIMIT 500
 
 MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:SteamUser {steam_id:$to})) RETURN p</textarea>
-        </section>
+          </section>
+        </div>
       </aside>
     </main>
 

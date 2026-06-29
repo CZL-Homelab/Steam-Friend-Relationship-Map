@@ -1239,6 +1239,17 @@ function wireEvents() {
       });
     });
   });
+  // Inspector Tabs switching
+  document.querySelectorAll(".ins-tab-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = button.dataset.target;
+      document.querySelectorAll(".ins-tab-button").forEach((b) => b.classList.remove("active"));
+      button.classList.add("active");
+      document.querySelectorAll(".inspector-tab-content").forEach((content) => {
+        content.classList.toggle("hidden", content.id !== target);
+      });
+    });
+  });
   // Presets
   $("presetSelect").addEventListener("change", () => applyPreset($("presetSelect").value));
   $("savePreset").addEventListener("click", savePreset);

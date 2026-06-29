@@ -123,7 +123,8 @@ textarea {
   gap: 0.5rem;
 }
 
-.sidebar-tabs {
+.sidebar-tabs,
+.inspector-tabs {
   display: flex;
   gap: 0.25rem;
   padding: 0.25rem;
@@ -133,7 +134,8 @@ textarea {
   flex-shrink: 0;
 }
 
-.tab-button {
+.tab-button,
+.ins-tab-button {
   flex: 1;
   display: inline-flex;
   align-items: center;
@@ -150,19 +152,22 @@ textarea {
   transition: background 120ms, color 120ms;
 }
 
-.tab-button.active {
+.tab-button.active,
+.ins-tab-button.active {
   background: var(--panel);
   color: var(--teal);
   box-shadow: var(--shadow-sm);
 }
 
-.sidebar-tab-content {
+.sidebar-tab-content,
+.inspector-tab-content {
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
 }
 
-.sidebar-tab-content.hidden {
+.sidebar-tab-content.hidden,
+.inspector-tab-content.hidden {
   display: none !important;
 }
 
