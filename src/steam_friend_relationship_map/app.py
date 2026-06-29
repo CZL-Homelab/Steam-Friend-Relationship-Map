@@ -6,6 +6,7 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 from dotenv import set_key
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -59,6 +60,10 @@ ENV_KEYS = {
     "default_cache_valid_days": "DEFAULT_CACHE_VALID_DAYS",
     "active_project": "ACTIVE_PROJECT",
 }
+
+
+def sanitize_env_value(value: object) -> str:
+    return str(value).replace("\n", "").replace("\r", "")
 
 
 def get_repository(settings: Settings) -> IGraphRepository:
@@ -174,6 +179,18 @@ def create_app(
     def safe_detail(exc: object) -> str:
         return log_buffer.redact(str(exc))
 
+    def is_allowed_write_origin(origin: str) -> bool:
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        default_port = 443 if parsed.scheme == "https" else 80
+        try:
+            port = parsed.port or default_port
+        except ValueError:
+            return False
+        allowed_hosts = {settings.app_host, "localhost", "127.0.0.1", "::1"}
+        return parsed.hostname in allowed_hosts and port == settings.app_port
+
     def classify_steam_test_error(exc: object) -> tuple[str, str]:
         message = safe_detail(exc)
         if isinstance(exc, SteamApiError):
@@ -203,16 +220,12 @@ def create_app(
         """CSRF 防护：仅拦截跨域写请求。同源请求（Origin 为空）放行。"""
         if request.method in ("POST", "PATCH", "DELETE"):
             origin = request.headers.get("origin") or request.headers.get("referer") or ""
-            if origin:
-                # 只允许本地回环和配置的 host:port
-                host = f"http://{settings.app_host}:{settings.app_port}"
-                localhost = f"http://localhost:{settings.app_port}"
-                if not (origin.startswith(host) or origin.startswith(localhost)):
-                    return Response(
-                        content='{"detail":"Cross-origin request denied"}',
-                        status_code=403,
-                        media_type="application/json",
-                    )
+            if origin and not is_allowed_write_origin(origin):
+                return Response(
+                    content='{"detail":"Cross-origin request denied"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
         return await call_next(request)
 
     @app.middleware("http")
@@ -249,7 +262,7 @@ def create_app(
         for field, value in data.items():
             key = ENV_KEYS[field]
             # 安全：移除换行符防止 .env 注入
-            safe_value = str(value).replace("\n", "").replace("\r", "")
+            safe_value = sanitize_env_value(value)
             set_key(str(ENV_PATH), key, safe_value, quote_mode="never")
         await rebuild_runtime()
         message = "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
@@ -352,7 +365,7 @@ def create_app(
         if manager.has_active_crawl():
             raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再切换项目。")
         """Switch active project. payload.name = project_id"""
-        pid = payload.name.strip().replace("\n", "").replace("\r", "")
+        pid = sanitize_env_value(payload.name).strip()
         if not pid:
             raise HTTPException(status_code=400, detail="项目 ID 不能为空")
         # Ensure the project exists
@@ -361,7 +374,7 @@ def create_app(
             repo.create_project(ProjectCreate(name=pid), project_id=pid)
             log_buffer.append("info", "project", f"项目已自动创建: {pid}")
         ENV_PATH.touch(exist_ok=True)
-        set_key(str(ENV_PATH), "ACTIVE_PROJECT", pid, quote_mode="never")
+        set_key(str(ENV_PATH), "ACTIVE_PROJECT", sanitize_env_value(pid), quote_mode="never")
         await rebuild_runtime()
         log_buffer.append("info", "project", f"已切换到项目: {pid}")
         result = repo.list_projects()

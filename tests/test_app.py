@@ -153,6 +153,65 @@ def test_secret_api_does_not_echo_secret() -> None:
     assert "super-secret" not in response.text
 
 
+def test_secret_api_rejects_unknown_secret_name() -> None:
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post("/api/settings/secrets", json={"name": "cookie", "value": "secret"})
+
+    assert response.status_code == 422
+
+
+def test_settings_patch_rejects_invalid_graph_engine() -> None:
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.patch("/api/settings", json={"graph_db_engine": "sqlite"})
+
+    assert response.status_code == 422
+
+
+def test_settings_patch_strips_crlf_before_env_write() -> None:
+    from unittest.mock import patch
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    with patch("steam_friend_relationship_map.app.set_key") as mock_set_key:
+        response = client.patch("/api/settings", json={"neo4j_user": "neo4j\r\nINJECTED=1"})
+
+    assert response.status_code == 200
+    mock_set_key.assert_called_once()
+    args, _ = mock_set_key.call_args
+    assert args[1] == "NEO4J_USER"
+    assert args[2] == "neo4jINJECTED=1"
+
+
+def test_csrf_rejects_localhost_prefix_spoof() -> None:
+    app = create_app(settings=Settings(app_host="127.0.0.1", app_port=8000), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/settings/test",
+        json={},
+        headers={"Origin": "http://localhost:8000.evil.example"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_csrf_allows_exact_localhost_origin() -> None:
+    app = create_app(settings=Settings(app_host="127.0.0.1", app_port=8000), repo=FakeRepo(), steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/settings/test",
+        json={},
+        headers={"Origin": "http://localhost:8000"},
+    )
+
+    assert response.status_code == 200
+
+
 def test_settings_test_reports_missing_steam_key() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(SteamApiError("缺少 STEAM_API_KEY")), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
@@ -201,13 +260,19 @@ def test_logs_endpoint_redacts_sensitive_values() -> None:
     app = create_app(settings=Settings(steam_api_key="abcd1234abcd1234abcd1234abcd1234", neo4j_password="pw-secret"), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
 
-    app.state.logs.append("error", "test", "password=pw-secret key=abcd1234abcd1234abcd1234abcd1234")
+    app.state.logs.append(
+        "error",
+        "test",
+        "password=pw-secret key=abcd1234abcd1234abcd1234abcd1234 Authorization: Bearer token123 Cookie: sid=abc",
+    )
     response = client.get("/api/logs")
 
     assert response.status_code == 200
     text = response.text
     assert "pw-secret" not in text
     assert "abcd1234abcd1234abcd1234abcd1234" not in text
+    assert "token123" not in text
+    assert "sid=abc" not in text
     assert "[REDACTED]" in text
 
 
