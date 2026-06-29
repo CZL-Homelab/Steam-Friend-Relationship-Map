@@ -47,3 +47,25 @@ async def test_private_friend_list_is_marked() -> None:
 
     assert result.private is True
     assert result.friend_ids == []
+
+
+@pytest.mark.asyncio
+async def test_steam_client_key_rotation() -> None:
+    queried_keys = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = request.url.params.get("key")
+        queried_keys.append(key)
+        return httpx.Response(200, json={"response": {"players": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = SteamClient("key1, key2; key3\nkey4", base_url="https://api.test", client=http_client)
+        assert client.api_keys == ["key1", "key2", "key3", "key4"]
+
+        await client.get_player_summaries(["123"])
+        await client.get_player_summaries(["456"])
+        await client.get_player_summaries(["789"])
+        await client.get_player_summaries(["012"])
+        await client.get_player_summaries(["345"])
+
+    assert queried_keys == ["key1", "key2", "key3", "key4", "key1"]

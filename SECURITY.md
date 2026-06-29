@@ -1,51 +1,84 @@
-# 安全说明 / Security Notes
+# Security Audit Report / 安全审计报告
 
-## 中文
+## Audit Scope / 审计范围
 
-### 不要提交这些内容
+- Branch: `security-check-before-main`
+- Baseline: `main...HEAD`
+- Date: 2026-06-30
+- Scope: FastAPI API surface, settings and secret storage, Steam API access, Neo4j/Kuzu query layers, frontend DOM rendering, export behavior, logs, documentation, and test coverage.
 
-请不要把以下内容提交到公开仓库、Issue、讨论区或截图中：
+## Security Checklist / 安全检查项
 
-- `.env`
-- Steam Web API Key
-- Neo4j 用户名和密码
-- Neo4j 数据库 dump、backup、`.db`、SQLite 文件
-- 导出的真实 CSV/JSON 图谱数据
-- 包含个人备注、好友路径、SteamID、头像或昵称的截图
-- 任何 Cookie、登录态、密码、访问令牌或浏览器会话信息
+- Secrets are stored through the system credential store when configured from the UI.
+- `/api/settings` only returns configuration metadata and never returns Steam API Key or Neo4j password values.
+- State-changing routes are protected by Origin/Referer CSRF checks.
+- `.env` writes strip CR/LF characters before persistence.
+- Settings payloads use strict validation for graph engine and numeric ranges.
+- Secret names are restricted to `steam_api_key` and `neo4j_password`.
+- Neo4j and Kuzu queries parameterize user-controlled values; only validated depth values and controlled assignment names are interpolated.
+- Friend relationships are merged with `project_id` as part of the relationship identity to avoid cross-project edge reuse or overwrite.
+- Frontend HTML rendering escapes user and API-sourced text before inserting markup.
+- Logs redact configured secret values, key/password query fragments, Authorization headers, and Cookie headers.
+- Exported graph data is local-only and documented as sensitive personal data.
 
-`.env` 已在 `.gitignore` 中忽略，但如果你手动复制密钥到 README、Issue、截图或其他文件，Git 仍然可能记录这些内容。
+## Findings and Fixes / 发现与修复
 
-当前版本推荐通过网页端“安全配置”保存 Steam API Key 和 Neo4j 密码。它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍可兼容读取，但建议迁移。
+### Fixed: CSRF Origin Prefix Bypass
 
-网页端“系统日志 / Dev Logs”会自动脱敏 Steam API Key、Neo4j 密码、Cookie、Authorization、`password=`、`key=` 等内容，用于本地排错。但日志中仍可能出现 SteamID、昵称、路径、备注分类或错误上下文。复制日志、提交 Issue 或分享截图前，请再手动检查并删除可识别个人信息。
+Previous write-request checks used string prefix matching for Origin/Referer. A crafted host such as `http://localhost:8000.evil.example` could pass the prefix test.
 
-### 如果密钥或数据泄露
+Fix: write-request CSRF checks now parse the URL and require an exact allowed hostname plus configured port.
 
-如果你不小心公开了敏感信息：
+### Fixed: Settings Validation Gaps
 
-1. 立即撤销或重置 Steam Web API Key。
-2. 修改 Neo4j Desktop 数据库密码。
-3. 删除公开的文件、截图、Issue 或发布包。
-4. 检查 Git 历史，必要时使用历史清理工具处理已提交的密钥。
-5. 如果泄露了他人的可识别关系数据或备注，尽快删除并通知相关人员。
+`graph_db_engine` accepted arbitrary strings until runtime, and text settings relied only on endpoint-level CR/LF stripping.
 
-### 报告安全问题
+Fix: `SettingsPatch` now restricts `graph_db_engine` to `kuzu` or `neo4j` and strips CR/LF from text settings at the schema boundary.
 
-如果你发现安全问题：
+### Fixed: Secret Name Whitelist at Schema Boundary
 
-- 不要在公开 Issue 中粘贴真实密钥、密码、Cookie、数据库 dump 或可识别个人数据。
-- 可以用脱敏示例描述问题。
-- 如果仓库启用了 GitHub Security Advisory，请优先使用私密安全报告。
+Secret names were validated by the secret store, but request validation did not express the allowed set.
 
-### 使用边界
+Fix: `SecretUpdate.name` now accepts only `steam_api_key` or `neo4j_password`.
 
-本项目只面向公开 Steam Web API 数据，不支持也不鼓励读取 Cookie、绕过隐私设置、抓取私密好友列表或收集无授权数据。
+### Fixed: Frontend Escaping Hardening
 
-## English
+Most dynamic HTML already used `escapeHtml`, but single quotes were not encoded and one translated analysis row was inserted without an explicit escape wrapper.
 
-Do not commit `.env`, Steam Web API keys, Neo4j passwords, database dumps, exported real graph data, screenshots with private notes, cookies, session tokens, or credentials.
+Fix: `escapeHtml` now escapes single quotes and analysis row text is escaped before insertion.
 
-If a secret is leaked, revoke or rotate it immediately, remove the public content, inspect Git history, and avoid posting raw secrets or identifiable personal data in public issues.
+### Fixed: Cross-Project Relationship Merge Pollution
 
-This project only targets public Steam Web API data. It does not support bypassing privacy settings or collecting unauthorized private data.
+Friend relationships were previously merged only by endpoint pair. When the same Steam user pair appeared in multiple projects, Neo4j could overwrite the relationship `project_id`, while Kuzu could reuse the existing relationship and hide the edge from the later project.
+
+Fix: Neo4j and Kuzu now merge `STEAM_FRIEND` relationships with `project_id` included in the relationship pattern. Tests cover Kuzu cross-project edge isolation and Neo4j query shape.
+
+### Fixed: Dependabot Vulnerability Alerts
+
+GitHub reported Starlette and pydantic-settings alerts through `uv.lock`.
+
+Fix: Dependabot updates were adopted before this final audit. Runtime versions are now `starlette 1.3.1`, `pydantic-settings 2.14.2`, and `fastapi 0.136.3`. The codebase does not use `request.form()`, `Form(...)`, `secrets_dir`, or `request.url.hostname` for security decisions.
+
+### Restored: Formal Security Report
+
+`SECURITY.md` was missing while branch workflow documentation still required updating it before main.
+
+Fix: this report restores the security audit artifact for final review.
+
+## Residual Risk / 残余风险
+
+- This is a local-first tool, but exported CSV/JSON files, screenshots, SteamIDs, notes, and relationship context may still contain personal data. Users must treat exports as sensitive.
+- Legacy `.env` values for `STEAM_API_KEY` and `NEO4J_PASSWORD` remain readable for backward compatibility. The UI recommends migration to secure storage and never echoes the raw values.
+- Kuzu and Neo4j query languages differ; depth interpolation remains necessary for variable-length path syntax and is limited to validated integer values.
+- Steam API availability, privacy settings, and rate limits can make crawl results incomplete.
+
+## Verification / 验证结果
+
+- `uv run pytest`
+- `node --check src/steam_friend_relationship_map/static/app.js`
+- `uv run python -c "import starlette, pydantic_settings, fastapi; ..."`
+- Static scan for shell execution, secret patterns, Cypher interpolation, frontend `innerHTML`, and tracked sensitive files.
+
+## Final Assessment / 最终结论
+
+The branch is ready for independent review before merging into `main`, assuming the verification commands above pass in the reviewer environment and no real secrets or private exported datasets are added before merge.

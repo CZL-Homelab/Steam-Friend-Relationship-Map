@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class CrawlStatus(StrEnum):
     pending = "pending"
     running = "running"
+    paused = "paused"
     completed = "completed"
     cancelled = "cancelled"
+    stopped = "stopped"
     failed = "failed"
 
 
@@ -121,9 +123,14 @@ class SettingsTestResult(BaseModel):
     neo4j_ok: bool
     steam_message: str
     neo4j_message: str
+    steam_reason: str = "unknown"
+    neo4j_reason: str = "unknown"
 
 
 class PublicSettings(BaseModel):
+    graph_db_engine: str
+    kuzu_db_path: str
+    kuzu_buffer_pool_size_gb: int
     neo4j_uri: str
     neo4j_user: str
     app_host: str
@@ -132,6 +139,7 @@ class PublicSettings(BaseModel):
     default_max_nodes: int
     default_delay_ms: int
     default_cache_valid_days: int
+    active_project: str = "default"
     steam_api_key_configured: bool
     neo4j_password_configured: bool
     steam_api_key_from_env: bool = False
@@ -141,6 +149,9 @@ class PublicSettings(BaseModel):
 
 
 class SettingsPatch(BaseModel):
+    graph_db_engine: Literal["kuzu", "neo4j"] | None = None
+    kuzu_db_path: str | None = None
+    kuzu_buffer_pool_size_gb: int | None = Field(default=None, ge=1, le=64)
     neo4j_uri: str | None = None
     neo4j_user: str | None = None
     app_host: str | None = None
@@ -150,9 +161,16 @@ class SettingsPatch(BaseModel):
     default_delay_ms: int | None = Field(default=None, ge=0, le=10000)
     default_cache_valid_days: int | None = Field(default=None, ge=0)
 
+    @field_validator("kuzu_db_path", "neo4j_uri", "neo4j_user", "app_host")
+    @classmethod
+    def strip_crlf(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.replace("\n", "").replace("\r", "")
+
 
 class SecretUpdate(BaseModel):
-    name: str
+    name: Literal["steam_api_key", "neo4j_password"]
     value: str = Field(min_length=1)
 
 
@@ -214,6 +232,32 @@ class FriendCircleCandidate(BaseModel):
 class FriendCircleAnalysisResponse(BaseModel):
     root: str
     candidates: list[FriendCircleCandidate]
+
+
+class ProjectInfo(BaseModel):
+    id: str
+    name: str
+    created_at: str = ""
+    steam_users: int = 0
+    relationships: int = 0
+    crawl_runs: int = 0
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        cleaned = value.replace("\n", "").replace("\r", "").strip()
+        if not cleaned:
+            raise ValueError("project name cannot be empty")
+        return cleaned
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectInfo]
+    active_project_id: str = ""
 
 
 def utc_now_iso() -> str:
