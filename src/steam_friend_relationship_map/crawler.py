@@ -7,53 +7,119 @@ from dataclasses import dataclass
 
 from .logs import AppLogBuffer
 from .models import CrawlCreate, CrawlEvent, CrawlRun, CrawlStatus, FriendEdge, SteamUserRecord, utc_now_iso
-from .neo4j_repo import Neo4jRepository
+from .graph_repo import IGraphRepository
 from .steam import SteamApiError, SteamClient, placeholder_user
+from .rate_limiter import AdaptiveRateLimiter
 
 
 @dataclass
 class CrawlControl:
     cancel: bool = False
+    pause: bool = False
+    force_stop: bool = False
     task: asyncio.Task | None = None
 
 
 class CrawlManager:
-    def __init__(self, repo: Neo4jRepository, steam: SteamClient, logs: AppLogBuffer | None = None) -> None:
+    def __init__(self, repo: IGraphRepository, steam: SteamClient, logs: AppLogBuffer | None = None, project_id: str = "default") -> None:
         self.repo = repo
         self.steam = steam
         self.logs = logs
+        self.project_id = project_id
         self.controls: dict[str, CrawlControl] = {}
         self.events: dict[str, list[CrawlEvent]] = {}
         self.event_seq: dict[str, int] = {}
+        self.run_history: list[str] = []
+        self._lock = asyncio.Lock()
+
+    def _gc_completed_runs(self) -> None:
+        completed_run_ids = []
+        for rid in self.run_history:
+            ctrl = self.controls.get(rid)
+            if ctrl is None or (ctrl.task is not None and ctrl.task.done()):
+                completed_run_ids.append(rid)
+        
+        if len(completed_run_ids) > 10:
+            to_remove = completed_run_ids[:-10]
+            for rid in to_remove:
+                self.controls.pop(rid, None)
+                self.events.pop(rid, None)
+                self.event_seq.pop(rid, None)
+                if rid in self.run_history:
+                    self.run_history.remove(rid)
+
+    def has_active_crawl(self) -> bool:
+        for control in self.controls.values():
+            if control.task is not None and not control.task.done():
+                return True
+        return False
 
     async def create_crawl(self, payload: CrawlCreate) -> CrawlRun:
-        root_steam_id = await self.steam.resolve_steam_id(payload.root_url)
-        run = CrawlRun(
-            id=str(uuid.uuid4()),
-            root_steam_id=root_steam_id,
-            max_depth=payload.max_depth,
-            max_nodes=payload.max_nodes,
-            status=CrawlStatus.pending,
-            started_at=utc_now_iso(),
-            nodes_discovered=0,
-            edges_discovered=0,
-        )
-        self.repo.ensure_schema()
-        self.repo.start_crawl_run(run)
-        self.events[run.id] = []
-        self.event_seq[run.id] = 0
-        control = CrawlControl()
-        self.controls[run.id] = control
-        self.append_event(run.id, "info", "created", "抓取任务已创建")
-        control.task = asyncio.create_task(self._run_crawl(run, payload, control))
-        return run
+        async with self._lock:
+            self._gc_completed_runs()
+            if self.has_active_crawl():
+                raise RuntimeError("已有活跃的抓取任务在运行中，请先停止或等待其完成。")
+            root_steam_id = await self.steam.resolve_steam_id(payload.root_url)
+            run = CrawlRun(
+                id=str(uuid.uuid4()),
+                root_steam_id=root_steam_id,
+                max_depth=payload.max_depth,
+                max_nodes=payload.max_nodes,
+                status=CrawlStatus.pending,
+                started_at=utc_now_iso(),
+                nodes_discovered=0,
+                edges_discovered=0,
+            )
+            self.repo.ensure_schema()
+            self.repo.start_crawl_run(run, self.project_id)
+            self.events[run.id] = []
+            self.event_seq[run.id] = 0
+            control = CrawlControl()
+            self.controls[run.id] = control
+            self.run_history.append(run.id)
+            self.append_event(run.id, "info", "created", "抓取任务已创建")
+            control.task = asyncio.create_task(self._run_crawl(run, payload, control))
+            return run
 
     def cancel(self, run_id: str) -> bool:
+        """优雅停止：完成当前层后停止，数据保留。"""
         control = self.controls.get(run_id)
         if control is None:
             return False
         control.cancel = True
-        self.append_event(run_id, "warn", "cancel", "收到取消请求")
+        self.append_event(run_id, "warn", "cancel", "收到停止请求，将在当前层完成后停止")
+        return True
+
+    def force_stop(self, run_id: str) -> bool:
+        """强制中断：立即停止，已扫描数据保留。"""
+        control = self.controls.get(run_id)
+        if control is None:
+            return False
+        control.force_stop = True
+        control.pause = False
+        self.append_event(run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）")
+        return True
+
+    def pause(self, run_id: str) -> bool:
+        """暂停扫描（如遇 Steam 限流）。"""
+        control = self.controls.get(run_id)
+        if control is None:
+            return False
+        if control.pause:
+            return False
+        control.pause = True
+        self.repo.update_crawl_run(run_id, status=CrawlStatus.paused.value)
+        self.append_event(run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续")
+        return True
+
+    def resume(self, run_id: str) -> bool:
+        """继续扫描。"""
+        control = self.controls.get(run_id)
+        if control is None or not control.pause:
+            return False
+        control.pause = False
+        self.repo.update_crawl_run(run_id, status=CrawlStatus.running.value)
+        self.append_event(run_id, "info", "resume", "扫描已继续")
         return True
 
     def get_events(self, run_id: str, after: int = 0) -> list[CrawlEvent]:
@@ -73,6 +139,19 @@ class CrawlManager:
         return event
 
     async def _run_crawl(self, run: CrawlRun, payload: CrawlCreate, control: CrawlControl) -> None:
+        def on_delay_change(old_d: float, new_d: float, reason: str):
+            reason_cn = "请求成功" if reason == "success" else "发生重试/受限"
+            self.append_event(
+                run.id, "info", "limiter",
+                f"[限速器] {reason_cn}，延迟调整为 {int(new_d)}ms"
+            )
+
+        limiter = AdaptiveRateLimiter(
+            base_delay_ms=float(payload.delay_ms),
+            on_change_callback=on_delay_change
+        )
+        self.steam.rate_limiter = limiter
+
         # 按层处理 BFS，先统计候选人与前层用户池的连接数，再决定是否进入下一层。
         discovered: dict[str, int] = {run.root_steam_id: 0}
         expanded: set[str] = set()
@@ -83,6 +162,7 @@ class CrawlManager:
         filtered_count = 0
         friend_count_filtered_count = 0
         prior_pool_filtered_count = 0
+        consecutive_auth_errors = 0
         try:
             event = self.append_event(run.id, "info", "root", "正在抓取 Root 用户资料")
             self.repo.update_crawl_run(
@@ -97,7 +177,7 @@ class CrawlManager:
             root.depth_min = 0
             root.root_closeness_score = 100
             root.last_scored_crawl_id = run.id
-            self.repo.upsert_users([root])
+            self.repo.upsert_users([root], self.project_id)
             nodes_discovered = 1
             edges_discovered = 0
             self.append_event(run.id, "info", "root", f"Root 用户已写入: {run.root_steam_id}")
@@ -105,8 +185,33 @@ class CrawlManager:
             for depth in range(run.max_depth):
                 if not current_layer:
                     break
+
+                # ── 暂停检查 ──
+                while control.pause and not control.force_stop:
+                    await asyncio.sleep(0.5)
+
+                # ── 强制中断：立即停止，数据保留 ──
+                if control.force_stop:
+                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    self.repo.update_crawl_run(
+                        run.id,
+                        status=CrawlStatus.stopped.value,
+                        finished_at=utc_now_iso(),
+                        nodes_discovered=nodes_discovered,
+                        edges_discovered=edges_discovered,
+                        private_count=private_count,
+                        error_count=error_count,
+                        filtered_count=filtered_count,
+                        friend_count_filtered_count=friend_count_filtered_count,
+                        prior_pool_filtered_count=prior_pool_filtered_count,
+                        message=event.message,
+                        last_event=event.message,
+                    )
+                    return
+
+                # ── 优雅停止：完成当前层 ──
                 if control.cancel:
-                    event = self.append_event(run.id, "warn", "cancelled", "用户已取消")
+                    event = self.append_event(run.id, "warn", "cancelled", "用户停止扫描，完成当前层后停止（数据保留）")
                     self.repo.update_crawl_run(
                         run.id,
                         status=CrawlStatus.cancelled.value,
@@ -127,51 +232,69 @@ class CrawlManager:
                 candidate_edges: dict[str, list[FriendEdge]] = defaultdict(list)
                 same_pool_edges: list[FriendEdge] = []
                 next_depth = depth + 1
-                for current_id in sorted(current_layer):
+                for idx, current_id in enumerate(sorted(current_layer), start=1):
+                    # ── 内部暂停/强制中断检查 ──
+                    while control.pause and not control.force_stop:
+                        await asyncio.sleep(0.5)
+                    if control.force_stop:
+                        break
                     if current_id in expanded:
                         continue
                     expanded.add(current_id)
-                    event = self.append_event(run.id, "info", "expand", f"正在展开深度 {depth}: {current_id}")
+                    layer_total = len(current_layer)
+                    root_name = root.persona_name or root.steam_id
+                    self.append_event(
+                        run.id, "info", "expand",
+                        f"深度{depth} 第{idx}/{layer_total}个: {current_id} (节点总计{len(discovered)})",
+                    )
                     self.repo.update_crawl_run(
                         run.id,
-                        message=event.message,
-                        last_event=event.message,
                         current_depth=depth,
                         current_steam_id=current_id,
-                        queue_size=len(current_layer),
+                        queue_size=layer_total - idx,
                         expanded_count=len(expanded),
-                        progress_percent=self._progress(nodes_discovered, run.max_nodes, False),
+                        nodes_discovered=len(discovered),
+                        progress_percent=self._progress(len(discovered), run.max_nodes, False),
                     )
 
-                    cached = self.repo.get_cached_friend_list(current_id, payload.cache_valid_days)
+                    cached = self.repo.get_cached_friend_list(current_id, payload.cache_valid_days, self.project_id)
                     used_cache = False
                     if cached is not None:
                         status, cached_ids = cached
                         if status == "private":
                             private_count += 1
-                            event = self.append_event(run.id, "warn", "private", f"好友列表私密 (缓存): {current_id}")
-                            self.repo.update_crawl_run(run.id, private_count=private_count, last_event=event.message)
+                            self.append_event(run.id, "warn", "private", f"[缓存] 私密: {current_id}")
+                            self.repo.update_crawl_run(run.id, private_count=private_count)
                             continue
                         friend_ids = cached_ids
                         used_cache = True
+                        self.append_event(run.id, "info", "expand", f"  └ 缓存命中: {len(friend_ids)} 位好友")
                     else:
                         try:
                             friends = await self.steam.get_friend_list(current_id)
+                            consecutive_auth_errors = 0
                         except SteamApiError as exc:
                             error_count += 1
-                            event = self.append_event(run.id, "error", "friends", f"好友列表请求失败: {current_id} ({exc})")
-                            self.repo.update_crawl_run(run.id, error_count=error_count, last_event=event.message)
+                            self.append_event(run.id, "error", "friends", f"[API错误] {current_id}: {exc}")
+                            self.repo.update_crawl_run(run.id, error_count=error_count)
+                            if exc.status_code in {401, 403}:
+                                consecutive_auth_errors += 1
+                                if consecutive_auth_errors >= 5:
+                                    raise RuntimeError("Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。")
+                            else:
+                                consecutive_auth_errors = 0
                             continue
 
                         if friends.private:
                             private_count += 1
-                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private")
-                            event = self.append_event(run.id, "warn", "private", f"好友列表不可访问: {current_id}")
-                            self.repo.update_crawl_run(run.id, private_count=private_count, last_event=event.message)
+                            self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private", friend_ids=[], project_id=self.project_id)
+                            self.append_event(run.id, "warn", "private", f"[API] 私密: {current_id}")
+                            self.repo.update_crawl_run(run.id, private_count=private_count)
                             continue
 
-                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public")
+                        self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friends.friend_ids), friend_count_status="public", friend_ids=friends.friend_ids, project_id=self.project_id)
                         friend_ids = friends.friend_ids
+                        self.append_event(run.id, "info", "expand", f"  └ API返回: {len(friend_ids)} 位好友")
 
                     for friend_id in friend_ids:
                         edge_key = tuple(sorted((current_id, friend_id)))
@@ -185,26 +308,72 @@ class CrawlManager:
                         if edge_key not in edges_seen:
                             candidate_edges[friend_id].append(edge)
 
-                    if not used_cache and payload.delay_ms:
-                        await asyncio.sleep(payload.delay_ms / 1000)
+
+
+                # ── 内层循环后再次检查强制中断 ──
+                if control.force_stop:
+                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    self.repo.update_crawl_run(
+                        run.id,
+                        status=CrawlStatus.stopped.value,
+                        finished_at=utc_now_iso(),
+                        nodes_discovered=len(discovered),
+                        edges_discovered=edges_discovered,
+                        private_count=private_count,
+                        error_count=error_count,
+                        filtered_count=filtered_count,
+                        friend_count_filtered_count=friend_count_filtered_count,
+                        prior_pool_filtered_count=prior_pool_filtered_count,
+                        message=event.message,
+                        last_event=event.message,
+                    )
+                    return
 
                 accepted_ids: list[str] = []
                 candidate_metrics: dict[str, dict[str, object]] = {}
+                no_deeper_scan: set[str] = set()
                 uses_friend_count_filter = payload.friend_count_min is not None or payload.friend_count_max is not None
+
+                # ── 跨层前层连接统计 ──
+                cross_links: dict[str, int] = {}
+                if payload.prior_pool_min_links:
+                    inner_pool = [sid for sid, d in discovered.items() if d <= depth]
+                    if inner_pool and candidate_hits:
+                        cross_links = self.repo.count_inner_layer_links(
+                            list(candidate_hits.keys()), inner_pool, self.project_id,
+                        )
+                        self.append_event(
+                            run.id, "info", "filter",
+                            f"跨层连接查询完成: {len(cross_links)} 位候选与内层 {len(inner_pool)} 用户有连接",
+                        )
+
                 ordered_candidates = sorted(candidate_hits, key=lambda steam_id: (-len(candidate_hits[steam_id]), steam_id))
                 for friend_id in ordered_candidates:
                     if len(discovered) >= run.max_nodes:
+                        self.append_event(run.id, "warn", "limit", f"已达节点上限 {run.max_nodes}，停止收候选")
                         break
-                    prior_links = len(candidate_hits[friend_id])
-                    if payload.prior_pool_min_links and prior_links < payload.prior_pool_min_links:
+
+                    current_layer_links = len(candidate_hits[friend_id])
+                    inner_links = cross_links.get(friend_id, 0)
+                    total_prior_links = max(current_layer_links, inner_links)
+
+                    # ── 判断是否阻止深层扫描 ──
+                    skip_deeper = False
+
+                    # 跨层连接检查：不通过则收录但标记为孤岛，不再展开
+                    if payload.prior_pool_min_links and total_prior_links < payload.prior_pool_min_links:
                         prior_pool_filtered_count += 1
                         filtered_count += 1
-                        continue
+                        skip_deeper = True
+                        self.append_event(
+                            run.id, "warn", "filter",
+                            f"孤立节点-收录但不展开: {friend_id} (跨层连接={total_prior_links} < 需要≥{payload.prior_pool_min_links}), 已与前面用户形成'孤岛'",
+                        )
 
                     friend_count: int | None = None
                     friend_count_status = "unknown"
                     if uses_friend_count_filter:
-                        cached_candidate = self.repo.get_cached_friend_list(friend_id, payload.cache_valid_days)
+                        cached_candidate = self.repo.get_cached_friend_list(friend_id, payload.cache_valid_days, self.project_id)
                         if cached_candidate is not None:
                             c_status, c_ids = cached_candidate
                             friend_count_status = c_status
@@ -213,31 +382,49 @@ class CrawlManager:
                         else:
                             try:
                                 candidate_friends = await self.steam.get_friend_list(friend_id)
-                            except SteamApiError:
+                                consecutive_auth_errors = 0
+                            except SteamApiError as exc:
                                 friend_count_status = "error"
+                                if exc.status_code in {401, 403}:
+                                    consecutive_auth_errors += 1
+                                    if consecutive_auth_errors >= 5:
+                                        raise RuntimeError("Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。")
+                                else:
+                                    consecutive_auth_errors = 0
                             else:
                                 if candidate_friends.private:
                                     friend_count_status = "private"
-                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private")
+                                    self.repo.mark_friend_list_status(friend_id, "private", friend_count=None, friend_count_status="private", friend_ids=[], project_id=self.project_id)
                                 else:
                                     friend_count_status = "public"
                                     friend_count = len(candidate_friends.friend_ids)
-                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public")
-                            if payload.delay_ms:
-                                await asyncio.sleep(payload.delay_ms / 1000)
+                                    self.repo.mark_friend_list_status(friend_id, "public", friend_count=friend_count, friend_count_status="public", friend_ids=candidate_friends.friend_ids, project_id=self.project_id)
+
 
                         if not self._friend_count_matches(friend_count, friend_count_status, payload):
                             friend_count_filtered_count += 1
                             filtered_count += 1
-                            continue
+                            skip_deeper = True
+                            self.append_event(
+                                run.id, "warn", "filter",
+                                f"好友数超限-收录但不展开: {friend_id} (好友数={friend_count or '?'}, 范围 {payload.friend_count_min or 0}~{payload.friend_count_max or '∞'}), 该用户将不参与更深层扫描!",
+                            )
 
                     discovered[friend_id] = next_depth
                     accepted_ids.append(friend_id)
+                    if skip_deeper:
+                        no_deeper_scan.add(friend_id)
+
+                    label = "收录(不展开)" if skip_deeper else "收录"
+                    self.append_event(
+                        run.id, "info", "accept",
+                        f"{label}: {friend_id} @深度{next_depth} (前层连接={total_prior_links}, 好友数={friend_count or '?'})",
+                    )
                     candidate_metrics[friend_id] = {
                         "friend_count": friend_count,
                         "friend_count_status": friend_count_status,
-                        "prior_pool_link_count": prior_links,
-                        "root_closeness_score": self._score(next_depth, prior_links, friend_count),
+                        "prior_pool_link_count": total_prior_links,
+                        "root_closeness_score": self._score(next_depth, total_prior_links, friend_count),
                         "last_scored_crawl_id": run.id,
                     }
 
@@ -250,7 +437,12 @@ class CrawlManager:
                             new_edges.append(edge)
 
                 if accepted_ids:
-                    self.append_event(run.id, "info", "summary", f"正在批量获取 {len(accepted_ids)} 个用户资料")
+                    active = len(accepted_ids) - len(no_deeper_scan)
+                    soft_filtered = len(no_deeper_scan)
+                    self.append_event(
+                        run.id, "info", "summary",
+                        f"深度{depth}→{next_depth}: 收录{len(accepted_ids)}人 (其中{active}人继续展开, {soft_filtered}人标记不展开), 节点总计{len(discovered)}",
+                    )
                     summaries = await self.steam.get_player_summaries(accepted_ids)
                     by_id = {record.steam_id: record for record in summaries}
                     records: list[SteamUserRecord] = []
@@ -265,14 +457,14 @@ class CrawlManager:
                         record.root_closeness_score = float(metrics.get("root_closeness_score", 0))
                         record.last_scored_crawl_id = str(metrics.get("last_scored_crawl_id", ""))
                         records.append(record)
-                    self.repo.upsert_users(records)
+                    self.repo.upsert_users(records, self.project_id)
                     nodes_discovered = len(discovered)
-                    self.append_event(run.id, "info", "users", f"已写入用户节点，总计 {nodes_discovered}")
+                    self.append_event(run.id, "info", "users", f"已写入用户节点, 总计{nodes_discovered}")
 
                 if new_edges:
-                    self.repo.upsert_relationships(new_edges)
+                    self.repo.upsert_relationships(new_edges, self.project_id)
                     edges_discovered += len(new_edges)
-                    self.append_event(run.id, "info", "edges", f"已写入 {len(new_edges)} 条关系，总计 {edges_discovered}")
+                    self.append_event(run.id, "info", "edges", f"已写入{len(new_edges)}条关系, 总计{edges_discovered}")
 
                 self.repo.update_crawl_run(
                     run.id,
@@ -287,9 +479,12 @@ class CrawlManager:
                     prior_pool_filtered_count=prior_pool_filtered_count,
                     progress_percent=self._progress(nodes_discovered, run.max_nodes, False),
                 )
-                current_layer = set(accepted_ids)
+                current_layer = {sid for sid in accepted_ids if sid not in no_deeper_scan}
 
-            event = self.append_event(run.id, "info", "completed", "抓取完成")
+            event = self.append_event(
+                run.id, "info", "completed",
+                f"抓取完成! 节点{len(discovered)} 关系{edges_discovered} 私密{private_count} 错误{error_count} 筛选{filtered_count}",
+            )
             self.repo.update_crawl_run(
                 run.id,
                 status=CrawlStatus.completed.value,
@@ -321,6 +516,8 @@ class CrawlManager:
                 message=str(exc),
                 last_event=event.message,
             )
+        finally:
+            self.steam.rate_limiter = None
 
     @staticmethod
     def _friend_count_matches(friend_count: int | None, status: str, payload: CrawlCreate) -> bool:

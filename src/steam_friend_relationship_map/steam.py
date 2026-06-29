@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .models import SteamUserRecord
+from .rate_limiter import AdaptiveRateLimiter
 
 
 STEAM_ID_RE = re.compile(r"^\d{17}$")
@@ -33,11 +34,24 @@ class SteamClient:
         *,
         base_url: str = "https://api.steampowered.com",
         client: httpx.AsyncClient | None = None,
+        rate_limiter: AdaptiveRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self._client = client
         self._owns_client = client is None
+        self.rate_limiter = rate_limiter
+        # Parse potential multiple keys separated by whitespace, commas, or semicolons
+        keys = [k.strip() for k in re.split(r"[\s,;]+", api_key) if k.strip()]
+        self.api_keys = keys if keys else [""]
+        self._key_index = 0
+
+    def _get_api_key(self) -> str:
+        if not self.api_keys:
+            return ""
+        key = self.api_keys[self._key_index]
+        self._key_index = (self._key_index + 1) % len(self.api_keys)
+        return key
 
     async def __aenter__(self) -> "SteamClient":
         if self._client is None:
@@ -125,8 +139,10 @@ class SteamClient:
         # 安全注意事项：Steam Web API 要求 api_key 作为 URL 查询参数传递（GET ?key=...）。
         # 虽然通过 HTTPS 加密传输，但 key 会出现在服务器访问日志和可能的中间代理日志中。
         # 应用层日志已通过 AppLogBuffer.redact() 脱敏处理。
-        if not self.api_key:
+        current_key = self._get_api_key()
+        if not current_key:
             raise SteamApiError("缺少 STEAM_API_KEY")
+        params["key"] = current_key
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=12)
             self._owns_client = True
@@ -135,16 +151,26 @@ class SteamClient:
         last_error: Exception | None = None
         for attempt in range(retries):
             try:
+                if self.rate_limiter:
+                    await self.rate_limiter.wait()
                 response = await self._client.get(url, params=params)
                 # 429 和 5xx 通常是临时问题，做轻量退避后重试。
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < retries - 1:
+                    if self.rate_limiter:
+                        await self.rate_limiter.report_backoff()
                     await asyncio.sleep(0.8 * (attempt + 1))
                     continue
                 if response.status_code >= 400:
+                    if self.rate_limiter:
+                        await self.rate_limiter.report_backoff()
                     raise SteamApiError(f"Steam API 请求失败: HTTP {response.status_code}", response.status_code)
+                if self.rate_limiter:
+                    await self.rate_limiter.report_success()
                 return response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
+                if self.rate_limiter:
+                    await self.rate_limiter.report_backoff()
                 if attempt < retries - 1:
                     await asyncio.sleep(0.8 * (attempt + 1))
                     continue

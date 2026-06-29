@@ -6,6 +6,7 @@ from typing import Any
 from datetime import UTC, datetime, timedelta
 
 from neo4j import GraphDatabase
+from .graph_repo import IGraphRepository
 from .models import (
     CrawlRun,
     CrawlStatus,
@@ -17,12 +18,22 @@ from .models import (
     GraphEdge,
     GraphNode,
     GraphResponse,
+    ProjectCreate,
+    ProjectInfo,
+    ProjectListResponse,
     SteamUserRecord,
     utc_now_iso,
 )
 
 
-class Neo4jRepository:
+class Neo4jRepositoryImpl(IGraphRepository):
+    """Neo4j 数据访问层。
+
+    Security note: Cypher 查询中深度值经过 ``_safe_depth()`` 校验后以 f-string
+    形式拼接。Neo4j 不支持参数化变长路径模式 ``*..$depth``，因此必须在应用层
+    保证 depth 为安全整数后方可内插。
+    """
+
     def __init__(self, uri: str, user: str, password: str) -> None:
         self.uri = uri
         self.user = user
@@ -31,6 +42,11 @@ class Neo4jRepository:
 
     def close(self) -> None:
         self.driver.close()
+
+    @staticmethod
+    def _safe_depth(value: int, maximum: int = 4) -> int:
+        """将深度值钳制到安全范围，供 f-string 拼接 Cypher 查询使用。"""
+        return max(0, min(int(value), maximum))
 
     def test_connection(self) -> str:
         self.driver.verify_connectivity()
@@ -41,12 +57,112 @@ class Neo4jRepository:
         statements = [
             "CREATE CONSTRAINT steam_user_id IF NOT EXISTS FOR (u:SteamUser) REQUIRE u.steam_id IS UNIQUE",
             "CREATE CONSTRAINT crawl_run_id IF NOT EXISTS FOR (r:CrawlRun) REQUIRE r.id IS UNIQUE",
+            "CREATE CONSTRAINT project_id IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE",
         ]
         with self.driver.session() as session:
             for statement in statements:
                 session.run(statement).consume()
 
-    def start_crawl_run(self, run: CrawlRun) -> None:
+    # ── Project management ────────────────────────────────────────────
+
+    def ensure_default_project(self) -> str:
+        """Ensure the 'default' project exists and return its id."""
+        return self.create_project(ProjectCreate(name="默认项目"), project_id="default")
+
+    def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
+        import uuid
+        pid = project_id or str(uuid.uuid4())
+        now = utc_now_iso()
+        with self.driver.session() as session:
+            session.run(
+                """
+                MERGE (p:Project {id: $pid})
+                ON CREATE SET p.name = $name, p.created_at = $now
+                ON MATCH SET p.name = $name
+                """,
+                pid=pid,
+                name=payload.name,
+                now=now,
+            ).consume()
+        return pid
+
+    def delete_project(self, project_id: str) -> bool:
+        if project_id == "default":
+            return False
+        with self.driver.session() as session:
+            result = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=project_id).single()
+            if result is None:
+                return False
+            session.run(
+                """
+                MATCH (u:SteamUser {project_id: $pid})
+                DETACH DELETE u
+                """,
+                pid=project_id,
+            ).consume()
+            session.run(
+                """
+                MATCH (r:CrawlRun {project_id: $pid})
+                DETACH DELETE r
+                """,
+                pid=project_id,
+            ).consume()
+            session.run(
+                """
+                MATCH (p:Project {id: $pid})
+                DETACH DELETE p
+                """,
+                pid=project_id,
+            ).consume()
+        return True
+
+    def project_exists(self, project_id: str) -> bool:
+        with self.driver.session() as session:
+            result = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=project_id).single()
+            return result is not None
+
+    def list_projects(self) -> ProjectListResponse:
+        with self.driver.session() as session:
+            records = list(session.run(
+                """
+                MATCH (p:Project)
+                OPTIONAL MATCH (u:SteamUser)
+                WHERE u.project_id = p.id OR EXISTS { (u)-[:STEAM_FRIEND {project_id: p.id}]-() }
+                OPTIONAL MATCH ()-[r:STEAM_FRIEND {project_id: p.id}]-()
+                OPTIONAL MATCH (c:CrawlRun {project_id: p.id})
+                RETURN p,
+                       count(DISTINCT u) AS user_count,
+                       count(DISTINCT r) AS rel_count,
+                       count(DISTINCT c) AS crawl_count
+                ORDER BY p.created_at DESC
+                """
+            ))
+        if not records:
+            # 首次启动：确保默认项目和 schema 存在
+            self.ensure_schema()
+            self.ensure_default_project()
+            return ProjectListResponse(
+                projects=[ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())],
+                active_project_id="",
+            )
+        projects = []
+        for record in records:
+            p = dict(record["p"])
+            projects.append(ProjectInfo(
+                id=p.get("id", ""),
+                name=p.get("name", ""),
+                created_at=p.get("created_at", ""),
+                steam_users=record["user_count"] or 0,
+                relationships=record["rel_count"] or 0,
+                crawl_runs=record["crawl_count"] or 0,
+            ))
+        return ProjectListResponse(projects=projects, active_project_id="")
+
+    # ── Data operations (project-scoped) ──────────────────────────────
+
+    def start_crawl_run(self, run: CrawlRun, project_id: str) -> None:
+        data = run.model_dump(mode="json")
+        data["project_id"] = project_id
         with self.driver.session() as session:
             session.run(
                 """
@@ -70,9 +186,10 @@ class Neo4jRepository:
                     r.last_event = $last_event,
                     r.filtered_count = $filtered_count,
                     r.friend_count_filtered_count = $friend_count_filtered_count,
-                    r.prior_pool_filtered_count = $prior_pool_filtered_count
+                    r.prior_pool_filtered_count = $prior_pool_filtered_count,
+                    r.project_id = $project_id
                 """,
-                **run.model_dump(mode="json"),
+                **data,
             ).consume()
 
     def update_crawl_run(self, run_id: str, **fields: Any) -> None:
@@ -89,62 +206,70 @@ class Neo4jRepository:
             return None
         return CrawlRun(**dict(record["r"]))
 
-    def upsert_users(self, users: Iterable[SteamUserRecord]) -> None:
+    def upsert_users(self, users: Iterable[SteamUserRecord], project_id: str) -> None:
         rows = [user.model_dump(mode="json") for user in users]
         if not rows:
             return
         now = utc_now_iso()
+        batch_size = 1000
         with self.driver.session() as session:
             # 用户节点用 steam_id 幂等写入，备注/标签/分类由本工具维护，不被 Steam 资料覆盖。
-            session.run(
-                """
-                UNWIND $users AS user
-                MERGE (u:SteamUser {steam_id: user.steam_id})
-                ON CREATE SET u.first_seen_at = $now
-                SET u.last_seen_at = $now,
-                    u.persona_name = user.persona_name,
-                    u.profile_url = user.profile_url,
-                    u.avatar = user.avatar,
-                    u.avatar_medium = user.avatar_medium,
-                    u.avatar_full = user.avatar_full,
-                    u.visibility_state = user.visibility_state,
-                    u.profile_state = user.profile_state,
-                    u.friend_count = CASE
-                        WHEN user.friend_count IS NULL THEN u.friend_count
-                        ELSE user.friend_count
-                    END,
-                    u.friend_count_status = CASE
-                        WHEN user.friend_count_status IS NULL OR user.friend_count_status = "unknown" THEN coalesce(u.friend_count_status, "unknown")
-                        ELSE user.friend_count_status
-                    END,
-                    u.prior_pool_link_count = CASE
-                        WHEN user.prior_pool_link_count > coalesce(u.prior_pool_link_count, 0) THEN user.prior_pool_link_count
-                        ELSE coalesce(u.prior_pool_link_count, 0)
-                    END,
-                    u.root_closeness_score = CASE
-                        WHEN user.root_closeness_score > coalesce(u.root_closeness_score, 0) THEN user.root_closeness_score
-                        ELSE coalesce(u.root_closeness_score, 0)
-                    END,
-                    u.last_scored_crawl_id = CASE
-                        WHEN user.last_scored_crawl_id = "" THEN coalesce(u.last_scored_crawl_id, "")
-                        ELSE user.last_scored_crawl_id
-                    END,
-                    u.friend_list_status = CASE
-                        WHEN coalesce(u.friend_list_status, "unknown") = "private" THEN "private"
-                        ELSE user.friend_list_status
-                    END,
-                    u.depth_min = CASE
-                        WHEN u.depth_min IS NULL OR user.depth_min < u.depth_min THEN user.depth_min
-                        ELSE u.depth_min
-                    END,
-                    u.note = coalesce(u.note, ""),
-                    u.tags = coalesce(u.tags, []),
-                    u.category = coalesce(u.category, "")
-                """,
-                users=rows,
-                now=now,
-            ).consume()
-
+            for i in range(0, len(rows), batch_size):
+                batch_rows = rows[i : i + batch_size]
+                session.run(
+                    """
+                    UNWIND $users AS user
+                    MERGE (u:SteamUser {steam_id: user.steam_id})
+                    ON CREATE SET u.first_seen_at = $now
+                    SET u.last_seen_at = $now,
+                        u.project_id = CASE
+                            WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
+                            ELSE u.project_id
+                        END,
+                        u.persona_name = user.persona_name,
+                        u.profile_url = user.profile_url,
+                        u.avatar = user.avatar,
+                        u.avatar_medium = user.avatar_medium,
+                        u.avatar_full = user.avatar_full,
+                        u.visibility_state = user.visibility_state,
+                        u.profile_state = user.profile_state,
+                        u.friend_count = CASE
+                            WHEN user.friend_count IS NULL THEN u.friend_count
+                            ELSE user.friend_count
+                        END,
+                        u.friend_count_status = CASE
+                            WHEN user.friend_count_status IS NULL OR user.friend_count_status = "unknown" THEN coalesce(u.friend_count_status, "unknown")
+                            ELSE user.friend_count_status
+                        END,
+                        u.prior_pool_link_count = CASE
+                            WHEN user.prior_pool_link_count > coalesce(u.prior_pool_link_count, 0) THEN user.prior_pool_link_count
+                            ELSE coalesce(u.prior_pool_link_count, 0)
+                        END,
+                        u.root_closeness_score = CASE
+                            WHEN user.root_closeness_score > coalesce(u.root_closeness_score, 0) THEN user.root_closeness_score
+                            ELSE coalesce(u.root_closeness_score, 0)
+                        END,
+                        u.last_scored_crawl_id = CASE
+                            WHEN user.last_scored_crawl_id = "" THEN coalesce(u.last_scored_crawl_id, "")
+                            ELSE user.last_scored_crawl_id
+                        END,
+                        u.friend_list_status = CASE
+                            WHEN user.friend_list_status = "unknown" THEN coalesce(u.friend_list_status, "unknown")
+                            WHEN coalesce(u.friend_list_status, "unknown") = "private" THEN "private"
+                            ELSE user.friend_list_status
+                        END,
+                        u.depth_min = CASE
+                            WHEN u.depth_min IS NULL OR user.depth_min < u.depth_min THEN user.depth_min
+                            ELSE u.depth_min
+                        END,
+                        u.note = coalesce(u.note, ""),
+                        u.tags = coalesce(u.tags, []),
+                        u.category = coalesce(u.category, "")
+                    """,
+                    users=batch_rows,
+                    now=now,
+                    project_id=project_id,
+                ).consume()
     def mark_friend_list_status(
         self,
         steam_id: str,
@@ -152,12 +277,18 @@ class Neo4jRepository:
         *,
         friend_count: int | None = None,
         friend_count_status: str | None = None,
+        friend_ids: list[str] | None = None,
+        project_id: str = "",
     ) -> None:
         with self.driver.session() as session:
             session.run(
                 """
                 MERGE (u:SteamUser {steam_id: $steam_id})
                 SET u.friend_list_status = $status,
+                    u.project_id = CASE
+                        WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
+                        ELSE u.project_id
+                    END,
                     u.friend_count = CASE
                         WHEN $friend_count IS NULL THEN u.friend_count
                         ELSE $friend_count
@@ -166,6 +297,10 @@ class Neo4jRepository:
                         WHEN $friend_count_status IS NULL THEN coalesce(u.friend_count_status, "unknown")
                         ELSE $friend_count_status
                     END,
+                    u.friend_ids = CASE
+                        WHEN $friend_ids IS NULL THEN u.friend_ids
+                        ELSE $friend_ids
+                    END,
                     u.friend_list_fetched_at = $now,
                     u.last_seen_at = $now
                 """,
@@ -173,10 +308,12 @@ class Neo4jRepository:
                 status=status,
                 friend_count=friend_count,
                 friend_count_status=friend_count_status,
+                friend_ids=friend_ids,
+                project_id=project_id,
                 now=utc_now_iso(),
             ).consume()
 
-    def get_cached_friend_list(self, steam_id: str, valid_days: int) -> tuple[str, list[str]] | None:
+    def get_cached_friend_list(self, steam_id: str, valid_days: int, project_id: str) -> tuple[str, list[str]] | None:
         if valid_days <= 0:
             return None
         cutoff_time = (datetime.now(UTC) - timedelta(days=valid_days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -185,7 +322,7 @@ class Neo4jRepository:
                 """
                 MATCH (u:SteamUser {steam_id: $steam_id})
                 WHERE u.friend_list_fetched_at >= $cutoff_time
-                RETURN u.friend_list_status AS status
+                RETURN u.friend_list_status AS status, u.friend_ids AS friend_ids
                 """,
                 steam_id=steam_id,
                 cutoff_time=cutoff_time,
@@ -193,39 +330,43 @@ class Neo4jRepository:
             if not record:
                 return None
             status = record["status"] or "unknown"
+            if status == "unknown":
+                return None
             if status != "public":
                 return status, []
             
-            friends = session.run(
-                """
-                MATCH (u:SteamUser {steam_id: $steam_id})-[:STEAM_FRIEND]-(f:SteamUser)
-                RETURN f.steam_id AS friend_id
-                """,
-                steam_id=steam_id,
-            )
-            return status, [row["friend_id"] for row in friends]
+            friend_ids = record["friend_ids"]
+            if friend_ids is None:
+                # 兼容旧版本数据：若没有保存的完整好友列表属性，视为缓存失效，触发重新抓取以进行自愈
+                return None
+            return status, list(friend_ids)
 
-    def upsert_relationships(self, edges: Iterable[FriendEdge]) -> None:
+    def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         rows = [edge.model_dump(mode="json") for edge in edges]
         if not rows:
             return
         now = utc_now_iso()
+        batch_size = 1000
         with self.driver.session() as session:
             # Steam 好友关系按无向边处理，避免 A-B 和 B-A 重复出现。
-            session.run(
-                """
-                UNWIND $edges AS edge
-                MATCH (a:SteamUser {steam_id: edge.from_id})
-                MATCH (b:SteamUser {steam_id: edge.to_id})
-                MERGE (a)-[r:STEAM_FRIEND]-(b)
-                ON CREATE SET r.first_seen_at = $now
-                SET r.last_seen_at = $now,
-                    r.crawl_id = edge.crawl_id,
-                    r.source_depth = edge.source_depth
-                """,
-                edges=rows,
-                now=now,
-            ).consume()
+            for i in range(0, len(rows), batch_size):
+                batch_rows = rows[i : i + batch_size]
+                session.run(
+                    """
+                    UNWIND $edges AS edge
+                    MATCH (a:SteamUser {steam_id: edge.from_id})
+                    MATCH (b:SteamUser {steam_id: edge.to_id})
+                    MERGE (a)-[r:STEAM_FRIEND]-(b)
+                    ON CREATE SET r.first_seen_at = $now
+                    SET r.last_seen_at = $now,
+                        r.crawl_id = edge.crawl_id,
+                        r.source_depth = edge.source_depth,
+                        r.project_id = $project_id
+                    """,
+                    edges=batch_rows,
+                    now=now,
+                    project_id=project_id,
+                ).consume()
 
     def patch_user(self, steam_id: str, *, note: str | None = None, tags: list[str] | None = None, category: str | None = None) -> None:
         fields: dict[str, Any] = {}
@@ -246,6 +387,52 @@ class Neo4jRepository:
                 **fields,
             ).consume()
 
+    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
+        rows = []
+        for p in patches:
+            rows.append({
+                "steam_id": p.get("steam_id"),
+                "note": p.get("note"),
+                "tags": p.get("tags"),
+                "category": p.get("category"),
+            })
+        if not rows:
+            return
+        with self.driver.session() as session:
+            session.run(
+                """
+                UNWIND $patches AS patch
+                MATCH (u:SteamUser {steam_id: patch.steam_id})
+                SET u.note = CASE WHEN patch.note IS NOT NULL THEN patch.note ELSE u.note END,
+                    u.tags = CASE WHEN patch.tags IS NOT NULL THEN patch.tags ELSE u.tags END,
+                    u.category = CASE WHEN patch.category IS NOT NULL THEN patch.category ELSE u.category END,
+                    u.last_seen_at = $now
+                """,
+                patches=rows,
+                now=utc_now_iso(),
+            ).consume()
+
+    def count_inner_layer_links(
+        self, candidate_ids: list[str], inner_pool_ids: list[str], project_id: str
+    ) -> dict[str, int]:
+        """统计每个候选人与内层用户池（深度更浅的层）的连接数。"""
+        if not candidate_ids or not inner_pool_ids:
+            return {}
+        with self.driver.session() as session:
+            records = session.run(
+                """
+                UNWIND $candidates AS cid
+                MATCH (c:SteamUser {steam_id: cid})-[r:STEAM_FRIEND]-(inner:SteamUser)
+                WHERE inner.steam_id IN $inner_pool
+                  AND coalesce(r.project_id, '') IN ['', $project_id]
+                RETURN cid AS candidate, count(DISTINCT inner) AS links
+                """,
+                candidates=candidate_ids,
+                inner_pool=inner_pool_ids,
+                project_id=project_id,
+            )
+            return {row["candidate"]: row["links"] for row in records}
+
     def get_graph(
         self,
         *,
@@ -259,11 +446,14 @@ class Neo4jRepository:
         prior_pool_min_links: int = 0,
         sort_by: str = "depth",
         sort_dir: str = "asc",
+        project_id: str = "default",
     ) -> GraphResponse:
-        depth = max(0, min(depth, 4))
-        limit = max(1, min(limit, 2000))
+        depth = self._safe_depth(depth)
+        limit = max(1, min(limit, 100000))
         filters = []
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit, "project_id": project_id}
+        if not root:
+            filters.append("(coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $project_id}]-() })")
         if query:
             params["query"] = query.lower()
             filters.append("(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)")
@@ -293,8 +483,10 @@ class Neo4jRepository:
             if root:
                 params["root"] = root
                 # Root 查询只取指定层数内的子图，防止前端一次渲染过大的全库图。
+                # 过滤路径中的关系必须属于该项目，节点自身不再受限于 u.project_id (因为用户节点在 Neo4j 中是全局唯一的)
                 node_query = f"""
                 MATCH p=(r:SteamUser {{steam_id: $root}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
+                WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
                 WITH DISTINCT n
                 {where}
                 RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
@@ -319,12 +511,14 @@ class Neo4jRepository:
                     """
                     MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
                     WHERE a.steam_id IN $ids AND b.steam_id IN $ids AND a.steam_id < b.steam_id
+                      AND coalesce(r.project_id, '') IN ['', $project_id]
                     RETURN a.steam_id AS source,
                            b.steam_id AS target,
                            COUNT { (a)-[:STEAM_FRIEND]-(:SteamUser)-[:STEAM_FRIEND]-(b) } AS strength
                     LIMIT 5000
                     """,
                     ids=ids,
+                    project_id=project_id,
                 )
             )
         edges = [
@@ -333,16 +527,18 @@ class Neo4jRepository:
         ]
         return GraphResponse(nodes=nodes, edges=edges, limited=limited)
 
-    def get_shortest_path(self, from_id: str, to_id: str, max_depth: int) -> GraphResponse:
-        max_depth = max(1, min(max_depth, 4))
+    def get_shortest_path(self, from_id: str, to_id: str, max_depth: int, project_id: str = "default") -> GraphResponse:
+        max_depth = self._safe_depth(max_depth, 4)
         with self.driver.session() as session:
             record = session.run(
                 f"""
                 MATCH p=shortestPath((a:SteamUser {{steam_id: $from_id}})-[:STEAM_FRIEND*..{max_depth}]-(b:SteamUser {{steam_id: $to_id}}))
+                WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN ['', $project_id])
                 RETURN nodes(p) AS nodes, relationships(p) AS rels
                 """,
                 from_id=from_id,
                 to_id=to_id,
+                project_id=project_id,
             ).single()
             if record is None:
                 return GraphResponse(nodes=[], edges=[])
@@ -355,8 +551,8 @@ class Neo4jRepository:
                 edges.append(GraphEdge(id=f"{source}-{target}", source=source, target=target, strength=1))
             return GraphResponse(nodes=nodes, edges=edges)
 
-    def get_friend_circle_analysis(self, root: str, max_depth: int = 3, min_mutual: int = 2, limit: int = 50) -> FriendCircleAnalysisResponse:
-        max_depth = max(2, min(max_depth, 4))
+    def get_friend_circle_analysis(self, root: str, max_depth: int = 3, min_mutual: int = 2, limit: int = 50, project_id: str = "default") -> FriendCircleAnalysisResponse:
+        max_depth = self._safe_depth(max_depth, 4)
         min_mutual = max(0, min_mutual)
         limit = max(1, min(limit, 100))
         with self.driver.session() as session:
@@ -365,6 +561,7 @@ class Neo4jRepository:
                     f"""
                     MATCH (root:SteamUser {{steam_id: $root}})
                     MATCH p=(root)-[:STEAM_FRIEND*2..{max_depth}]-(candidate:SteamUser)
+                    WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN ['', $project_id])
                     WITH root, candidate, min(length(p)) AS depth
                     WHERE candidate.steam_id <> $root
                       AND NOT EXISTS {{
@@ -393,6 +590,7 @@ class Neo4jRepository:
                     root=root,
                     min_mutual=min_mutual,
                     limit=limit,
+                    project_id=project_id,
                 )
             )
         candidates = []
@@ -414,33 +612,50 @@ class Neo4jRepository:
             )
         return FriendCircleAnalysisResponse(root=root, candidates=candidates)
 
-    def get_top_degree(self, limit: int = 12) -> list[GraphNode]:
+    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
         with self.driver.session() as session:
             records = list(
                 session.run(
                     """
                     MATCH (n:SteamUser)
+                    WHERE coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $project_id}]-() }
                     RETURN n, COUNT { (n)-[:STEAM_FRIEND]-() } AS degree
                     ORDER BY degree DESC
                     LIMIT $limit
                     """,
                     limit=max(1, min(limit, 50)),
+                    project_id=project_id,
                 )
             )
         return [self._graph_node(record["n"], record["degree"]) for record in records]
 
-    def get_db_stats(self) -> DbStats:
+    def get_db_stats(self, project_id: str = "default") -> DbStats:
         with self.driver.session() as session:
-            steam_users = session.run("MATCH (u:SteamUser) RETURN count(u) AS count").single()["count"]
-            relationships = session.run("MATCH ()-[r:STEAM_FRIEND]->() RETURN count(r) AS count").single()["count"]
-            crawl_runs = session.run("MATCH (c:CrawlRun) RETURN count(c) AS count").single()["count"]
+            steam_users = session.run(
+                """
+                MATCH (u:SteamUser)
+                WHERE coalesce(u.project_id, '') IN ['', $pid] OR EXISTS { (u)-[:STEAM_FRIEND {project_id: $pid}]-() }
+                RETURN count(u) AS count
+                """,
+                pid=project_id,
+            ).single()["count"]
+            relationships = session.run(
+                "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN ['', $pid] RETURN count(r) AS count",
+                pid=project_id,
+            ).single()["count"]
+            crawl_runs = session.run(
+                "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN ['', $pid] RETURN count(c) AS count",
+                pid=project_id,
+            ).single()["count"]
             latest_record = session.run(
                 """
                 MATCH (latest:CrawlRun)
+                WHERE coalesce(latest.project_id, '') IN ['', $pid]
                 RETURN latest
                 ORDER BY latest.started_at DESC
                 LIMIT 1
-                """
+                """,
+                pid=project_id,
             ).single()
         latest = latest_record["latest"] if latest_record is not None else None
         return DbStats(
@@ -450,18 +665,29 @@ class Neo4jRepository:
             latest_crawl=CrawlRun(**dict(latest)) if latest is not None else None,
         )
 
-    def export_graph(self) -> ExportResponse:
+    def export_graph(self, project_id: str = "default") -> ExportResponse:
         with self.driver.session() as session:
-            nodes = [dict(record["n"]) for record in session.run("MATCH (n:SteamUser) RETURN n ORDER BY n.depth_min, n.persona_name")]
+            nodes = [
+                dict(record["n"])
+                for record in session.run(
+                    """
+                    MATCH (n:SteamUser)
+                    WHERE coalesce(n.project_id, '') IN ['', $pid] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $pid}]-() }
+                    RETURN n ORDER BY n.depth_min, n.persona_name
+                    """,
+                    pid=project_id,
+                )
+            ]
             edges = [
                 {"source": record["source"], "target": record["target"]}
                 for record in session.run(
                     """
-                    MATCH (a:SteamUser)-[:STEAM_FRIEND]-(b:SteamUser)
-                    WHERE a.steam_id < b.steam_id
+                    MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+                    WHERE a.steam_id < b.steam_id AND coalesce(r.project_id, '') IN ['', $pid]
                     RETURN a.steam_id AS source, b.steam_id AS target
                     ORDER BY source, target
-                    """
+                    """,
+                    pid=project_id,
                 )
             ]
         return ExportResponse(nodes=nodes, edges=edges)
