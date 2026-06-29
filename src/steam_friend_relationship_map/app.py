@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -87,7 +88,8 @@ def create_app(
     settings = settings or get_settings()
     secret_store = secret_store or SecretStore()
     log_buffer = AppLogBuffer()
-    log_buffer.set_secret_values([settings.steam_api_key, settings.neo4j_password])
+    keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
+    log_buffer.set_secret_values(keys + [settings.neo4j_password])
     install_log_handler(log_buffer)
     repo = repo or get_repository(settings)
     try:
@@ -103,7 +105,8 @@ def create_app(
         old_steam = steam
         clear_settings_cache()
         settings = get_settings()
-        log_buffer.set_secret_values([settings.steam_api_key, settings.neo4j_password])
+        keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
+        log_buffer.set_secret_values(keys + [settings.neo4j_password])
         repo = old_repo if provided_repo is not None else get_repository(settings)
         try:
             repo.ensure_schema()
