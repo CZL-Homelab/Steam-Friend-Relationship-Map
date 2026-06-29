@@ -123,6 +123,8 @@ class SettingsTestResult(BaseModel):
     neo4j_ok: bool
     steam_message: str
     neo4j_message: str
+    steam_reason: str = "unknown"
+    neo4j_reason: str = "unknown"
 
 
 class PublicSettings(BaseModel):

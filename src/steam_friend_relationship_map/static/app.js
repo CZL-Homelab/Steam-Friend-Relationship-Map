@@ -13,6 +13,7 @@ const FALLBACK_ZH = {
   "path.noPath": "没有路径",
   "profile.empty": "选择一个节点",
   "profile.steamProfile": "Steam 主页",
+  "connection.notTested": "尚未测试",
   "status.idle": "空闲",
   "status.unknown": "未知",
   "toast.rootRequired": "请输入 Root URL",
@@ -190,6 +191,14 @@ function setStatus(id, status) {
   const node = $(id);
   node.dataset.status = status;
   node.textContent = statusText(status);
+}
+
+function setConnectionDetail(id, message, ok = null) {
+  const node = $(id);
+  if (!node) return;
+  node.textContent = message || t("connection.notTested");
+  node.classList.toggle("ok", ok === true);
+  node.classList.toggle("failed", ok === false);
 }
 
 function toast(message) {
@@ -690,18 +699,24 @@ async function saveSettings() {
   $("steamApiKeyInput").value = "";
   $("neo4jPasswordInput").value = "";
   await loadSettings();
+  await testSettings({ silent: true });
   toast(t("toast.settingsSaved"));
 }
 
-async function testSettings() {
+async function testSettings({ silent = false } = {}) {
   setStatus("steamStatus", "testing");
   setStatus("neo4jStatus", "testing");
+  setConnectionDetail("steamStatusDetail", t("status.testing"));
+  setConnectionDetail("neo4jStatusDetail", t("status.testing"));
   const result = await api("/api/settings/test", { method: "POST", body: "{}" });
   setStatus("steamStatus", result.steam_ok ? "ok" : "failed");
   setStatus("neo4jStatus", result.neo4j_ok ? "ok" : "failed");
-  toast(`${result.steam_message} · ${result.neo4j_message}`);
+  setConnectionDetail("steamStatusDetail", result.steam_message, result.steam_ok);
+  setConnectionDetail("neo4jStatusDetail", result.neo4j_message, result.neo4j_ok);
+  if (!silent) toast(`${result.steam_message} · ${result.neo4j_message}`);
   appendSystemLog(result.steam_ok && result.neo4j_ok ? "info" : "warn", "settings", `${result.steam_message} · ${result.neo4j_message}`);
   await loadDbStats().catch(() => {});
+  return result;
 }
 
 function validateCrawlPayload() {
@@ -1521,7 +1536,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   autoLoadLastConfig();
   wireEvents();
   $("pathResult").dataset.state = "empty";
-  loadSettings().catch((error) => appendSystemLog("error", "settings", error.message));
+  loadSettings()
+    .then(() => testSettings({ silent: true }))
+    .catch((error) => appendSystemLog("error", "settings", error.message));
   loadGraph().catch(() => {});
   loadDbStats().catch((error) => appendSystemLog("error", "db", error.message));
   loadTopDegree().catch((error) => appendSystemLog("error", "stats", error.message));

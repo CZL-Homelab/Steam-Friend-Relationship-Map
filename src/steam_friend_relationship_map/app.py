@@ -11,6 +11,7 @@ from dotenv import set_key
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from neo4j.exceptions import AuthError, ServiceUnavailable
 
 from .crawler import CrawlManager
 from .logs import AppLogBuffer, install_log_handler
@@ -173,6 +174,30 @@ def create_app(
     def safe_detail(exc: object) -> str:
         return log_buffer.redact(str(exc))
 
+    def classify_steam_test_error(exc: object) -> tuple[str, str]:
+        message = safe_detail(exc)
+        if isinstance(exc, SteamApiError):
+            if "缺少 STEAM_API_KEY" in message:
+                return "missing_key", "未配置 Steam API Key。请先在左侧“安全配置”里填写并保存 Steam API Key。"
+            if exc.status_code in {401, 403}:
+                return "invalid_key", f"Steam API Key 无效或无权限（HTTP {exc.status_code}）。请检查 Key 是否复制完整、是否仍可用。"
+            if exc.status_code == 429:
+                return "rate_limited", "Steam API 暂时限流（HTTP 429）。请稍后再测试，或增加抓取延迟。"
+            if exc.status_code is not None:
+                return "steam_http", f"Steam API 返回 HTTP {exc.status_code}。请确认 Steam 服务可访问后重试。"
+            return "steam_connection", f"无法连接 Steam API。请检查网络或代理设置。详情：{message}"
+        return "steam_connection", f"Steam 测试失败。请检查网络或 Steam API Key。详情：{message}"
+
+    def classify_neo4j_test_error(exc: object) -> tuple[str, str]:
+        message = safe_detail(exc)
+        if not settings.neo4j_password:
+            return "missing_password", "未配置 Neo4j 密码。请先在左侧“安全配置”里填写并保存 Neo4j Password。"
+        if isinstance(exc, AuthError) or "Unauthorized" in message or "authentication" in message.lower():
+            return "auth_failed", "Neo4j 用户名或密码不正确。请检查 NEO4J_USER 和 Neo4j Password。"
+        if isinstance(exc, ServiceUnavailable) or "Failed to establish connection" in message or "Connection refused" in message:
+            return "server_unavailable", f"无法连接 Neo4j。请确认 Neo4j Desktop/Server 已启动，并且地址是 {settings.neo4j_uri}。"
+        return "neo4j_error", f"Neo4j 测试失败。请检查服务、地址和凭据。详情：{message}"
+
     @app.middleware("http")
     async def csrf_check(request: Request, call_next):  # type: ignore[no-untyped-def]
         """CSRF 防护：仅拦截跨域写请求。同源请求（Origin 为空）放行。"""
@@ -259,24 +284,38 @@ def create_app(
     async def test_settings() -> SettingsTestResult:
         steam_ok = False
         neo4j_ok = False
+        steam_reason = "unknown"
+        neo4j_reason = "unknown"
         steam_message = "Steam API Key 未测试"
         neo4j_message = "Neo4j 未测试"
         try:
-            async with SteamClient(settings.steam_api_key) as test_steam:
-                await test_steam.get_player_summaries(["76561197960435530"])
+            if provided_steam is not None:
+                await steam.get_player_summaries(["76561197960435530"])
+            else:
+                async with SteamClient(settings.steam_api_key) as test_steam:
+                    await test_steam.get_player_summaries(["76561197960435530"])
             steam_ok = True
+            steam_reason = "ok"
             steam_message = "Steam API Key 可用"
         except Exception as exc:
-            steam_message = str(exc)
-            log_buffer.append("warn", "settings", f"Steam 连接测试失败: {exc}")
+            steam_reason, steam_message = classify_steam_test_error(exc)
+            log_buffer.append("warn", "settings", f"Steam 连接测试失败: {steam_message}")
         try:
             repo.ensure_schema()
             neo4j_message = repo.test_connection()
             neo4j_ok = True
+            neo4j_reason = "ok"
         except Exception as exc:
-            neo4j_message = str(exc)
-            log_buffer.append("warn", "settings", f"Neo4j 连接测试失败: {exc}")
-        return SettingsTestResult(steam_ok=steam_ok, neo4j_ok=neo4j_ok, steam_message=steam_message, neo4j_message=neo4j_message)
+            neo4j_reason, neo4j_message = classify_neo4j_test_error(exc)
+            log_buffer.append("warn", "settings", f"Neo4j 连接测试失败: {neo4j_message}")
+        return SettingsTestResult(
+            steam_ok=steam_ok,
+            neo4j_ok=neo4j_ok,
+            steam_message=steam_message,
+            neo4j_message=neo4j_message,
+            steam_reason=steam_reason,
+            neo4j_reason=neo4j_reason,
+        )
 
     # ── Project management ────────────────────────────────────────────
 
