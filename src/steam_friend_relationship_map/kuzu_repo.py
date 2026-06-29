@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import threading
 from collections.abc import Iterable
 from typing import Any
 
@@ -43,10 +44,13 @@ class KuzuRepositoryImpl(IGraphRepository):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         buffer_pool_size_bytes = int(buffer_pool_size_gb * 1024 * 1024 * 1024)
         self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
+        self._local = threading.local()
 
     def _get_conn(self) -> kuzu.Connection:
-        """获取一个独立的连接。因为 Kùzu 连接是非线程安全的，在此动态实例化。"""
-        return kuzu.Connection(self.db)
+        """获取连接。使用 thread-local 缓存以保证线程安全并重用连接。"""
+        if not hasattr(self._local, "conn"):
+            self._local.conn = kuzu.Connection(self.db)
+        return self._local.conn
 
     def close(self) -> None:
         """Kùzu 引擎生命周期由系统垃圾回收管理，此处仅作空实现。"""
