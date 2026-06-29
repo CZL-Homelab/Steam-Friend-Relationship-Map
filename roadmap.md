@@ -249,6 +249,30 @@ Kùzu 是 Schema-first（强 Schema）数据库，需要显式声明节点表（
 | 潜在风险 | 风险描述 | 应对预案 / 缓解措施 |
 | :--- | :--- | :--- |
 | **高级 APOC 函数不兼容** | 部分 Neo4j 高级 APOC 函数在 Kùzu 中不原生支持。 | 在 [KuzuRepositoryImpl](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/kuzu_repo.py) 的对应方法内，使用后端 Python 的业务逻辑来补全该部分复杂计算，确保向上层 Service 返回的数据结构与 Neo4j 完全一致。 |
-| **本地数据可视化缺失** | Neo4j 拥有内置的浏览器控制台，而 Kùzu 默认不带 GUI 界面。 | 在项目文档中补充 `kuzu-explorer` 的本地一键配置与启动指南，方便开源开发者进行直观的图数据调试与 Debug。 |
+| **本地数据可视化缺失** | Neo4j 拥有内置的浏览器控制台，而 Kùzu 默认不带 GUI 界面。 | 在项目文档中补充 `kuzu-explorer` 的本地一键配置与启动指南，方便开源开发者进行直观 of 图数据调试与 Debug。 |
 | **多项目逻辑冲突** | 本项目具有基于 `project_id` 的强数据隔离逻辑。 | 确保 [KuzuRepositoryImpl](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/kuzu_repo.py) 在设计 Node Table 和 Rel Table 时将 `project_id` 属性纳入过滤，或在 Kùzu 的 schema 中实现完全等价的逻辑划分。 |
+
+---
+
+## 5. 前端 UI/UX 体验优化专项路线图 (UI/UX Optimization Roadmap)
+
+为了进一步提升页面的操作效率、视觉美感和多分辨率适配性，本项目在开发分支 [dev/feat/ui-optimization](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/) 下规划了以下前端体验调优任务：
+
+### 5.1 侧边栏布局精简与折叠重构 (Sidebar Density & Collapsing)
+- **任务目标**：针对左侧侧边栏 [.sidebar](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/index.html#L13-L323) 中过多的配置面板，进行分类整理或多 Tab 标签页改造，减少小分辨率屏幕下的剧烈垂直滚动。
+- **实施计划**：
+  1. 将核心扫描参数（Root URL, 层数, 节点数）与辅助参数（扫描前筛选、朋友圈/路径筛选）进行页签化（Tabs）或者手风琴式互斥折叠（Accordion）隔离。
+  2. 将偏全局的“项目管理”与“安全配置”移动至顶部标题栏的侧边抽屉（Drawer）或设置弹窗（Modal）中，精简侧边栏常驻空间。
+
+### 5.2 自定义美化滚动条 (Custom Scrollbar Design)
+- **任务目标**：替代各浏览器默认的粗大、不美观的系统级滚动条，使页面滚动组件视觉风格与 Steam 经典暗色/阳极氧化铝亮色保持高度统一。
+- **实施计划**：
+  1. 在 [styles.css](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/styles.css) 中为 Webkit 引擎和 Firefox 的滚动条属性设计自定义变量与滑块配色。
+  2. 实现滚动条在 Hover 状态下加深、Leave 状态下半透明缩窄的现代微交互。
+
+### 5.3 移除局部 px 硬编码，引入弹性单位与流式布局 (Fluid Typography & Relative Units)
+- **任务目标**：提升系统在不同显示屏及缩放比例下的可读性，增强多端适配的健壮度。
+- **实施计划**：
+  1. 全面排查 [styles.css](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/styles.css) 与 inline 样式，逐步将表单控件大小、文字字号、图标外边距等硬编码像素值改为 `rem` / `em`。
+  2. 将固定宽度的面板拖拽机制改进为支持按视口占比（`vw`/百分比）的流式伸缩逻辑，优化 [app.js](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/app.js) 的拖动计算公式。
 

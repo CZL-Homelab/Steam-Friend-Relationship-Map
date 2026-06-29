@@ -71,6 +71,52 @@ function initTheme() {
   });
 }
 
+function getCssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function updateCytoscapeStyle() {
+  if (!cy) return;
+  const ink = getCssVar("--ink");
+  const panel = getCssVar("--panel");
+  const teal = getCssVar("--teal");
+  const blue = getCssVar("--blue");
+  const rose = getCssVar("--rose");
+  const amber = getCssVar("--amber");
+  const muted = getCssVar("--muted");
+
+  cy.style()
+    .selector("node")
+    .style({
+      "background-color": teal,
+      "border-color": panel,
+      color: ink,
+      "text-background-color": panel,
+    })
+    .selector("node[status = 'private']")
+    .style({
+      "border-color": rose,
+    })
+    .selector("node.analysis-focus")
+    .style({
+      "border-color": blue,
+    })
+    .selector("node.analysis-evidence")
+    .style({
+      "border-color": amber,
+    })
+    .selector("edge")
+    .style({
+      "line-color": muted,
+    })
+    .selector(":selected")
+    .style({
+      "border-color": blue,
+      "line-color": blue,
+    })
+    .update();
+}
+
 function applyTheme(mode) {
   if (mode === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
@@ -81,6 +127,7 @@ function applyTheme(mode) {
     document.documentElement.toggleAttribute("data-theme", prefersDark);
   }
   localStorage.setItem("sfm_theme", mode);
+  updateCytoscapeStyle();
 }
 
 function cycleTheme() {
@@ -300,6 +347,8 @@ function initGraph() {
     layout: { name: "cose", animate: false, padding: 40 },
     wheelSensitivity: 0.18,
   });
+
+  updateCytoscapeStyle();
 
   cy.on("tap", "node", (event) => {
     selectedNode = event.target.data().node;
