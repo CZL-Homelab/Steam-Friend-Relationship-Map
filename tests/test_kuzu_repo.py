@@ -53,6 +53,20 @@ def test_kuzu_lifecycle_and_schema(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert not repo.project_exists("test-1")
 
 
+def test_kuzu_close_releases_database_lock(tmp_path: Path) -> None:
+    db_path = tmp_path / "kuzu_db"
+    repo = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+    repo.ensure_schema()
+    repo.close()
+
+    reopened = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+    try:
+        reopened.ensure_schema()
+        assert reopened.test_connection()
+    finally:
+        reopened.close()
+
+
 def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()

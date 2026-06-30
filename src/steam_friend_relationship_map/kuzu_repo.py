@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import threading
 from collections.abc import Iterable
 from typing import Any
@@ -45,16 +46,32 @@ class KuzuRepositoryImpl(IGraphRepository):
         buffer_pool_size_bytes = int(buffer_pool_size_gb * 1024 * 1024 * 1024)
         self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
         self._local = threading.local()
+        self._closed = False
 
     def _get_conn(self) -> kuzu.Connection:
         """获取连接。使用 thread-local 缓存以保证线程安全并重用连接。"""
+        if self._closed:
+            raise RuntimeError("Kuzu repository is closed")
         if not hasattr(self._local, "conn"):
             self._local.conn = kuzu.Connection(self.db)
         return self._local.conn
 
     def close(self) -> None:
-        """Kùzu 引擎生命周期由系统垃圾回收管理，此处仅作空实现。"""
-        pass
+        """Release Kuzu objects so the embedded database file lock can be reacquired."""
+        if self._closed:
+            return
+        self._closed = True
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            close_conn = getattr(conn, "close", None)
+            if callable(close_conn):
+                close_conn()
+            delattr(self._local, "conn")
+        close_db = getattr(self.db, "close", None)
+        if callable(close_db):
+            close_db()
+        self.db = None  # type: ignore[assignment]
+        gc.collect()
 
     def test_connection(self) -> str:
         conn = self._get_conn()

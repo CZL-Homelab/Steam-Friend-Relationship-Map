@@ -83,6 +83,17 @@ def get_repository(settings: Settings) -> IGraphRepository:
         raise ValueError(f"Unsupported graph database engine: {engine}")
 
 
+def repository_settings_changed(old: Settings, new: Settings) -> bool:
+    return (
+        old.graph_db_engine != new.graph_db_engine
+        or old.kuzu_db_path != new.kuzu_db_path
+        or old.kuzu_buffer_pool_size_gb != new.kuzu_buffer_pool_size_gb
+        or old.neo4j_uri != new.neo4j_uri
+        or old.neo4j_user != new.neo4j_user
+        or old.neo4j_password != new.neo4j_password
+    )
+
+
 def create_app(
     settings: Settings | None = None,
     repo: IGraphRepository | None = None,
@@ -107,26 +118,35 @@ def create_app(
 
     async def rebuild_runtime() -> None:
         nonlocal settings, repo, steam, manager
+        old_settings = settings
         old_repo = repo
         old_steam = steam
         clear_settings_cache()
         settings = get_settings()
         keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
         log_buffer.set_secret_values(keys + [settings.neo4j_password])
-        repo = old_repo if provided_repo is not None else get_repository(settings)
+        should_replace_repo = (
+            provided_repo is None
+            and repository_settings_changed(old_settings, settings)
+        )
+        if should_replace_repo:
+            old_repo.close()
+            repo = get_repository(settings)
+        else:
+            repo = old_repo
         try:
             repo.ensure_schema()
         except Exception as exc:
             log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
-        steam = old_steam if provided_steam is not None else SteamClient(settings.steam_api_key)
+        if provided_steam is None and old_settings.steam_api_key != settings.steam_api_key:
+            await old_steam.aclose()
+            steam = SteamClient(settings.steam_api_key)
+        else:
+            steam = old_steam
         manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
         app.state.repo = repo
         app.state.steam = steam
         app.state.manager = manager
-        if provided_repo is None:
-            old_repo.close()
-        if provided_steam is None:
-            await old_steam.aclose()
 
     def public_settings(message: str = "") -> PublicSettings:
         raw = Settings()

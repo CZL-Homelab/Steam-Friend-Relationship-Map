@@ -300,6 +300,56 @@ def test_project_switch_strips_crlf() -> None:
         assert args[2] == "testinjectedname"
 
 
+def test_project_switch_keeps_existing_repository_when_only_active_project_changes(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import steam_friend_relationship_map.app as app_module
+
+    class TrackingRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def list_projects(self) -> object:
+            from steam_friend_relationship_map.models import ProjectInfo, ProjectListResponse
+            return ProjectListResponse(
+                projects=[
+                    ProjectInfo(id="default", name="Default"),
+                    ProjectInfo(id="project-a", name="Project A"),
+                ],
+                active_project_id="default",
+            )
+
+        def create_project(self, payload: object, project_id: str | None = None) -> str:
+            return project_id or "project-a"
+
+        def project_exists(self, project_id: str) -> bool:
+            return project_id in {"default", "project-a"}
+
+    repo_instances: list[TrackingRepo] = []
+    initial_settings = Settings(active_project="default")
+    switched_settings = Settings(active_project="project-a")
+
+    def fake_get_repository(_: Settings) -> TrackingRepo:
+        repo = TrackingRepo()
+        repo_instances.append(repo)
+        return repo
+
+    monkeypatch.setattr(app_module, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "get_repository", fake_get_repository)
+    monkeypatch.setattr(app_module, "get_settings", lambda: switched_settings)
+
+    app = create_app(settings=initial_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post("/api/projects/switch", json={"name": "project-a"})
+
+    assert response.status_code == 200
+    assert response.json()["active_project_id"] == "project-a"
+    assert len(repo_instances) == 1
+    assert repo_instances[0].closed is False
+
+
 def test_app_endpoints_blocked_during_crawl() -> None:
     from unittest.mock import MagicMock
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
