@@ -34,7 +34,7 @@
 
 ---
 
-这是一个本地运行的 Steam 好友关系图谱工具。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层向下抓取公开好友关系，写入本机 Neo4j Desktop 数据库，并在本地 Web GUI 中展示头像、昵称、Steam 主页、备注、关系线、中心节点和最短路径。
+这是一个本地运行的 Steam 好友关系图谱工具。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层向下抓取公开好友关系，支持写入本地轻量级嵌入式图数据库 Kùzu（默认，免安装）或外部 Neo4j Desktop 数据库（可选），并在本地 Web GUI 中展示头像、昵称、Steam 主页、备注、关系线、中心节点和最短路径。
 
 ## 这个工具是做什么的？
 
@@ -44,7 +44,7 @@
 - 自动生成好友关系图，不需要手动画线。
 - 每个节点可以显示头像、昵称、Steam 主页、备注、标签和分类。
 - 支持查询两个人之间的最短关系路径。
-- 支持在本项目 GUI 中查看，也可以用 Neo4j Bloom 做更专业的大图分析。
+- 支持在本项目 GUI 中查看，也可以用 Kùzu Explorer 或 Neo4j Bloom 做更专业的大图分析。
 
 本项目只使用公开 Steam Web API，不读取 Cookie，不接入 Steam 登录态，不尝试绕过隐私设置。
 
@@ -56,36 +56,41 @@
 | ----------------- | -------------------------------------------------------- |
 | Steam 账号        | 用来申请 Steam Web API Key                               |
 | Steam Web API Key | 用来调用公开 Steam Web API，建议通过网页保存到系统凭据库 |
-| Neo4j Desktop (可选) | 若选用 Neo4j 引擎，则用来运行本地数据库并使用 Bloom 探索；若使用默认的 Kùzu 引擎则免安装 |
+| Kùzu 嵌入式图数据库 (默认) | **免安装**，在应用运行进程内由 Python 直接拉起，数据保存在 `./data/graph_kuzu` |
+| Neo4j Desktop (可选) | 若选用 Neo4j 引擎，则用来运行本地数据库并使用 Bloom 探索 |
 | uv                | 用来管理 Python 环境和依赖                               |
 | Python 3.12+      | 项目运行环境，`uv` 会自动使用/管理                       |
 
 推荐先只抓 1 层或 2 层。Steam 好友网络会指数增长，3-4 层可能很快接近或超过上限。
 
-## Neo4j Desktop 还有用吗？
+## 数据库引擎选择：Kùzu 还是 Neo4j？
 
-有用，而且当前项目里它不是多余组件。
+本项目采用**图数据库“双引擎”架构**，默认使用 Kùzu 嵌入式图数据库，同时也支持外部 Neo4j 数据库。
 
-本项目自己的 Web GUI 负责日常操作：配置连接、启动抓取、看卡片式人物信息、编辑备注、查最短路径。Neo4j Desktop 负责运行本地图数据库、保存所有节点和关系，并提供 Neo4j Bloom 这种更专业的图谱探索视图。
+- **Kùzu 嵌入式数据库（默认）**：
+  - **优势**：**免去任何数据库软件的安装**，解压即用。它直接作为 Python 的一个包（嵌入式进程内）运行，内存与磁盘开销极低。数据默认保存在本地目录 `./data/graph_kuzu` 下。
+  - **可视化**：支持通过本项目自带的 Web GUI 进行日常关系图谱查看、搜索和路径查询；如果需要更底层的 Cypher 数据调试，可使用 `kuzu-explorer` 容器（见后文说明）。
+- **Neo4j Desktop（可选）**：
+  - **优势**：支持使用 Neo4j Bloom 等外部成熟的图探索生态和算法包，适合更大规模的社交分析和专业图探索。
+  - **配合使用**：本项目自己的 Web GUI 负责“抓取和日常操作”（如看卡片式人物信息、编辑备注、查最短路径）；Neo4j Desktop/Bloom 则更适合大图谱的高级分析。
 
-简单说：
-
-- 本项目 GUI：更适合“抓取和日常操作”。
-- Neo4j Desktop：更适合“本地数据库管理和长期存储”。
-- Neo4j Bloom：更适合“大图谱探索、路径分析、图数据库视角检查”。
-
-以后如果你想换成 Neo4j Aura 或远程 Neo4j，也可以改 `.env` 里的连接地址。但当前本地使用场景下，推荐继续保留 Neo4j Desktop。
+以后如果你想换成 Neo4j Aura 或远程 Neo4j，也可以改 `.env` 里的连接地址。但为了快速上手，建议直接使用默认的 Kùzu 引擎。
 
 ## 架构
 
 ```text
-Steam Web API
-    ↓
-FastAPI + BFS 抓取器
-    ↓
-Neo4j Desktop 本地数据库
-    ↓
-本项目 Web GUI / Neo4j Bloom
+       Steam Web API
+             ↓
+     FastAPI + BFS 抓取器
+       /             \
+   (默认)             (可选)
+   Kùzu 引擎          Neo4j 引擎
+ (本地嵌入式存储)    (外部图数据库)
+       \             /
+              ↓
+       本项目 Web GUI (Cytoscape.js)
+              ↓
+  (针对 Neo4j 可选) Neo4j Bloom / (针对 Kùzu) Kùzu Explorer
 ```
 
 核心能力：
@@ -336,7 +341,7 @@ Steam Web API Key 用来访问公开 Steam API。没有 Key 时无法抓取好�
 
 如果你已经用旧版方式写进 `.env`，项目仍会兼容读取，但建议迁移到网页端安全配置。
 
-### 第 6 步：准备 Neo4j Desktop
+### 第 6 步：准备 Neo4j Desktop（若使用默认的 Kùzu 引擎，可直接跳过第 6、7 步）
 
 1. 打开 Neo4j Desktop。
 2. 创建一个 Project，或者使用已有 Project。
@@ -359,7 +364,7 @@ neo4j
 
 这个工具会通过 Bolt 连接 Neo4j Desktop，把 Steam 用户和好友关系写进去。
 
-### 第 7 步：填写 Neo4j 非敏感连接信息
+### 第 7 步：填写 Neo4j 非敏感连接信息（若使用默认的 Kùzu 引擎，可直接跳过第 6、7 步）
 
 继续编辑 `.env`：
 
@@ -372,9 +377,29 @@ NEO4J_USER=neo4j
 
 ### 第 8 步：检查完整 `.env`
 
-最终 `.env` 应该类似这样：
+最终的 `.env` 配置文件会根据你选择的引擎而有所不同。
+
+#### 方案 A：使用 Kùzu 嵌入式数据库（默认推荐，免安装）
+
+如果你想使用 Kùzu 作为底层图数据库，你的 `.env` 应当如下：
 
 ```env
+GRAPH_DB_ENGINE=kuzu
+KUZU_DB_PATH=./data/graph_kuzu         # 本地数据存储路径
+KUZU_BUFFER_POOL_SIZE_GB=1             # Kùzu 内存缓冲池大小限制
+APP_HOST=127.0.0.1
+APP_PORT=8000
+DEFAULT_MAX_DEPTH=1
+DEFAULT_MAX_NODES=200
+DEFAULT_DELAY_MS=500
+```
+
+#### 方案 B：使用 Neo4j Desktop 数据库（可选）
+
+如果你想使用 Neo4j 作为底层图数据库，你的 `.env` 应当如下：
+
+```env
+GRAPH_DB_ENGINE=neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 APP_HOST=127.0.0.1
@@ -384,19 +409,22 @@ DEFAULT_MAX_NODES=200
 DEFAULT_DELAY_MS=500
 ```
 
-每一项含义：
+每一项配置的含义：
 
-| 配置项              | 含义                               |
-| ------------------- | ---------------------------------- |
-| `NEO4J_URI`         | Neo4j Bolt 连接地址                |
-| `NEO4J_USER`        | Neo4j 用户名，通常是 `neo4j`       |
-| `APP_HOST`          | 本地服务监听地址，默认 `127.0.0.1` |
-| `APP_PORT`          | 本地服务端口，默认 `8000`          |
-| `DEFAULT_MAX_DEPTH` | 默认抓取层数，建议先用 `1` 或 `2`  |
-| `DEFAULT_MAX_NODES` | 默认最大节点数                     |
-| `DEFAULT_DELAY_MS`  | Steam API 请求间隔，单位毫秒       |
+| 配置项 | 含义 |
+| :--- | :--- |
+| `GRAPH_DB_ENGINE` | 激活的图数据库引擎类型，可选 `kuzu` 或 `neo4j` |
+| `KUZU_DB_PATH` | Kùzu 数据库文件的本地存储路径 |
+| `KUZU_BUFFER_POOL_SIZE_GB` | 限制 Kùzu 占用物理内存的最大缓冲池大小 (GB) |
+| `NEO4J_URI` | Neo4j Bolt 连接地址 |
+| `NEO4J_USER` | Neo4j 用户名，通常是 `neo4j` |
+| `APP_HOST` | 本地服务监听地址，默认 `127.0.0.1` |
+| `APP_PORT` | 本地服务端口，默认 `8000` |
+| `DEFAULT_MAX_DEPTH` | 默认抓取层数，建议先用 `1` 或 `2` |
+| `DEFAULT_MAX_NODES` | 默认最大节点数 |
+| `DEFAULT_DELAY_MS` | Steam API 请求间隔，单位毫秒 |
 
-Steam API Key 和 Neo4j 密码不在这个表里，因为它们属于敏感信息，建议在网页端保存到系统凭据库。
+Steam API Key 和 Neo4j 密码不在该配置文件中，因为它们属于敏感信息，建议在网页端保存到系统凭据库中。
 
 ### 第 9 步：安装依赖
 
@@ -406,11 +434,13 @@ Steam API Key 和 Neo4j 密码不在这个表里，因为它们属于敏感信�
 uv sync
 ```
 
-它会创建虚拟环境并安装 FastAPI、Neo4j Driver、httpx 等依赖。
+它会创建虚拟环境并自动安装 FastAPI、Kùzu 数据库驱动、Neo4j Driver、httpx 等所有项目依赖。
 
 ### 第 10 步：启动本地应用
 
-确认 Neo4j Desktop 数据库已经 Start，然后运行：
+如果您使用的是 Neo4j 引擎，请确认 Neo4j Desktop 数据库已经 Start 运行；如果使用的是默认 the Kùzu 引擎，则无需启动任何外部数据库。
+
+在终端中运行：
 
 ```powershell
 uv run steam-friend-map
