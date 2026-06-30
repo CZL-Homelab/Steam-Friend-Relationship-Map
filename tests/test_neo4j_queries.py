@@ -8,3 +8,10 @@ def test_neo4j_queries_do_not_use_removed_size_pattern() -> None:
 
     assert "size((n)-[:STEAM_FRIEND]-())" not in source
     assert "COUNT { (n)-[:STEAM_FRIEND]-() }" in source
+
+
+def test_neo4j_relationship_merge_is_project_scoped() -> None:
+    source = Path("src/steam_friend_relationship_map/neo4j_repo.py").read_text(encoding="utf-8")
+
+    assert "MERGE (a)-[r:STEAM_FRIEND {project_id: $project_id}]-(b)" in source
+    assert "MERGE (a)-[r:STEAM_FRIEND]-(b)" not in source

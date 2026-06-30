@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -149,7 +149,7 @@ class PublicSettings(BaseModel):
 
 
 class SettingsPatch(BaseModel):
-    graph_db_engine: str | None = None
+    graph_db_engine: Literal["kuzu", "neo4j"] | None = None
     kuzu_db_path: str | None = None
     kuzu_buffer_pool_size_gb: int | None = Field(default=None, ge=1, le=64)
     neo4j_uri: str | None = None
@@ -161,9 +161,16 @@ class SettingsPatch(BaseModel):
     default_delay_ms: int | None = Field(default=None, ge=0, le=10000)
     default_cache_valid_days: int | None = Field(default=None, ge=0)
 
+    @field_validator("kuzu_db_path", "neo4j_uri", "neo4j_user", "app_host")
+    @classmethod
+    def strip_crlf(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.replace("\n", "").replace("\r", "")
+
 
 class SecretUpdate(BaseModel):
-    name: str
+    name: Literal["steam_api_key", "neo4j_password"]
     value: str = Field(min_length=1)
 
 
@@ -238,6 +245,14 @@ class ProjectInfo(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        cleaned = value.replace("\n", "").replace("\r", "").strip()
+        if not cleaned:
+            raise ValueError("project name cannot be empty")
+        return cleaned
 
 
 class ProjectListResponse(BaseModel):

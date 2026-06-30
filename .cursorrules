@@ -7,16 +7,16 @@ This file defines the core project description, architecture, file structure, ro
 ## 1. Project Description & Core Architecture
 
 ### 1.1 Project Overview
-This project is a locally run **Steam Friend Relationship Map Analysis & Visualization Tool**. Users input a public Steam profile URL. The tool treats this user as the Root node and uses a Breadth-First Search (BFS) algorithm to crawl public friend relationships downward by 1-4 levels. The data is saved in a local Neo4j graph database and visualized as an interactive graph in a local Web GUI.
+This project is a locally run **Steam Friend Relationship Map Analysis & Visualization Tool**. Users input a public Steam profile URL. The tool treats this user as the Root node and uses a Breadth-First Search (BFS) algorithm to crawl public friend relationships downward by 1-4 levels. The data is saved in a local graph database (Kuzu by default, Neo4j optionally) and visualized as an interactive graph in a local Web GUI.
 
 ### 1.2 Core Architecture
 - **Backend**: FastAPI provides asynchronous RESTful APIs, managing BFS crawl states and graph queries.
-- **Graph Database**: Neo4j Desktop (running locally, connected via Bolt protocol).
+- **Graph Database**: Kuzu embedded graph database by default, with optional Neo4j Desktop/Server support over Bolt.
 - **Frontend**: Single-Page Application (SPA) built with HTML5, Vanilla CSS, and ES6 JavaScript. Cytoscape.js renders the graph. Multi-language support is provided via `i18n.json` (Chinese/English).
 - **Environment & Dependency Management**: Python 3.12+ managed by `uv` (executed using `uv sync` and `uv run`).
 
 ### 1.3 Data Isolation & Crawl Lifecycle
-- **Project Isolation**: The project supports multi-project management. All crawled nodes (`SteamUser`) and relationships (`STEAM_FRIEND`) in the Neo4j database are logically partitioned using a `project_id` property. Every database query in `neo4j_repo.py` and data mutation in `crawler.py` must strictly respect and be bounded by the current `project_id` context. Global queries or modifications without `project_id` scoping are strictly prohibited to prevent cross-project data pollution.
+- **Project Isolation**: The project supports multi-project management. All crawled nodes (`SteamUser`) and relationships (`STEAM_FRIEND`) in graph repositories are logically partitioned using a `project_id` property. Every database query in `neo4j_repo.py`, `kuzu_repo.py`, and data mutation in `crawler.py` must strictly respect and be bounded by the current `project_id` context. Global queries or modifications without `project_id` scoping are strictly prohibited to prevent cross-project data pollution.
 - **Crawl Task Lifecycle**: The BFS crawling engine supports runtime task control (Pause, Graceful Stop, and Force Stop). All modifications to `crawler.py` or new execution controllers must preserve and handle these lifecycle states gracefully without breaking active task management.
 
 ---
@@ -42,7 +42,11 @@ Steam-Friend-Relationship-Map/
 │       ├── crawler.py                 # BFS crawl runner, manages async task loops, delay, and filter pipeline
 │       ├── logs.py                    # Custom AppLogBuffer & handler mapping to redact secrets in logs
 │       ├── models.py                  # Pydantic schemas, models, and validator rules for API requests/responses
+│       ├── graph_repo.py              # Repository protocol shared by Kuzu and Neo4j backends
+│       ├── kuzu_repo.py               # Kuzu repository layer containing embedded graph queries
 │       ├── neo4j_repo.py              # Neo4j repository layer containing database connectivity & Cypher queries
+│       ├── migration.py               # Bidirectional graph data migration helper
+│       ├── rate_limiter.py            # Adaptive Steam API rate limiter
 │       ├── secrets.py                 # Keyring wrapper to securely store/fetch secrets from system credential stores
 │       ├── settings.py                # System settings loader based on Pydantic-settings
 │       ├── steam.py                   # Steam API wrapper handling profile resolving, summaries, and friend lists

@@ -213,7 +213,8 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 async function api(path, options = {}) {
@@ -1166,10 +1167,10 @@ async function loadFriendCircles() {
   $("friendCircleList").innerHTML = data.candidates
     .map(
       (item) =>
-        `<li><button class="rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>${t("analysis.row", {
+        `<li><button class="rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(t("analysis.row", {
           mutual: item.mutual_count,
           score: item.score,
-        })}</span></button></li>`,
+        }))}</span></button></li>`,
     )
     .join("");
   document.querySelectorAll(".rank-button").forEach((button) => {
