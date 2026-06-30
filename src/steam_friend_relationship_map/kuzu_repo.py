@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import threading
 from collections.abc import Iterable
 from typing import Any
@@ -45,16 +46,32 @@ class KuzuRepositoryImpl(IGraphRepository):
         buffer_pool_size_bytes = int(buffer_pool_size_gb * 1024 * 1024 * 1024)
         self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
         self._local = threading.local()
+        self._closed = False
 
     def _get_conn(self) -> kuzu.Connection:
         """获取连接。使用 thread-local 缓存以保证线程安全并重用连接。"""
+        if self._closed:
+            raise RuntimeError("Kuzu repository is closed")
         if not hasattr(self._local, "conn"):
             self._local.conn = kuzu.Connection(self.db)
         return self._local.conn
 
     def close(self) -> None:
-        """Kùzu 引擎生命周期由系统垃圾回收管理，此处仅作空实现。"""
-        pass
+        """Release Kuzu objects so the embedded database file lock can be reacquired."""
+        if self._closed:
+            return
+        self._closed = True
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            close_conn = getattr(conn, "close", None)
+            if callable(close_conn):
+                close_conn()
+            delattr(self._local, "conn")
+        close_db = getattr(self.db, "close", None)
+        if callable(close_db):
+            close_db()
+        self.db = None  # type: ignore[assignment]
+        gc.collect()
 
     def test_connection(self) -> str:
         conn = self._get_conn()
@@ -610,7 +627,130 @@ class KuzuRepositoryImpl(IGraphRepository):
             category=data.get("category") or "",
             degree=degree,
             friend_count=data.get("friend_count"),
+            friend_count_status=data.get("friend_count_status") or "unknown",
+            prior_pool_link_count=data.get("prior_pool_link_count") or 0,
+            root_closeness_score=data.get("root_closeness_score") or 0,
+            root_route_count=data.get("root_route_count") or 0,
+            root_route_total_hops=data.get("root_route_total_hops") or 0,
+            root_friend_circle_score=data.get("root_friend_circle_score") or 0,
         )
+
+    def _reachable_ids_from_root(
+        self, conn: kuzu.Connection, root: str, depth: int, project_id: str
+    ) -> tuple[list[str], bool, int, bool]:
+        if depth < 0:
+            return [], False, 0, False
+
+        root_res = conn.execute(
+            "MATCH (r:SteamUser) WHERE r.steam_id = $root RETURN r.steam_id",
+            {"root": root},
+        )
+        if not root_res.has_next():
+            return [], False, 0, bool(depth)
+
+        ordered_ids = [root]
+        seen = {root}
+        frontier = [root]
+        reached = 0
+
+        for next_depth in range(1, depth + 1):
+            if not frontier:
+                break
+            res = conn.execute(
+                """
+                MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+                WHERE a.steam_id IN $frontier
+                  AND coalesce(r.project_id, '') IN ['', $project_id]
+                RETURN DISTINCT b.steam_id
+                """,
+                {"frontier": frontier, "project_id": project_id},
+            )
+            next_frontier = []
+            while res.has_next():
+                candidate = res.get_next()[0]
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                ordered_ids.append(candidate)
+                next_frontier.append(candidate)
+            if not next_frontier:
+                break
+            frontier = next_frontier
+            reached = next_depth
+
+        return ordered_ids, True, reached, reached < depth
+
+    def _root_friend_circle_metrics(
+        self,
+        conn: kuzu.Connection,
+        root: str,
+        reachable_ids: list[str],
+        target_ids: list[str],
+        depth: int,
+        project_id: str,
+        route_cap: int = 200,
+    ) -> dict[str, tuple[int, int, float]]:
+        if not reachable_ids or not target_ids:
+            return {}
+        target_set = set(target_ids)
+
+        res = conn.execute(
+            """
+            MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+            WHERE a.steam_id IN $ids AND b.steam_id IN $ids
+              AND coalesce(r.project_id, '') IN ['', $project_id]
+            RETURN a.steam_id, b.steam_id
+            """,
+            {"ids": reachable_ids, "project_id": project_id},
+        )
+        adjacency = {steam_id: set() for steam_id in reachable_ids}
+        while res.has_next():
+            source, target = res.get_next()
+            if source == target:
+                continue
+            adjacency.setdefault(source, set()).add(target)
+            adjacency.setdefault(target, set()).add(source)
+
+        neighbors_by_id = {
+            steam_id: sorted(neighbors)
+            for steam_id, neighbors in adjacency.items()
+        }
+        route_counts = {steam_id: 0 for steam_id in target_set}
+        total_hops = {steam_id: 0 for steam_id in target_set}
+        capped_targets = 0
+        max_capped_targets = max(0, len(target_set - {root}))
+
+        def walk(current: str, remaining_depth: int, path: set[str], hops: int) -> None:
+            nonlocal capped_targets
+            if remaining_depth <= 0:
+                return
+            for neighbor in neighbors_by_id.get(current, ()):
+                if capped_targets >= max_capped_targets:
+                    return
+                if neighbor in path:
+                    continue
+                if neighbor in target_set and route_counts.get(neighbor, 0) < route_cap:
+                    route_counts[neighbor] += 1
+                    total_hops[neighbor] += hops + 1
+                    if neighbor != root and route_counts[neighbor] == route_cap:
+                        capped_targets += 1
+                if remaining_depth > 1:
+                    path.add(neighbor)
+                    walk(neighbor, remaining_depth - 1, path, hops + 1)
+                    path.remove(neighbor)
+
+        walk(root, depth, {root}, 0)
+
+        metrics: dict[str, tuple[int, int, float]] = {}
+        for steam_id in target_ids:
+            if steam_id == root:
+                metrics[steam_id] = (1, 0, 1_000_000.0)
+                continue
+            count = min(route_counts.get(steam_id, 0), route_cap)
+            hops = total_hops.get(steam_id, 0)
+            score = float(count * 1000 - hops) if count else 0.0
+            metrics[steam_id] = (count, hops, score)
+        return metrics
 
     def get_graph(
         self,
@@ -632,6 +772,10 @@ class KuzuRepositoryImpl(IGraphRepository):
         limit = max(1, min(limit, 100000))
         filters = []
         params = {"project_id": project_id}
+        requested_depth: int | None = depth
+        traversal_depth_reached: int | None = None
+        root_found: bool | None = None
+        depth_incomplete = False
 
         if not root:
             filters.append("(coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { MATCH (n)-[r:STEAM_FRIEND]-(:SteamUser) WHERE r.project_id = $project_id })")
@@ -652,6 +796,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             filters.append("coalesce(n.prior_pool_link_count, 0) >= $prior_pool_min_links")
 
         where = "WHERE " + " AND ".join(filters) if filters else ""
+        root_filter = " AND " + " AND ".join(filters) if filters else ""
         sort_map = {
             "depth": "coalesce(n.depth_min, 999)",
             "degree": "degree",
@@ -663,15 +808,24 @@ class KuzuRepositoryImpl(IGraphRepository):
         direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
 
         conn = self._get_conn()
+        root_metrics: dict[str, tuple[int, int, float]] = {}
         if root:
-            params["root"] = root
+            reachable_ids, root_found, traversal_depth_reached, depth_incomplete = self._reachable_ids_from_root(conn, root, depth, project_id)
+            if not root_found or not reachable_ids:
+                return GraphResponse(
+                    nodes=[],
+                    edges=[],
+                    requested_depth=requested_depth,
+                    traversal_depth_reached=traversal_depth_reached,
+                    root_found=root_found,
+                    depth_incomplete=depth_incomplete,
+                )
+            params["reachable_ids"] = reachable_ids
             node_query = f"""
-            WITH $project_id AS pid, $root AS root_id
-            MATCH p=(r:SteamUser {{steam_id: root_id}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
-            WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', pid])
-            WITH DISTINCT n, pid
-            {where}
-            OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN ['', pid]
+            MATCH (n:SteamUser)
+            WHERE n.steam_id IN $reachable_ids
+            {root_filter}
+            OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN ['', $project_id]
             WITH n, count(DISTINCT rel) AS degree
             RETURN n, degree
             ORDER BY {order_expr} {direction}, degree DESC
@@ -698,10 +852,31 @@ class KuzuRepositoryImpl(IGraphRepository):
         limited = len(records) > limit
         records = records[:limit]
         nodes = [self._graph_node(_parse_node(rec[0]), rec[1]) for rec in records]
+        if root and nodes:
+            root_metrics = self._root_friend_circle_metrics(
+                conn,
+                root,
+                reachable_ids,
+                [node.id for node in nodes],
+                depth,
+                project_id,
+            )
+            for node in nodes:
+                route_count, total_hops, score = root_metrics.get(node.id, (0, 0, 0.0))
+                node.root_route_count = route_count
+                node.root_route_total_hops = total_hops
+                node.root_friend_circle_score = score
         ids = [node.id for node in nodes]
 
         if not ids:
-            return GraphResponse(nodes=[], edges=[])
+            return GraphResponse(
+                nodes=[],
+                edges=[],
+                requested_depth=requested_depth,
+                traversal_depth_reached=traversal_depth_reached,
+                root_found=root_found,
+                depth_incomplete=depth_incomplete,
+            )
 
         res_edges = conn.execute(
             """
@@ -717,22 +892,21 @@ class KuzuRepositoryImpl(IGraphRepository):
         edges = []
         while res_edges.has_next():
             row = res_edges.get_next()
-            # Calculate strength locally by counting common neighbors
-            res_strength = conn.execute(
-                """
-                MATCH (a:SteamUser {steam_id: $source})-[:STEAM_FRIEND]-(c:SteamUser)-[:STEAM_FRIEND]-(b:SteamUser {steam_id: $target})
-                RETURN count(c)
-                """,
-                {"source": row[0], "target": row[1]}
-            )
-            strength = res_strength.get_next()[0] if res_strength.has_next() else 1
             edges.append(GraphEdge(
                 id=f"{row[0]}-{row[1]}",
                 source=row[0],
                 target=row[1],
-                strength=max(1, strength)
+                strength=1
             ))
-        return GraphResponse(nodes=nodes, edges=edges, limited=limited)
+        return GraphResponse(
+            nodes=nodes,
+            edges=edges,
+            limited=limited,
+            requested_depth=requested_depth,
+            traversal_depth_reached=traversal_depth_reached,
+            root_found=root_found,
+            depth_incomplete=depth_incomplete,
+        )
 
     def get_shortest_path(
         self, from_id: str, to_id: str, max_depth: int, project_id: str = "default"

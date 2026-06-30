@@ -196,6 +196,9 @@ class GraphNode(BaseModel):
     friend_count_status: str = "unknown"
     prior_pool_link_count: int = 0
     root_closeness_score: float = 0
+    root_route_count: int = 0
+    root_route_total_hops: int = 0
+    root_friend_circle_score: float = 0
 
 
 class GraphEdge(BaseModel):
@@ -209,6 +212,10 @@ class GraphResponse(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     limited: bool = False
+    requested_depth: int | None = None
+    traversal_depth_reached: int | None = None
+    root_found: bool | None = None
+    depth_incomplete: bool = False
 
 
 class ExportResponse(BaseModel):
