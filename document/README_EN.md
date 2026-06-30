@@ -34,7 +34,7 @@
 
 ---
 
-This is a locally-run Steam friend relationship mapping tool. Enter a public Steam profile URL as the root, and it crawls 1–4 layers of public friend relationships, stores them in a local Neo4j Desktop database, and displays avatars, nicknames, Steam profile links, notes, relationship lines, central nodes, and shortest paths in a local Web GUI.
+This is a locally-run Steam friend relationship mapping tool. Enter a public Steam profile URL as the root, and it crawls 1–4 layers of public friend relationships, supporting storage in either a local, lightweight embedded graph database Kùzu (default, zero-install) or an external Neo4j Desktop database (optional), and displays avatars, nicknames, Steam profile links, notes, relationship lines, central nodes, and shortest paths in a local Web GUI.
 
 ## What does this tool do?
 
@@ -44,7 +44,7 @@ It's designed for local organization and exploration of Steam friend networks:
 - Generate relationship graphs automatically — no manual drawing needed.
 - Each node shows avatar, nickname, Steam profile, notes, tags, and category.
 - Find the shortest relationship path between two people.
-- View in this project's GUI, or use Neo4j Bloom for more advanced large-graph analysis.
+- View in this project's GUI, or use Kùzu Explorer or Neo4j Bloom for more advanced large-graph analysis.
 
 This project only uses the public Steam Web API. It does not read cookies, use Steam login, or attempt to bypass privacy settings.
 
@@ -54,36 +54,41 @@ This project only uses the public Steam Web API. It does not read cookies, use S
 | ----------------- | -------------------------------------------------------------------------------- |
 | Steam account     | To request a Steam Web API Key                                                   |
 | Steam Web API Key | To call the public Steam Web API; save via the web UI to system credential store |
-| Neo4j Desktop     | To run the local graph database                                                  |
+| Kùzu Embedded DB (Default) | **Zero installation required**, runs in-process via Python, stores data in `./data/graph_kuzu` |
+| Neo4j Desktop (Optional) | To run the local graph database and explore with Neo4j Bloom |
 | uv                | To manage Python environment and dependencies                                    |
 | Python 3.12+      | Runtime environment (handled automatically by `uv`)                              |
 
 Recommend starting with 1 or 2 layers. Steam friend networks grow exponentially — 3–4 layers can quickly approach or exceed node limits.
 
-## Is Neo4j Desktop still needed?
+## Database Selection: Kùzu vs Neo4j?
 
-Yes — it's not a redundant component in this project.
+This project features a **dual-engine graph database architecture**, supporting the embedded Kùzu database by default, while allowing optional configuration of external Neo4j.
 
-The project's own Web GUI handles daily operations: connecting, crawling, viewing card-style profiles, editing notes, and querying shortest paths. Neo4j Desktop runs the local graph database, stores all nodes and relationships, and provides Neo4j Bloom for more advanced graph exploration.
+- **Kùzu Embedded Database (Default)**:
+  - **Advantage**: **Zero database installation required**, ready to use out-of-the-box. It runs as a Python package in the same application process, keeping memory and disk footprints extremely low. Data is saved locally in the `./data/graph_kuzu` directory.
+  - **Visualization**: View, search, and query paths in the included Web GUI. If you need low-level Cypher debugging, you can spin up the `kuzu-explorer` Docker container (see details below).
+- **Neo4j Desktop (Optional)**:
+  - **Advantage**: Supports Neo4j Bloom and other professional graph visualization tools/algorithms, suitable for larger-scale network analysis.
+  - **Setup**: The project's Web GUI handles crawling and daily operations, while Neo4j Desktop runs the local database and supports Neo4j Bloom exploration.
 
-In short:
-
-- This project's GUI: "crawling and daily operations".
-- Neo4j Desktop: "local database management and long-term storage".
-- Neo4j Bloom: "large graph exploration, path analysis, graph database inspection".
-
-If you want to switch to Neo4j Aura or a remote Neo4j instance later, you can change the connection address in `.env`. But for local use, we recommend keeping Neo4j Desktop.
+You can modify the configuration in `.env` to switch between these engines. For quick start, we recommend the default Kùzu database.
 
 ## Architecture
 
 ```text
-Steam Web API
-    ↓
-FastAPI + BFS Crawler
-    ↓
-Neo4j Desktop local database
-    ↓
-This project's Web GUI / Neo4j Bloom
+       Steam Web API
+             ↓
+     FastAPI + BFS Crawler
+       /             \
+  (Default)       (Optional)
+ Kùzu Engine     Neo4j Engine
+ (Local file)   (External DB)
+       \             /
+              ↓
+     This project's Web GUI (Cytoscape.js)
+              ↓
+  (Optional) Neo4j Bloom / Kùzu Explorer
 ```
 
 Core capabilities:
@@ -275,8 +280,7 @@ Notes:
 Keep the key from Step 4 in a safe temporary place. You'll enter it in the web UI's "Secure Settings" section. Do not write the real key into README or commit it to Git.
 
 If you previously wrote it into `.env` using the old method, the project still reads it for compatibility, but migration to web-based secure storage is recommended.
-
-### Step 6: Prepare Neo4j Desktop
+### Step 6: Prepare Neo4j Desktop (Skip Steps 6 and 7 if using the default Kùzu engine)
 
 1. Open Neo4j Desktop.
 2. Create a Project, or use an existing one.
@@ -299,7 +303,7 @@ neo4j
 
 This tool connects to Neo4j Desktop via Bolt and writes Steam users and friend relationships into it.
 
-### Step 7: Fill in Neo4j connection info
+### Step 7: Fill in Neo4j connection info (Skip Steps 6 and 7 if using the default Kùzu engine)
 
 Edit `.env`:
 
@@ -312,9 +316,29 @@ If you changed the Bolt port or username in Neo4j Desktop, use your actual value
 
 ### Step 8: Review the complete .env
 
-Your final `.env` should look similar to:
+The final `.env` configuration file will differ depending on your choice of database engine.
+
+#### Option A: Using Kùzu Embedded Database (Default & Recommended, Zero-Install)
+
+If you use Kùzu as the graph database, your `.env` should look like this:
 
 ```env
+GRAPH_DB_ENGINE=kuzu
+KUZU_DB_PATH=./data/graph_kuzu         # Local data storage directory
+KUZU_BUFFER_POOL_SIZE_GB=1             # Max memory buffer pool size for Kùzu
+APP_HOST=127.0.0.1
+APP_PORT=8000
+DEFAULT_MAX_DEPTH=1
+DEFAULT_MAX_NODES=200
+DEFAULT_DELAY_MS=500
+```
+
+#### Option B: Using Neo4j Desktop Database (Optional)
+
+If you use Neo4j as the graph database, your `.env` should look like this:
+
+```env
+GRAPH_DB_ENGINE=neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 APP_HOST=127.0.0.1
@@ -324,17 +348,22 @@ DEFAULT_MAX_NODES=200
 DEFAULT_DELAY_MS=500
 ```
 
-| Setting             | Meaning                                          |
-| ------------------- | ------------------------------------------------ |
-| `NEO4J_URI`         | Neo4j Bolt connection address                    |
-| `NEO4J_USER`        | Neo4j username, usually `neo4j`                  |
-| `APP_HOST`          | Local server listen address, default `127.0.0.1` |
-| `APP_PORT`          | Local server port, default `8000`                |
-| `DEFAULT_MAX_DEPTH` | Default crawl depth; start with `1` or `2`       |
-| `DEFAULT_MAX_NODES` | Default maximum node count                       |
-| `DEFAULT_DELAY_MS`  | Steam API request interval in milliseconds       |
+Details for each setting:
 
-Steam API Key and Neo4j password are not in this table — they are sensitive and should be saved in the web UI to the system credential store.
+| Setting | Meaning |
+| :--- | :--- |
+| `GRAPH_DB_ENGINE` | Active graph database engine type; `kuzu` or `neo4j` |
+| `KUZU_DB_PATH` | Local file path for Kùzu database storage |
+| `KUZU_BUFFER_POOL_SIZE_GB` | The maximum physical memory buffer pool size (in GB) allocated to Kùzu |
+| `NEO4J_URI` | Neo4j Bolt connection address |
+| `NEO4J_USER` | Neo4j username, usually `neo4j` |
+| `APP_HOST` | Local server listen address, default `127.0.0.1` |
+| `APP_PORT` | Local server port, default `8000` |
+| `DEFAULT_MAX_DEPTH` | Default crawl depth; start with `1` or `2` |
+| `DEFAULT_MAX_NODES` | Default maximum node count |
+| `DEFAULT_DELAY_MS`  | Steam API request interval in milliseconds |
+
+Steam API Key and Neo4j password are not in this file — they are sensitive and should be saved via the web UI to the system credential store.
 
 ### Step 9: Install dependencies
 
@@ -344,11 +373,13 @@ In the project directory:
 uv sync
 ```
 
-This creates a virtual environment and installs FastAPI, Neo4j Driver, httpx, and other dependencies.
+This creates a virtual environment and automatically installs FastAPI, Kùzu database engine, Neo4j Driver, httpx, and all other required project dependencies.
 
 ### Step 10: Start the app
 
-Make sure the Neo4j Desktop database is Started, then:
+If you are using the Neo4j engine, make sure the Neo4j Desktop database is Started. If using the default Kùzu engine, no external database needs to be launched.
+
+In your terminal, run:
 
 ```powershell
 uv run steam-friend-map
