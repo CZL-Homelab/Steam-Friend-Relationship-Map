@@ -16,7 +16,6 @@
   --surface-teal: #e6f0fa;
   --surface-teal-light: #f0f5fa;
   --surface-gray: #f1f5f4;
-  --surface-project: #f9fbfb;
   --progress-bg: #e3eaed;
   --brand-fg: #ffffff;
   --tool-bg: #ffffff;
@@ -49,7 +48,6 @@
   --surface-teal: #193246;
   --surface-teal-light: #20415a;
   --surface-gray: #1b2838;
-  --surface-project: #111b27;
   --progress-bg: #213c4f;
   --brand-fg: #ffffff;
   --tool-bg: #141f2c;
@@ -221,7 +219,7 @@ textarea {
   height: 2.25rem;
   border: 1px solid var(--line);
   border-radius: 0.5rem;
-  background: var(--icon-bg);
+  background: var(--surface-alt);
   color: var(--muted);
   cursor: pointer;
 }
@@ -260,7 +258,7 @@ h3 {
 
 .panel,
 .profile-card {
-  background: var(--panel);
+  background: var(--surface-alt);
   border: 1px solid var(--line);
   border-radius: 0.5rem;
   box-shadow: var(--shadow);
@@ -537,7 +535,7 @@ button svg {
 
 .topbar {
   padding: 14px 18px;
-  background: var(--panel);
+  background: var(--surface-alt);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
@@ -1012,7 +1010,7 @@ body.resize-in-progress #graph {
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--surface-alt);
   z-index: 100;
   overflow: hidden;
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
@@ -1208,10 +1206,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.project-panel {
-  background: var(--surface-project);
 }
 
 .project-info {
