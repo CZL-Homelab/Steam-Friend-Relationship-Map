@@ -215,11 +215,87 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRep
     assert {node.id for node in filtered.nodes} == {"c", "d", "other"}
     assert {frozenset((edge.source, edge.target)) for edge in filtered.edges} == {frozenset(("c", "d"))}
     assert filtered.traversal_depth_reached == 3
+    filtered_nodes = {node.id: node for node in filtered.nodes}
+    assert filtered_nodes["c"].root_route_count == 2
+    assert filtered_nodes["c"].root_route_total_hops == 4
 
     project_b = repo.get_graph(root="root-b", depth=3, limit=20, project_id="project-b")
     assert {node.id for node in project_b.nodes} == {"root-b", "foreign"}
     assert project_b.traversal_depth_reached == 1
     assert project_b.depth_incomplete is True
+
+
+def test_kuzu_root_friend_circle_scores_routes_and_total_hops(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="root", persona_name="Root", depth_min=0),
+            SteamUserRecord(steam_id="a", persona_name="A", depth_min=1),
+            SteamUserRecord(steam_id="b", persona_name="B", depth_min=1),
+            SteamUserRecord(steam_id="c", persona_name="C", depth_min=1),
+        ],
+        "default",
+    )
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="root", to_id="a", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="root", to_id="b", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="root", to_id="c", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="a", to_id="b", crawl_id="run-1", source_depth=1),
+            FriendEdge(from_id="a", to_id="c", crawl_id="run-1", source_depth=1),
+        ],
+        "default",
+    )
+
+    graph = repo.get_graph(root="root", depth=3, limit=10, project_id="default")
+    nodes = {node.id: node for node in graph.nodes}
+
+    assert nodes["root"].root_friend_circle_score == 1_000_000
+    assert nodes["a"].root_route_count == 3
+    assert nodes["a"].root_route_total_hops == 5
+    assert nodes["c"].root_route_count == 3
+    assert nodes["c"].root_route_total_hops == 6
+    assert nodes["a"].root_friend_circle_score > nodes["c"].root_friend_circle_score
+
+    shallower_graph = repo.get_graph(root="root", depth=2, limit=10, project_id="default")
+    shallower_nodes = {node.id: node for node in shallower_graph.nodes}
+    assert shallower_nodes["c"].root_route_count == 2
+    assert shallower_nodes["c"].root_route_total_hops == 3
+
+
+def test_kuzu_root_friend_circle_route_cap_is_stable(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    middle_users = [
+        SteamUserRecord(steam_id=f"m-{index}", persona_name=f"Middle {index}", depth_min=1)
+        for index in range(250)
+    ]
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="root", persona_name="Root", depth_min=0),
+            SteamUserRecord(steam_id="target", persona_name="Target", depth_min=2),
+            *middle_users,
+        ],
+        "default",
+    )
+    repo.upsert_relationships(
+        [
+            edge
+            for index in range(250)
+            for edge in (
+                FriendEdge(from_id="root", to_id=f"m-{index}", crawl_id="run-1", source_depth=0),
+                FriendEdge(from_id=f"m-{index}", to_id="target", crawl_id="run-1", source_depth=1),
+            )
+        ],
+        "default",
+    )
+
+    graph = repo.get_graph(root="root", depth=2, limit=300, project_id="default")
+    nodes = {node.id: node for node in graph.nodes}
+
+    assert nodes["target"].root_route_count == 200
+    assert nodes["target"].root_route_total_hops == 400
 
 
 def test_kuzu_cypher_injection_prevention(temp_kuzu_repo: KuzuRepositoryImpl) -> None:

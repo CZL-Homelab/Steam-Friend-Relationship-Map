@@ -630,6 +630,9 @@ class KuzuRepositoryImpl(IGraphRepository):
             friend_count_status=data.get("friend_count_status") or "unknown",
             prior_pool_link_count=data.get("prior_pool_link_count") or 0,
             root_closeness_score=data.get("root_closeness_score") or 0,
+            root_route_count=data.get("root_route_count") or 0,
+            root_route_total_hops=data.get("root_route_total_hops") or 0,
+            root_friend_circle_score=data.get("root_friend_circle_score") or 0,
         )
 
     def _reachable_ids_from_root(
@@ -676,6 +679,78 @@ class KuzuRepositoryImpl(IGraphRepository):
             reached = next_depth
 
         return ordered_ids, True, reached, reached < depth
+
+    def _root_friend_circle_metrics(
+        self,
+        conn: kuzu.Connection,
+        root: str,
+        reachable_ids: list[str],
+        target_ids: list[str],
+        depth: int,
+        project_id: str,
+        route_cap: int = 200,
+    ) -> dict[str, tuple[int, int, float]]:
+        if not reachable_ids or not target_ids:
+            return {}
+        target_set = set(target_ids)
+
+        res = conn.execute(
+            """
+            MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+            WHERE a.steam_id IN $ids AND b.steam_id IN $ids
+              AND coalesce(r.project_id, '') IN ['', $project_id]
+            RETURN a.steam_id, b.steam_id
+            """,
+            {"ids": reachable_ids, "project_id": project_id},
+        )
+        adjacency = {steam_id: set() for steam_id in reachable_ids}
+        while res.has_next():
+            source, target = res.get_next()
+            if source == target:
+                continue
+            adjacency.setdefault(source, set()).add(target)
+            adjacency.setdefault(target, set()).add(source)
+
+        neighbors_by_id = {
+            steam_id: sorted(neighbors)
+            for steam_id, neighbors in adjacency.items()
+        }
+        route_counts = {steam_id: 0 for steam_id in target_set}
+        total_hops = {steam_id: 0 for steam_id in target_set}
+        capped_targets = 0
+        max_capped_targets = max(0, len(target_set - {root}))
+
+        def walk(current: str, remaining_depth: int, path: set[str], hops: int) -> None:
+            nonlocal capped_targets
+            if remaining_depth <= 0:
+                return
+            for neighbor in neighbors_by_id.get(current, ()):
+                if capped_targets >= max_capped_targets:
+                    return
+                if neighbor in path:
+                    continue
+                if neighbor in target_set and route_counts.get(neighbor, 0) < route_cap:
+                    route_counts[neighbor] += 1
+                    total_hops[neighbor] += hops + 1
+                    if neighbor != root and route_counts[neighbor] == route_cap:
+                        capped_targets += 1
+                if remaining_depth > 1:
+                    path.add(neighbor)
+                    walk(neighbor, remaining_depth - 1, path, hops + 1)
+                    path.remove(neighbor)
+
+        walk(root, depth, {root}, 0)
+
+        metrics: dict[str, tuple[int, int, float]] = {}
+        for steam_id in target_ids:
+            if steam_id == root:
+                metrics[steam_id] = (1, 0, 1_000_000.0)
+                continue
+            count = min(route_counts.get(steam_id, 0), route_cap)
+            hops = total_hops.get(steam_id, 0)
+            score = float(count * 1000 - hops) if count else 0.0
+            metrics[steam_id] = (count, hops, score)
+        return metrics
 
     def get_graph(
         self,
@@ -733,6 +808,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
 
         conn = self._get_conn()
+        root_metrics: dict[str, tuple[int, int, float]] = {}
         if root:
             reachable_ids, root_found, traversal_depth_reached, depth_incomplete = self._reachable_ids_from_root(conn, root, depth, project_id)
             if not root_found or not reachable_ids:
@@ -776,6 +852,20 @@ class KuzuRepositoryImpl(IGraphRepository):
         limited = len(records) > limit
         records = records[:limit]
         nodes = [self._graph_node(_parse_node(rec[0]), rec[1]) for rec in records]
+        if root and nodes:
+            root_metrics = self._root_friend_circle_metrics(
+                conn,
+                root,
+                reachable_ids,
+                [node.id for node in nodes],
+                depth,
+                project_id,
+            )
+            for node in nodes:
+                route_count, total_hops, score = root_metrics.get(node.id, (0, 0, 0.0))
+                node.root_route_count = route_count
+                node.root_route_total_hops = total_hops
+                node.root_friend_circle_score = score
         ids = [node.id for node in nodes]
 
         if not ids:

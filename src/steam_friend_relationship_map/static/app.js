@@ -408,10 +408,38 @@ function initGraph() {
 }
 
 function metricValue(node, metric) {
+  if (metric === "root_friend_circle") return node.root_friend_circle_score ?? 0;
   if (metric === "friend_count") return node.friend_count ?? 0;
   if (metric === "prior_pool_links") return node.prior_pool_link_count ?? 0;
   if (metric === "closeness") return node.root_closeness_score ?? 0;
   return node.degree ?? 0;
+}
+
+function isRootFriendCircleRoot(node) {
+  return (node.root_friend_circle_score ?? 0) >= 1000000;
+}
+
+function buildRootFriendCircleScale(nodes) {
+  const scores = nodes
+    .filter((node) => !isRootFriendCircleRoot(node))
+    .map((node) => node.root_friend_circle_score ?? 0)
+    .filter((score) => score > 0);
+  const uniqueScores = [...new Set(scores)].sort((a, b) => a - b);
+  const rankByScore = new Map(uniqueScores.map((score, index) => [score, index + 1]));
+  const maxRank = Math.max(1, uniqueScores.length);
+
+  return {
+    rank(node) {
+      if (isRootFriendCircleRoot(node)) return maxRank + 2;
+      return rankByScore.get(node.root_friend_circle_score ?? 0) || 0;
+    },
+    visualSize(node) {
+      if (isRootFriendCircleRoot(node)) return 100;
+      const rank = rankByScore.get(node.root_friend_circle_score ?? 0) || 0;
+      if (!rank) return 8;
+      return 28 + (rank / maxRank) * 60;
+    },
+  };
 }
 
 function renderGraph(data) {
@@ -419,8 +447,9 @@ function renderGraph(data) {
   const renderId = activeRenderId;
 
   currentGraph = data;
-  const sizeBy = $("graphSizeBy").value || "degree";
+  const sizeBy = $("graphSizeBy").value || "root_friend_circle";
   const maxMetric = Math.max(1, ...data.nodes.map((node) => metricValue(node, sizeBy)));
+  const rootCircleScale = buildRootFriendCircleScale(data.nodes);
   const elements = [
     ...data.nodes.map((node) => ({
       data: {
@@ -429,7 +458,11 @@ function renderGraph(data) {
         avatar: node.avatar,
         degree: node.degree || 1,
         closeness: node.root_closeness_score || 0,
-        visualSize: Math.max(5, Math.min(100, (metricValue(node, sizeBy) / maxMetric) * 100)),
+        rootFriendCircle: node.root_friend_circle_score || 0,
+        rootFriendCircleRank: rootCircleScale.rank(node),
+        visualSize: sizeBy === "root_friend_circle"
+          ? rootCircleScale.visualSize(node)
+          : Math.max(5, Math.min(100, (metricValue(node, sizeBy) / maxMetric) * 100)),
         status: node.friend_list_status,
         node,
       },
@@ -478,19 +511,21 @@ function updateGraphSummary() {
 }
 
 function runLayout() {
-  const bias = $("graphLayoutBias")?.value || "cose";
+  const bias = $("graphLayoutBias")?.value || "root_friend_circle";
   const nodeCount = cy.nodes().length;
   // 大图模式下（如节点数 >= 300）禁用过渡动画，直接生成最终布局，能极大防止浏览器主线程假死
   const shouldAnimate = nodeCount < 300;
 
-  if (bias === "closeness") {
+  if (bias === "root_friend_circle" || bias === "closeness") {
     cy.layout({
       name: "concentric",
       animate: shouldAnimate ? "end" : false,
       animationDuration: 320,
       padding: 48,
-      concentric: (node) => node.data("closeness") || node.data("degree") || 1,
-      levelWidth: () => 12,
+      concentric: (node) => bias === "root_friend_circle"
+        ? (node.data("rootFriendCircleRank") || node.data("closeness") || node.data("degree") || 1)
+        : (node.data("closeness") || node.data("degree") || 1),
+      levelWidth: () => bias === "root_friend_circle" ? 1 : 12,
     }).run();
     return;
   }
@@ -524,6 +559,9 @@ function fillProfile(node) {
   $("profileFriendCount").textContent = node.friend_count ?? "-";
   $("profilePriorLinks").textContent = node.prior_pool_link_count ?? 0;
   $("profileCloseness").textContent = node.root_closeness_score ?? 0;
+  $("profileRootRoutes").textContent = node.root_route_count ?? 0;
+  $("profileRootRouteHops").textContent = node.root_route_total_hops ?? 0;
+  $("profileRootFriendCircle").textContent = node.root_friend_circle_score ?? 0;
   $("profileStatus").dataset.status = node.friend_list_status || "unknown";
   $("profileStatus").textContent = statusText(node.friend_list_status);
   $("profileCategory").value = node.category || "";

@@ -260,6 +260,7 @@
               <label data-i18n-label="field.sizeBy">
                 头像大小
                 <select id="graphSizeBy">
+                  <option value="root_friend_circle" data-i18n="sort.rootFriendCircle">Root 朋友圈</option>
                   <option value="degree" data-i18n="sort.degree">度数</option>
                   <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
                   <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
@@ -269,6 +270,7 @@
               <label data-i18n-label="field.layoutBias">
                 布局
                 <select id="graphLayoutBias">
+                  <option value="root_friend_circle" data-i18n="layout.rootFriendCircle">Root 朋友圈</option>
                   <option value="cose" data-i18n="layout.cose">自然网络</option>
                   <option value="closeness" data-i18n="layout.closeness">紧密度靠中心</option>
                 </select>
@@ -418,6 +420,9 @@
               <div><dt data-i18n="metric.friendCount">好友数</dt><dd id="profileFriendCount">-</dd></div>
               <div><dt data-i18n="metric.priorPoolLinks">朋友圈连接</dt><dd id="profilePriorLinks">0</dd></div>
               <div><dt data-i18n="metric.closeness">紧密度</dt><dd id="profileCloseness">0</dd></div>
+              <div><dt data-i18n="metric.rootRoutes">Root 路线</dt><dd id="profileRootRoutes">0</dd></div>
+              <div><dt data-i18n="metric.rootRouteHops">总跳数</dt><dd id="profileRootRouteHops">0</dd></div>
+              <div><dt data-i18n="metric.rootFriendCircle">朋友圈分数</dt><dd id="profileRootFriendCircle">0</dd></div>
             </dl>
             <label data-i18n-label="field.category">
               分类

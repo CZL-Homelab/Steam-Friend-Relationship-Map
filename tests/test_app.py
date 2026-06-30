@@ -39,7 +39,16 @@ class FakeRepo:
 
     def get_graph(self, **_: object) -> GraphResponse:
         return GraphResponse(
-            nodes=[GraphNode(id="root", label="Root", degree=1)],
+            nodes=[
+                GraphNode(
+                    id="root",
+                    label="Root",
+                    degree=1,
+                    root_route_count=1,
+                    root_route_total_hops=0,
+                    root_friend_circle_score=1_000_000,
+                )
+            ],
             edges=[GraphEdge(id="root-a", source="root", target="a")],
             requested_depth=2,
             traversal_depth_reached=1,
@@ -126,6 +135,9 @@ def test_graph_endpoint_uses_repo() -> None:
     assert body["traversal_depth_reached"] == 1
     assert body["root_found"] is True
     assert body["depth_incomplete"] is True
+    assert body["nodes"][0]["root_route_count"] == 1
+    assert body["nodes"][0]["root_route_total_hops"] == 0
+    assert body["nodes"][0]["root_friend_circle_score"] == 1_000_000
 
 
 def test_user_patch_endpoint() -> None:

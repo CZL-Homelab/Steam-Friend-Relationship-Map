@@ -196,6 +196,9 @@ class GraphNode(BaseModel):
     friend_count_status: str = "unknown"
     prior_pool_link_count: int = 0
     root_closeness_score: float = 0
+    root_route_count: int = 0
+    root_route_total_hops: int = 0
+    root_friend_circle_score: float = 0
 
 
 class GraphEdge(BaseModel):
