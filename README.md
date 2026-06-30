@@ -267,29 +267,36 @@ cd Steam-Friend-Relationship-Map
 
 如果你把项目放在了其他位置，请换成自己的路径。
 
-### 第 3 步：创建 `.env` 配置文件
+### 第 3 步：初始化 `.env` 配置文件
 
-先复制模板：
+为了让项目正确启动，你需要创建 `.env` 配置文件。现在项目支持**交互式自动初始化**：
 
-```powershell
-Copy-Item .env.example .env
-```
+1. **自动引导**：直接在终端中启动项目：
+   ```bash
+   uv run steam-friend-map
+   ```
+   如果系统检测到本地没有 `.env` 文件，会自动在控制台中引导你输入希望运行 Web UI 的本地端口（例如 `8000`）。完成后会自动基于 `.env.example` 生成 `.env` 配置文件。
 
-然后打开 `.env`。刚创建出来大概是这样：
+2. **显式初始化/重新配置**：如果你想重新配置或显式运行初始化命令，可以附加 `--init` 参数：
+   ```bash
+   uv run steam-friend-map --init
+   ```
 
-```env
-STEAM_API_KEY=
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=
-APP_HOST=127.0.0.1
-APP_PORT=8000
-DEFAULT_MAX_DEPTH=2
-DEFAULT_MAX_NODES=2000
-DEFAULT_DELAY_MS=300
-```
+3. **手动复制（备用）**：你也可以像以前一样手动复制模板：
+   - Windows (PowerShell):
+     ```powershell
+     Copy-Item .env.example .env
+     ```
+   - Linux/macOS:
+     ```bash
+     cp .env.example .env
+     ```
+   刚生成的 `.env` 文件大约如下，你可以在其中通过修改 `APP_PORT` 来配置 Web UI 的本地端口：
+   ```env
+   APP_PORT=8000
+   ```
 
-这个模板不包含 Steam API Key 和 Neo4j 密码。敏感信息建议稍后在网页端“安全配置”区域填写。
+这个配置文件不推荐包含 Steam API Key 和 Neo4j 密码等敏感信息。敏感信息建议稍后在 Web UI 启动后的网页端“安全配置”区域填写，系统会自动安全保存。
 
 ### 第 4 步：获取 Steam Web API Key
 
