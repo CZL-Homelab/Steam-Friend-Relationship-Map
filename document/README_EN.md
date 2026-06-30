@@ -207,29 +207,36 @@ cd Steam-Friend-Relationship-Map
 
 Adjust the path to your actual project location.
 
-### Step 3: Create .env configuration
+### Step 3: Initialize .env configuration
 
-Copy the template:
+To run the project properly, you need to create a `.env` configuration file. The project now supports **interactive automatic initialization**:
 
-```powershell
-Copy-Item .env.example .env
-```
+1. **Auto-Guided Setup**: Simply start the project in your terminal:
+   ```bash
+   uv run steam-friend-map
+   ```
+   If the system detects that the `.env` file is missing, it will automatically guide you in the console to enter the local port (e.g. `8000`) for the Web UI. Once finished, it automatically generates the `.env` config file based on `.env.example`.
 
-Open `.env`. It will look something like:
+2. **Explicit Initialization/Re-configuration**: If you want to reconfigure or explicitly run the initialization, use the `--init` option:
+   ```bash
+   uv run steam-friend-map --init
+   ```
 
-```env
-STEAM_API_KEY=
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=
-APP_HOST=127.0.0.1
-APP_PORT=8000
-DEFAULT_MAX_DEPTH=2
-DEFAULT_MAX_NODES=2000
-DEFAULT_DELAY_MS=300
-```
+3. **Manual Copy (Fallback)**: You can still manually copy the template as before:
+   - Windows (PowerShell):
+     ```powershell
+     Copy-Item .env.example .env
+     ```
+   - Linux/macOS:
+     ```bash
+     cp .env.example .env
+     ```
+   The newly generated `.env` will look similar to this, where you can configure the Web UI local port by changing `APP_PORT`:
+   ```env
+   APP_PORT=8000
+   ```
 
-This template does not include the Steam API Key or Neo4j password. Sensitive info should be entered later in the web UI's "Secure Settings" section.
+It is not recommended to include sensitive credentials like Steam API Key or Neo4j password in this configuration file. Instead, fill them in the "Secure Settings" area in the web UI after launching, where they will be saved securely.
 
 ### Step 4: Get Steam Web API Key
 
