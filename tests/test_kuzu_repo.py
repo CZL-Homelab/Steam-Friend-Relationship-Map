@@ -146,6 +146,82 @@ def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert "4" in candidate_ids
 
 
+def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="root", persona_name="Root", depth_min=0, category="root"),
+            SteamUserRecord(steam_id="a", persona_name="Alpha", depth_min=1, category="hide"),
+            SteamUserRecord(steam_id="b", persona_name="Beta", depth_min=1, category="hide"),
+            SteamUserRecord(steam_id="c", persona_name="Gamma", depth_min=2, category="show"),
+            SteamUserRecord(steam_id="d", persona_name="Delta", depth_min=3, category="show"),
+            SteamUserRecord(steam_id="other", persona_name="Other", depth_min=1, category="show"),
+        ],
+        "project-a",
+    )
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="root", to_id="a", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="root", to_id="b", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="a", to_id="c", crawl_id="run-1", source_depth=1),
+            FriendEdge(from_id="b", to_id="c", crawl_id="run-1", source_depth=1),
+            FriendEdge(from_id="c", to_id="d", crawl_id="run-1", source_depth=2),
+            FriendEdge(from_id="root", to_id="other", crawl_id="run-2", source_depth=0),
+        ],
+        "project-a",
+    )
+    repo.bulk_patch_users([
+        {"steam_id": "root", "category": "root"},
+        {"steam_id": "a", "category": "hide"},
+        {"steam_id": "b", "category": "hide"},
+        {"steam_id": "c", "category": "show"},
+        {"steam_id": "d", "category": "show"},
+        {"steam_id": "other", "category": "show"},
+    ])
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="root-b", persona_name="Root Other", depth_min=0),
+            SteamUserRecord(steam_id="foreign", persona_name="Foreign", depth_min=1),
+        ],
+        "project-b",
+    )
+    repo.upsert_relationships(
+        [FriendEdge(from_id="root-b", to_id="foreign", crawl_id="run-3", source_depth=0)],
+        "project-b",
+    )
+
+    depth_one = repo.get_graph(root="root", depth=1, limit=20, project_id="project-a")
+    assert {node.id for node in depth_one.nodes} == {"root", "a", "b", "other"}
+    assert depth_one.traversal_depth_reached == 1
+    assert depth_one.depth_incomplete is False
+
+    depth_three = repo.get_graph(root="root", depth=3, limit=20, project_id="project-a")
+    assert {node.id for node in depth_three.nodes} == {"root", "a", "b", "c", "d", "other"}
+    assert {frozenset((edge.source, edge.target)) for edge in depth_three.edges} == {
+        frozenset(("root", "a")),
+        frozenset(("root", "b")),
+        frozenset(("a", "c")),
+        frozenset(("b", "c")),
+        frozenset(("c", "d")),
+        frozenset(("root", "other")),
+    }
+    assert depth_three.root_found is True
+    assert depth_three.requested_depth == 3
+    assert depth_three.traversal_depth_reached == 3
+    assert depth_three.depth_incomplete is False
+
+    filtered = repo.get_graph(root="root", depth=3, limit=20, category="show", project_id="project-a")
+    assert {node.id for node in filtered.nodes} == {"c", "d", "other"}
+    assert {frozenset((edge.source, edge.target)) for edge in filtered.edges} == {frozenset(("c", "d"))}
+    assert filtered.traversal_depth_reached == 3
+
+    project_b = repo.get_graph(root="root-b", depth=3, limit=20, project_id="project-b")
+    assert {node.id for node in project_b.nodes} == {"root-b", "foreign"}
+    assert project_b.traversal_depth_reached == 1
+    assert project_b.depth_incomplete is True
+
+
 def test_kuzu_cypher_injection_prevention(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()

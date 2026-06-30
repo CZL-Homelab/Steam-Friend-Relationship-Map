@@ -41,6 +41,10 @@ class FakeRepo:
         return GraphResponse(
             nodes=[GraphNode(id="root", label="Root", degree=1)],
             edges=[GraphEdge(id="root-a", source="root", target="a")],
+            requested_depth=2,
+            traversal_depth_reached=1,
+            root_found=True,
+            depth_incomplete=True,
         )
 
     def patch_user(self, *_: object, **__: object) -> None:
@@ -116,7 +120,12 @@ def test_graph_endpoint_uses_repo() -> None:
     response = client.get("/api/graph?root=root&depth=2&limit=50")
 
     assert response.status_code == 200
-    assert response.json()["nodes"][0]["id"] == "root"
+    body = response.json()
+    assert body["nodes"][0]["id"] == "root"
+    assert body["requested_depth"] == 2
+    assert body["traversal_depth_reached"] == 1
+    assert body["root_found"] is True
+    assert body["depth_incomplete"] is True
 
 
 def test_user_patch_endpoint() -> None:

@@ -627,7 +627,55 @@ class KuzuRepositoryImpl(IGraphRepository):
             category=data.get("category") or "",
             degree=degree,
             friend_count=data.get("friend_count"),
+            friend_count_status=data.get("friend_count_status") or "unknown",
+            prior_pool_link_count=data.get("prior_pool_link_count") or 0,
+            root_closeness_score=data.get("root_closeness_score") or 0,
         )
+
+    def _reachable_ids_from_root(
+        self, conn: kuzu.Connection, root: str, depth: int, project_id: str
+    ) -> tuple[list[str], bool, int, bool]:
+        if depth < 0:
+            return [], False, 0, False
+
+        root_res = conn.execute(
+            "MATCH (r:SteamUser) WHERE r.steam_id = $root RETURN r.steam_id",
+            {"root": root},
+        )
+        if not root_res.has_next():
+            return [], False, 0, bool(depth)
+
+        ordered_ids = [root]
+        seen = {root}
+        frontier = [root]
+        reached = 0
+
+        for next_depth in range(1, depth + 1):
+            if not frontier:
+                break
+            res = conn.execute(
+                """
+                MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+                WHERE a.steam_id IN $frontier
+                  AND coalesce(r.project_id, '') IN ['', $project_id]
+                RETURN DISTINCT b.steam_id
+                """,
+                {"frontier": frontier, "project_id": project_id},
+            )
+            next_frontier = []
+            while res.has_next():
+                candidate = res.get_next()[0]
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                ordered_ids.append(candidate)
+                next_frontier.append(candidate)
+            if not next_frontier:
+                break
+            frontier = next_frontier
+            reached = next_depth
+
+        return ordered_ids, True, reached, reached < depth
 
     def get_graph(
         self,
@@ -649,6 +697,10 @@ class KuzuRepositoryImpl(IGraphRepository):
         limit = max(1, min(limit, 100000))
         filters = []
         params = {"project_id": project_id}
+        requested_depth: int | None = depth
+        traversal_depth_reached: int | None = None
+        root_found: bool | None = None
+        depth_incomplete = False
 
         if not root:
             filters.append("(coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { MATCH (n)-[r:STEAM_FRIEND]-(:SteamUser) WHERE r.project_id = $project_id })")
@@ -669,6 +721,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             filters.append("coalesce(n.prior_pool_link_count, 0) >= $prior_pool_min_links")
 
         where = "WHERE " + " AND ".join(filters) if filters else ""
+        root_filter = " AND " + " AND ".join(filters) if filters else ""
         sort_map = {
             "depth": "coalesce(n.depth_min, 999)",
             "degree": "degree",
@@ -681,14 +734,22 @@ class KuzuRepositoryImpl(IGraphRepository):
 
         conn = self._get_conn()
         if root:
-            params["root"] = root
+            reachable_ids, root_found, traversal_depth_reached, depth_incomplete = self._reachable_ids_from_root(conn, root, depth, project_id)
+            if not root_found or not reachable_ids:
+                return GraphResponse(
+                    nodes=[],
+                    edges=[],
+                    requested_depth=requested_depth,
+                    traversal_depth_reached=traversal_depth_reached,
+                    root_found=root_found,
+                    depth_incomplete=depth_incomplete,
+                )
+            params["reachable_ids"] = reachable_ids
             node_query = f"""
-            WITH $project_id AS pid, $root AS root_id
-            MATCH p=(r:SteamUser {{steam_id: root_id}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
-            WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', pid])
-            WITH DISTINCT n, pid
-            {where}
-            OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN ['', pid]
+            MATCH (n:SteamUser)
+            WHERE n.steam_id IN $reachable_ids
+            {root_filter}
+            OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN ['', $project_id]
             WITH n, count(DISTINCT rel) AS degree
             RETURN n, degree
             ORDER BY {order_expr} {direction}, degree DESC
@@ -718,7 +779,14 @@ class KuzuRepositoryImpl(IGraphRepository):
         ids = [node.id for node in nodes]
 
         if not ids:
-            return GraphResponse(nodes=[], edges=[])
+            return GraphResponse(
+                nodes=[],
+                edges=[],
+                requested_depth=requested_depth,
+                traversal_depth_reached=traversal_depth_reached,
+                root_found=root_found,
+                depth_incomplete=depth_incomplete,
+            )
 
         res_edges = conn.execute(
             """
@@ -734,22 +802,21 @@ class KuzuRepositoryImpl(IGraphRepository):
         edges = []
         while res_edges.has_next():
             row = res_edges.get_next()
-            # Calculate strength locally by counting common neighbors
-            res_strength = conn.execute(
-                """
-                MATCH (a:SteamUser {steam_id: $source})-[:STEAM_FRIEND]-(c:SteamUser)-[:STEAM_FRIEND]-(b:SteamUser {steam_id: $target})
-                RETURN count(c)
-                """,
-                {"source": row[0], "target": row[1]}
-            )
-            strength = res_strength.get_next()[0] if res_strength.has_next() else 1
             edges.append(GraphEdge(
                 id=f"{row[0]}-{row[1]}",
                 source=row[0],
                 target=row[1],
-                strength=max(1, strength)
+                strength=1
             ))
-        return GraphResponse(nodes=nodes, edges=edges, limited=limited)
+        return GraphResponse(
+            nodes=nodes,
+            edges=edges,
+            limited=limited,
+            requested_depth=requested_depth,
+            traversal_depth_reached=traversal_depth_reached,
+            root_found=root_found,
+            depth_incomplete=depth_incomplete,
+        )
 
     def get_shortest_path(
         self, from_id: str, to_id: str, max_depth: int, project_id: str = "default"

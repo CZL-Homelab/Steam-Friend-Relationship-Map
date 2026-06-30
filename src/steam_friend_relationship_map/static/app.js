@@ -569,9 +569,18 @@ async function loadGraph() {
     const data = await api(`/api/graph?${graphParams().toString()}`);
     renderGraph(data);
     appendSystemLog("info", "graph", t("log.graphLoaded", { nodes: data.nodes.length, edges: data.edges.length }));
+    if (data.depth_incomplete && data.root_found) {
+      appendSystemLog("warn", "graph", t("graph.depthIncomplete", {
+        reached: data.traversal_depth_reached ?? 0,
+        requested: data.requested_depth ?? ($("graphDepth").value || 0),
+      }));
+    }
   } catch (error) {
-    appendUiLog("error", t("graph.loadFailed"), error.message);
-    toast(t("toast.graphLoadFailed"));
+    const message = error.message.includes("buffer pool is full")
+      ? t("graph.memoryHint")
+      : error.message;
+    appendUiLog("error", t("graph.loadFailed"), message);
+    toast(message === error.message ? t("toast.graphLoadFailed") : message);
     throw error;
   }
 }

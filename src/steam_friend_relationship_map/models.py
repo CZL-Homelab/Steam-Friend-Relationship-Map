@@ -209,6 +209,10 @@ class GraphResponse(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     limited: bool = False
+    requested_depth: int | None = None
+    traversal_depth_reached: int | None = None
+    root_found: bool | None = None
+    depth_incomplete: bool = False
 
 
 class ExportResponse(BaseModel):
