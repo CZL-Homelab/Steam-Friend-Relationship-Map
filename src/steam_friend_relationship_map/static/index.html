@@ -51,6 +51,27 @@
         <div class="sidebar-tabs-container">
           <div class="sidebar-tab-slider" id="sidebarTabSlider" data-active-index="0">
             <div class="sidebar-tab-content" id="tabCrawl">
+          <section class="panel project-panel">
+            <div class="panel-title">
+              <span data-i18n="section.project">项目管理</span>
+              <button class="icon-button" id="refreshProjects" title="刷新项目列表" data-i18n-title="action.refreshProjects"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="project-info" id="activeProjectInfo">
+              <span class="muted" data-i18n="project.current">当前项目</span>
+              <strong id="activeProjectName">默认项目</strong>
+            </div>
+            <div class="project-actions">
+              <input id="newProjectName" placeholder="新项目名称" data-i18n-placeholder="placeholder.projectName" maxlength="80" />
+              <button class="secondary compact" id="createProject" title="新建项目" data-i18n-title="action.createProject"><i data-lucide="plus"></i></button>
+            </div>
+            <div class="project-list" id="projectList">
+              <div class="project-item active" data-project-id="default">
+                <span>默认项目</span>
+                <span class="project-meta">0 节点 · 0 关系</span>
+              </div>
+            </div>
+          </section>
+
           <section class="panel">
             <div class="panel-title">
               <span data-i18n="section.connection">连接</span>
@@ -194,7 +215,10 @@
           <section class="panel">
             <div class="panel-title">
               <span data-i18n="section.filters">筛选</span>
-              <button class="icon-button" id="refreshGraph" title="刷新图谱" data-i18n-title="action.refreshGraph"><i data-lucide="refresh-cw"></i></button>
+              <div style="display: flex; gap: 8px;">
+                <button class="icon-button" id="resetFilters" title="重置筛选" data-i18n-title="action.resetFilters"><i data-lucide="rotate-ccw"></i></button>
+                <button class="icon-button" id="refreshGraph" title="刷新图谱" data-i18n-title="action.refreshGraph"><i data-lucide="refresh-cw"></i></button>
+              </div>
             </div>
             <label data-i18n-label="field.rootSteamId">
               Root SteamID
@@ -203,17 +227,21 @@
             <div class="two-col">
               <label data-i18n-label="field.depth">
                 层数
-                <input id="graphDepth" type="number" min="0" max="4" value="2" />
+                <div style="display: flex; align-items: center; margin-top: 0;">
+                  <input id="graphDepth" type="number" min="0" max="4" value="2" style="flex: 1; margin-top: 0; min-width: 0;" />
+                </div>
               </label>
               <label data-i18n-label="field.limit">
                 限制
-                <input id="graphLimit" type="number" min="1" max="2000" value="500" />
+                <div style="display: flex; gap: 6px; align-items: center; margin-top: 0;">
+                  <input id="graphLimit" type="number" min="1" max="2000" value="500" style="flex: 1; margin-top: 0; min-width: 0;" />
+                  <input type="checkbox" id="graphLimitToggle" style="display: none !important;" />
+                  <button class="icon-button" id="graphLimitBtn" title="解除2000节点限制" data-i18n-title="field.noLimit" type="button" style="width: 34px; height: 34px; flex-shrink: 0; margin-top: 0;">
+                    <i data-lucide="lock"></i>
+                  </button>
+                </div>
               </label>
             </div>
-            <label class="checkbox-label" style="display: flex; align-items: center; gap: 8px; margin: -4px 0 8px 0; font-size: 0.85em; cursor: pointer; color: var(--text-secondary);">
-              <input type="checkbox" id="graphLimitToggle" style="width: auto; margin: 0; cursor: pointer;" />
-              <span data-i18n-text="field.noLimit">解除 2000 节点限制</span>
-            </label>
             <label data-i18n-label="field.search">
               搜索
               <input id="graphSearch" placeholder="昵称 / SteamID" data-i18n-placeholder="placeholder.search" />
@@ -280,27 +308,6 @@
         </div>
 
         <div class="sidebar-tab-content" id="tabSettings">
-          <section class="panel project-panel">
-            <div class="panel-title">
-              <span data-i18n="section.project">项目管理</span>
-              <button class="icon-button" id="refreshProjects" title="刷新项目列表" data-i18n-title="action.refreshProjects"><i data-lucide="refresh-cw"></i></button>
-            </div>
-            <div class="project-info" id="activeProjectInfo">
-              <span class="muted" data-i18n="project.current">当前项目</span>
-              <strong id="activeProjectName">默认项目</strong>
-            </div>
-            <div class="project-actions">
-              <input id="newProjectName" placeholder="新项目名称" data-i18n-placeholder="placeholder.projectName" maxlength="80" />
-              <button class="secondary compact" id="createProject"><i data-lucide="plus"></i><span data-i18n="action.createProject">新建</span></button>
-            </div>
-            <div class="project-list" id="projectList">
-              <div class="project-item active" data-project-id="default">
-                <span>默认项目</span>
-                <span class="project-meta">0 节点 · 0 关系</span>
-              </div>
-            </div>
-          </section>
-
           <section class="panel guide-panel">
             <details open>
               <summary data-i18n="section.guide">新手引导</summary>
@@ -327,11 +334,11 @@
               Steam API Key
               <input id="steamApiKeyInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="留空表示不修改" />
             </label>
-            <span class="field-hint" style="display: block; font-size: 0.75rem; color: var(--muted); margin-top: 4px; margin-bottom: 8px;" data-i18n-text="guide.steamApiKeyHint">
+            <span class="field-hint" style="display: block; font-size: 0.75rem; color: var(--muted); margin-top: 4px; margin-bottom: 8px;" data-i18n="guide.steamApiKeyHint">
               支持配置多个 API Key 轮询以分担请求限制，用逗号或空格分隔。
             </span>
-            <label>
-              <span>数据库引擎 / Graph Engine</span>
+            <label data-i18n-label="field.dbEngine">
+              数据库引擎
               <select id="settingsGraphDbEngine">
                 <option value="kuzu">Kùzu</option>
                 <option value="neo4j">Neo4j</option>
@@ -392,8 +399,11 @@
         <div class="graph-wrap">
           <div id="graph"></div>
           <div id="graphEmpty" class="graph-empty">
-            <strong data-i18n="graph.emptyTitle">暂无图谱</strong>
-            <span data-i18n="graph.emptyHint">完成抓取或刷新图谱后会显示节点。</span>
+            <div class="empty-icon-wrap">
+              <i data-lucide="orbit"></i>
+            </div>
+            <h3 data-i18n="graph.emptyTitle">暂无图谱</h3>
+            <p data-i18n="graph.emptyHint">完成抓取或刷新图谱后会显示节点。</p>
           </div>
           <div id="graphLoading" class="graph-loading hidden">
             <div class="spinner"></div>

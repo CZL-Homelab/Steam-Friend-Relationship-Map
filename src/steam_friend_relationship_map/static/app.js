@@ -86,6 +86,7 @@ function updateCytoscapeStyle() {
   const rose = getCssVar("--rose");
   const amber = getCssVar("--amber");
   const muted = getCssVar("--muted");
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
 
   cy.style()
     .selector("node")
@@ -94,6 +95,11 @@ function updateCytoscapeStyle() {
       "border-color": panel,
       color: ink,
       "text-background-color": panel,
+      "shadow-blur": isDark ? 8 : 0,
+      "shadow-color": teal,
+      "shadow-opacity": isDark ? 0.65 : 0,
+      "shadow-offset-x": 0,
+      "shadow-offset-y": 0,
     })
     .selector("node[status = 'private']")
     .style({
@@ -181,6 +187,25 @@ function applyTranslations() {
   if ($("pathResult").dataset.state === "empty") $("pathResult").textContent = t("path.empty");
   if ($("pathResult").dataset.state === "no-path") $("pathResult").textContent = t("path.noPath");
   if (!$("crawlLogs").children.length) $("lastEvent").textContent = t("log.empty");
+  document.querySelectorAll(".connection-detail").forEach((node) => {
+    const raw = node.dataset.rawMessage;
+    if (raw) {
+      const isOk = node.classList.contains("ok");
+      const isFailed = node.classList.contains("failed");
+      const okState = isOk ? true : (isFailed ? false : null);
+      setConnectionDetail(node.id, raw, okState);
+    } else {
+      node.textContent = t("connection.notTested");
+    }
+  });
+  const activeProj = $("activeProjectName");
+  if (activeProj) {
+    const projName = activeProj.textContent.trim();
+    if (projName === "default" || projName === "Default Project" || projName === "默认项目") {
+      activeProj.textContent = t("project.defaultName");
+    }
+  }
+  loadProjects().catch(() => {});
 }
 
 function statusText(status) {
@@ -196,7 +221,33 @@ function setStatus(id, status) {
 function setConnectionDetail(id, message, ok = null) {
   const node = $(id);
   if (!node) return;
-  node.textContent = message || t("connection.notTested");
+  
+  if (message) {
+    node.dataset.rawMessage = message;
+  }
+  
+  let translatedMessage = message;
+  if (currentLang === "en") {
+    if (message === "Steam API Key 可用") {
+      translatedMessage = "Steam API Key is valid";
+    } else if (message === "Kùzu 连接正常") {
+      translatedMessage = "Kùzu connection is normal";
+    } else if (message === "Neo4j 连接正常") {
+      translatedMessage = "Neo4j connection is normal";
+    } else if (message && message.startsWith("连接测试失败：")) {
+      translatedMessage = "Connection test failed: " + message.substring(7);
+    }
+  } else {
+    if (message === "Steam API Key is valid") {
+      translatedMessage = "Steam API Key 可用";
+    } else if (message === "Kùzu connection is normal") {
+      translatedMessage = "Kùzu 连接正常";
+    } else if (message === "Neo4j connection is normal") {
+      translatedMessage = "Neo4j 连接正常";
+    }
+  }
+  
+  node.textContent = translatedMessage || t("connection.notTested");
   node.classList.toggle("ok", ok === true);
   node.classList.toggle("failed", ok === false);
 }
@@ -327,10 +378,12 @@ async function withButtonState(button, action) {
   try {
     const result = await action();
     node.classList.add("button-success");
+    Haptic.trigger('success');
     setTimeout(() => node.classList.remove("button-success"), 900);
     return result;
   } catch (error) {
     node.classList.add("button-error");
+    Haptic.trigger('error');
     toast(error.message);
     appendSystemLog("error", "ui", error.message);
     setTimeout(() => node.classList.remove("button-error"), 1200);
@@ -486,7 +539,7 @@ function renderGraph(data) {
       updateGraphSummary();
       $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
       if (!data.nodes.length) {
-        $("graphEmpty").querySelector("span").textContent = t("graph.emptyFiltered");
+        $("graphEmpty").querySelector("p").textContent = t("graph.emptyFiltered");
       }
       if (loading) loading.classList.add("hidden");
       return;
@@ -697,9 +750,10 @@ async function loadSettings() {
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
-  $("activeProjectName").textContent = settings.active_project || "default";
+  const activeProjName = settings.active_project || "default";
+  $("activeProjectName").textContent = activeProjName === "default" ? t("project.defaultName") : activeProjName;
   loadProjects().catch(() => {
-    $("projectList").innerHTML = `<div class="project-item active" data-project-id="default"><span>默认项目</span><span class="project-meta">离线</span></div>`;
+    $("projectList").innerHTML = `<div class="project-item active" data-project-id="default"><span>${t("project.defaultName")}</span><span class="project-meta">${t("status.offline") || "Offline"}</span></div>`;
   });
 }
 
@@ -1084,7 +1138,8 @@ function updateCrawlButtons(status) {
 
 async function loadProjects() {
   const data = await api("/api/projects");
-  $("activeProjectName").textContent = data.active_project_id || "default";
+  const activeProjId = data.active_project_id || "default";
+  $("activeProjectName").textContent = activeProjId === "default" ? t("project.defaultName") : activeProjId;
   renderProjectList(data);
 }
 
@@ -1095,7 +1150,7 @@ function renderProjectList(data) {
       (p) => `
     <div class="project-item${p.id === data.active_project_id ? " active" : ""}" data-project-id="${escapeHtml(p.id)}">
       <div class="project-item-header">
-        <span class="project-name">${escapeHtml(p.name)}</span>
+        <span class="project-name">${p.id === "default" ? t("project.defaultName") : escapeHtml(p.name)}</span>
         ${p.id !== "default" ? `<button class="icon-button mini danger delete-project" data-project-id="${escapeHtml(p.id)}" title="${t("action.deleteProject")}"><i data-lucide="trash-2"></i></button>` : ""}
       </div>
       <span class="project-meta">${p.steam_users} ${t("metric.nodes")} · ${p.relationships} ${t("metric.edges")} · ${p.crawl_runs} ${t("project.crawls")}</span>
@@ -1287,6 +1342,48 @@ async function copySystemLogs() {
 }
 
 function wireEvents() {
+  // SteamID 智能链接解析提取
+  $("graphRoot").addEventListener("input", (event) => {
+    const val = event.target.value.trim();
+    const profileMatch = val.match(/profiles\/([0-9]{17})/);
+    const idMatch = val.match(/id\/([a-zA-Z0-9_-]+)/);
+    if (profileMatch) {
+      event.target.value = profileMatch[1];
+      autoSaveLastConfig();
+    } else if (idMatch) {
+      event.target.value = idMatch[1];
+      autoSaveLastConfig();
+    }
+  });
+
+  // 一键重置筛选
+  $("resetFilters").addEventListener("click", () => {
+    $("graphDepth").value = "2";
+    $("graphLimit").value = "500";
+    $("graphLimit").max = "2000";
+    $("graphLimit").disabled = false;
+    
+    const limitToggle = $("graphLimitToggle");
+    if (limitToggle) {
+      limitToggle.checked = false;
+      limitToggle.dispatchEvent(new Event("change"));
+    }
+    
+    $("graphSearch").value = "";
+    $("graphCategory").value = "";
+    $("graphFriendCountMin").value = "";
+    $("graphFriendCountMax").value = "";
+    $("graphPriorPoolMinLinks").value = "0";
+    $("graphSortBy").value = "depth";
+    $("graphSortDir").value = "asc";
+    
+    autoSaveLastConfig();
+    const emptyMsg = $("graphEmpty") ? $("graphEmpty").querySelector("p") : null;
+    if (emptyMsg) emptyMsg.textContent = t("graph.emptyHint");
+    loadGraph().catch(() => {});
+    toast(t("toast.filtersReset"));
+  });
+
   document.querySelectorAll(".lang-button").forEach((button) => {
     button.addEventListener("click", () => setLanguage(button.dataset.lang));
   });
@@ -1325,10 +1422,28 @@ function wireEvents() {
   // Graph Limit Toggle logic
   const limitInput = $("graphLimit");
   const limitToggle = $("graphLimitToggle");
+  const limitBtn = $("graphLimitBtn");
   if (limitInput && limitToggle) {
     const savedNoLimit = localStorage.getItem("sfm_no_limit") === "true";
     limitToggle.checked = savedNoLimit;
     limitInput.max = savedNoLimit ? 100000 : 2000;
+
+    const syncLimitBtn = () => {
+      if (!limitBtn) return;
+      const isChecked = limitToggle.checked;
+      limitBtn.classList.toggle("active", isChecked);
+      const icon = limitBtn.querySelector('i, svg');
+      if (icon) {
+        if (isChecked) {
+          icon.setAttribute("data-lucide", "unlock");
+        } else {
+          icon.setAttribute("data-lucide", "lock");
+        }
+        if (window.lucide) window.lucide.createIcons();
+      }
+    };
+
+    syncLimitBtn();
     
     limitToggle.addEventListener("change", () => {
       const isChecked = limitToggle.checked;
@@ -1337,7 +1452,14 @@ function wireEvents() {
       if (!isChecked && Number(limitInput.value) > 2000) {
         limitInput.value = 2000;
       }
+      syncLimitBtn();
     });
+
+    if (limitBtn) {
+      limitBtn.addEventListener("click", () => {
+        limitToggle.click();
+      });
+    }
   }
   $("exportJson").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("json")).catch(() => {}));
   $("exportCsv").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("csv")).catch(() => {}));
@@ -1583,6 +1705,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadPresets();
   autoLoadLastConfig();
   wireEvents();
+  initMagneticButtons();
+  initHapticFeedback();
   $("pathResult").dataset.state = "empty";
   loadSettings()
     .then(() => testSettings({ silent: true }))
@@ -1593,3 +1717,123 @@ document.addEventListener("DOMContentLoaded", async () => {
   loadSystemLogs(true).catch(() => {});
   startSystemLogPolling();
 });
+
+// ── Apple Ecosystem Taptic / Haptic Feedback Scheme ─────────────────
+const Haptic = {
+  // Trigger physical vibration (supports natively injected bridges & Web Vibration API)
+  trigger(style = 'light') {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.haptic) {
+      window.webkit.messageHandlers.haptic.postMessage({ style });
+      return;
+    }
+    if (window.__TAURI__ && window.__TAURI__.invoke) {
+      window.__TAURI__.invoke('plugin:haptics|trigger', { style }).catch(() => {});
+      return;
+    }
+    
+    if (navigator.vibrate) {
+      try {
+        switch (style) {
+          case 'light': navigator.vibrate(10); break;
+          case 'medium': navigator.vibrate(20); break;
+          case 'heavy': navigator.vibrate(40); break;
+          case 'success': navigator.vibrate([10, 30, 10]); break;
+          case 'warning': navigator.vibrate([20, 50, 20]); break;
+          case 'error': navigator.vibrate([30, 80, 30]); break;
+        }
+      } catch (e) {}
+    }
+  },
+  
+  // Visual Micro-Haptic Click (simulates Apple physical tactile key deformation)
+  visualClick(element) {
+    if (!element) return;
+    const originalTransform = element.style.transform || '';
+    const baseTransform = originalTransform.replace(/scale\([0-9.]+\)/g, '').trim();
+    element.style.transition = 'transform 0.05s cubic-bezier(0.25, 1, 0.5, 1)';
+    element.style.transform = `${baseTransform} scale(0.95)`.trim();
+    
+    setTimeout(() => {
+      element.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
+      element.style.transform = baseTransform;
+    }, 60);
+  }
+};
+
+function initHapticFeedback() {
+  const clickSelector = '.primary, .secondary, .icon-button, .tool, .theme-toggle, .tab-button, .ins-tab-button, .lang-button';
+  
+  document.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest(clickSelector);
+    if (btn && !btn.disabled && !btn.classList.contains('is-loading')) {
+      Haptic.trigger('light');
+      Haptic.visualClick(btn);
+    }
+  });
+}
+
+function initMagneticButtons() {
+  const selector = '.primary, .secondary, .icon-button, .tool, .theme-toggle';
+  
+  document.addEventListener('mousemove', (e) => {
+    const btn = e.target.closest(selector);
+    if (!btn || btn.disabled || btn.classList.contains('is-loading')) {
+      clearActiveMagneticBtn();
+      return;
+    }
+    
+    if (window.activeMagneticBtn !== btn) {
+      clearActiveMagneticBtn();
+      window.activeMagneticBtn = btn;
+    }
+    
+    const rect = btn.getBoundingClientRect();
+    const x = e.clientX - rect.left - rect.width / 2;
+    const y = e.clientY - rect.top - rect.height / 2;
+    
+    const isSmall = !btn.classList.contains('primary') && !btn.classList.contains('secondary');
+    const maxDelta = isSmall ? 3 : 4;
+    const strength = 0.12;
+    
+    let moveX = x * strength;
+    let moveY = y * strength;
+    
+    moveX = Math.max(-maxDelta, Math.min(maxDelta, moveX));
+    moveY = Math.max(-maxDelta, Math.min(maxDelta, moveY));
+    
+    btn.style.transition = 'transform 0.1s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.25s, border-color 0.25s, box-shadow 0.25s';
+    const scale = isSmall ? 1.03 : 1.008;
+    btn.style.transform = `translate3d(${moveX}px, ${moveY}px, 0) scale(${scale})`;
+    
+    const icon = btn.querySelector('svg, [data-lucide]');
+    if (icon) {
+      const rotateDeg = x * 0.03;
+      icon.style.transition = 'transform 0.1s ease-out';
+      icon.style.transform = `rotate(${Math.max(-6, Math.min(6, rotateDeg))}deg)`;
+    }
+  });
+  
+  document.addEventListener('mouseout', (e) => {
+    const btn = e.target.closest(selector);
+    if (btn && window.activeMagneticBtn === btn) {
+      if (!e.relatedTarget || !btn.contains(e.relatedTarget)) {
+        clearActiveMagneticBtn();
+      }
+    }
+  });
+  
+  function clearActiveMagneticBtn() {
+    if (window.activeMagneticBtn) {
+      const btn = window.activeMagneticBtn;
+      btn.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.25s, border-color 0.25s, box-shadow 0.25s';
+      btn.style.transform = 'translate3d(0, 0, 0)';
+      
+      const icon = btn.querySelector('svg, [data-lucide]');
+      if (icon) {
+        icon.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
+        icon.style.transform = 'rotate(0deg)';
+      }
+      window.activeMagneticBtn = null;
+    }
+  }
+}
