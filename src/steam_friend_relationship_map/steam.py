@@ -148,6 +148,7 @@ class SteamClient:
             self._owns_client = True
 
         url = f"{self.base_url}{path}"
+        import random
         last_error: Exception | None = None
         for attempt in range(retries):
             try:
@@ -158,7 +159,8 @@ class SteamClient:
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < retries - 1:
                     if self.rate_limiter:
                         await self.rate_limiter.report_backoff()
-                    await asyncio.sleep(0.8 * (attempt + 1))
+                    delay = 1.2 * (2 ** attempt)
+                    await asyncio.sleep(delay + random.uniform(0.1, 0.5 * delay))
                     continue
                 if response.status_code >= 400:
                     if self.rate_limiter:
@@ -172,7 +174,8 @@ class SteamClient:
                 if self.rate_limiter:
                     await self.rate_limiter.report_backoff()
                 if attempt < retries - 1:
-                    await asyncio.sleep(0.8 * (attempt + 1))
+                    delay = 1.2 * (2 ** attempt)
+                    await asyncio.sleep(delay + random.uniform(0.1, 0.5 * delay))
                     continue
         raise SteamApiError(f"Steam API 请求失败: {last_error}")
 

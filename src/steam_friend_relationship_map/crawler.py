@@ -334,6 +334,59 @@ class CrawlManager:
                 no_deeper_scan: set[str] = set()
                 uses_friend_count_filter = payload.friend_count_min is not None or payload.friend_count_max is not None
 
+                # ── 阶段性写盘辅助函数 ──
+                async def flush_batch(batch_ids: list[str]):
+                    if not batch_ids:
+                        return
+                    nonlocal edges_discovered, nodes_discovered, same_pool_edges
+                    batch_summaries = await self.steam.get_player_summaries(batch_ids)
+                    by_id_map = {rec.steam_id: rec for rec in batch_summaries}
+                    batch_records = []
+                    for sid in batch_ids:
+                        rec = by_id_map.get(sid, placeholder_user(sid, discovered[sid]))
+                        rec.depth_min = discovered[sid]
+                        met = candidate_metrics.get(sid, {})
+                        rec.friend_count = met.get("friend_count")  # type: ignore[assignment]
+                        rec.friend_count_status = str(met.get("friend_count_status", "unknown"))
+                        rec.prior_pool_link_count = int(met.get("prior_pool_link_count", 0))
+                        rec.root_closeness_score = float(met.get("root_closeness_score", 0))
+                        rec.last_scored_crawl_id = str(met.get("last_scored_crawl_id", ""))
+                        batch_records.append(rec)
+                    
+                    self.repo.upsert_users(batch_records, self.project_id)
+                    
+                    batch_edges = []
+                    for sid in batch_ids:
+                        for edge in candidate_edges[sid]:
+                            edge_key = tuple(sorted((edge.from_id, edge.to_id)))
+                            if edge_key not in edges_seen:
+                                edges_seen.add(edge_key)
+                                batch_edges.append(edge)
+                    
+                    if same_pool_edges:
+                        for edge in same_pool_edges:
+                            edge_key = tuple(sorted((edge.from_id, edge.to_id)))
+                            if edge_key not in edges_seen:
+                                edges_seen.add(edge_key)
+                                batch_edges.append(edge)
+                        same_pool_edges = []
+                    
+                    if batch_edges:
+                        self.repo.upsert_relationships(batch_edges, self.project_id)
+                        edges_discovered += len(batch_edges)
+                        
+                    nodes_discovered = len(discovered)
+                    self.repo.update_crawl_run(
+                        run.id,
+                        nodes_discovered=nodes_discovered,
+                        edges_discovered=edges_discovered,
+                        private_count=private_count,
+                        error_count=error_count,
+                        progress_percent=self._progress(nodes_discovered, run.max_nodes, False),
+                    )
+
+                pending_batch_ids: list[str] = []
+
                 # ── 跨层前层连接统计 ──
                 cross_links: dict[str, int] = {}
                 if payload.prior_pool_min_links:
@@ -427,14 +480,29 @@ class CrawlManager:
                         "root_closeness_score": self._score(next_depth, total_prior_links, friend_count),
                         "last_scored_crawl_id": run.id,
                     }
+                    
+                    pending_batch_ids.append(friend_id)
+                    if len(pending_batch_ids) >= 15:
+                        await flush_batch(pending_batch_ids)
+                        pending_batch_ids = []
 
-                new_edges: list[FriendEdge] = same_pool_edges[:]
-                for friend_id in accepted_ids:
-                    for edge in candidate_edges[friend_id]:
+                # 写入最后一批剩余的缓冲区
+                if pending_batch_ids:
+                    await flush_batch(pending_batch_ids)
+                    pending_batch_ids = []
+                
+                # 写入可能遗留的 same_pool_edges
+                if same_pool_edges:
+                    batch_edges = []
+                    for edge in same_pool_edges:
                         edge_key = tuple(sorted((edge.from_id, edge.to_id)))
                         if edge_key not in edges_seen:
                             edges_seen.add(edge_key)
-                            new_edges.append(edge)
+                            batch_edges.append(edge)
+                    same_pool_edges = []
+                    if batch_edges:
+                        self.repo.upsert_relationships(batch_edges, self.project_id)
+                        edges_discovered += len(batch_edges)
 
                 if accepted_ids:
                     active = len(accepted_ids) - len(no_deeper_scan)
@@ -443,28 +511,8 @@ class CrawlManager:
                         run.id, "info", "summary",
                         f"深度{depth}→{next_depth}: 收录{len(accepted_ids)}人 (其中{active}人继续展开, {soft_filtered}人标记不展开), 节点总计{len(discovered)}",
                     )
-                    summaries = await self.steam.get_player_summaries(accepted_ids)
-                    by_id = {record.steam_id: record for record in summaries}
-                    records: list[SteamUserRecord] = []
-                    for steam_id in accepted_ids:
-                        # 少数资料接口缺失的用户仍保留占位节点，关系线不会丢。
-                        record = by_id.get(steam_id, placeholder_user(steam_id, discovered[steam_id]))
-                        record.depth_min = discovered[steam_id]
-                        metrics = candidate_metrics.get(steam_id, {})
-                        record.friend_count = metrics.get("friend_count")  # type: ignore[assignment]
-                        record.friend_count_status = str(metrics.get("friend_count_status", "unknown"))
-                        record.prior_pool_link_count = int(metrics.get("prior_pool_link_count", 0))
-                        record.root_closeness_score = float(metrics.get("root_closeness_score", 0))
-                        record.last_scored_crawl_id = str(metrics.get("last_scored_crawl_id", ""))
-                        records.append(record)
-                    self.repo.upsert_users(records, self.project_id)
-                    nodes_discovered = len(discovered)
                     self.append_event(run.id, "info", "users", f"已写入用户节点, 总计{nodes_discovered}")
-
-                if new_edges:
-                    self.repo.upsert_relationships(new_edges, self.project_id)
-                    edges_discovered += len(new_edges)
-                    self.append_event(run.id, "info", "edges", f"已写入{len(new_edges)}条关系, 总计{edges_discovered}")
+                    self.append_event(run.id, "info", "edges", f"已写入关系线, 关系总计{edges_discovered}")
 
                 self.repo.update_crawl_run(
                     run.id,
