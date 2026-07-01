@@ -42,9 +42,36 @@ class KuzuRepositoryImpl(IGraphRepository):
     def __init__(self, db_path: str, buffer_pool_size_gb: int = 1) -> None:
         self.db_path = db_path
         from pathlib import Path
+        import os
+        import shutil
+        from datetime import datetime
+        import logging
+
+        logger = logging.getLogger("kuzu_repo")
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         buffer_pool_size_bytes = int(buffer_pool_size_gb * 1024 * 1024 * 1024)
-        self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
+        
+        try:
+            self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
+        except Exception as e:
+            err_msg = str(e).lower()
+            if any(term in err_msg for term in ["io", "lock", "database", "corrupt", "unable to open", "cannot open"]):
+                backup_path = f"{db_path}_corrupted_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                logger.error(f"Kuzu DB initialization failed: {e}. Archiving to {backup_path} and recreating...")
+                if os.path.exists(db_path):
+                    try:
+                        shutil.move(db_path, backup_path)
+                    except Exception as move_err:
+                        logger.error(f"Failed to move corrupted database: {move_err}")
+                        try:
+                            os.rename(db_path, backup_path)
+                        except Exception as rename_err:
+                            logger.error(f"Failed to rename corrupted database: {rename_err}")
+                self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
+                logger.info("Successfully recreated Kuzu database.")
+            else:
+                raise e
+
         self._local = threading.local()
         self._closed = False
 
