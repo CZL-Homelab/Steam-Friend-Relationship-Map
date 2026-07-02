@@ -135,18 +135,58 @@ function updateThemeToggleIcon(mode) {
   if (window.lucide) window.lucide.createIcons();
 }
 
+let cachedFaviconText = null;
+
+async function updateFaviconTheme(mode) {
+  const link = document.querySelector("link[rel='icon']");
+  if (!link) return;
+  
+  let targetMode = mode;
+  if (mode === "auto") {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    targetMode = prefersDark ? "dark" : "light";
+  }
+  
+  const isDark = targetMode === "dark";
+  
+  if (!cachedFaviconText) {
+    try {
+      const response = await fetch("/static/favicon.svg");
+      cachedFaviconText = await response.text();
+    } catch (e) {
+      console.error("Failed to fetch favicon.svg:", e);
+      return;
+    }
+  }
+  
+  let modifiedSvg = cachedFaviconText;
+  if (isDark) {
+    modifiedSvg = modifiedSvg.replace("prefers-color-scheme: light", "prefers-color-scheme: disabled_light_scheme");
+  } else {
+    modifiedSvg = modifiedSvg.replace("prefers-color-scheme: light", "all");
+  }
+  
+  try {
+    const encoded = btoa(unescape(encodeURIComponent(modifiedSvg)));
+    link.href = `data:image/svg+xml;base64,${encoded}`;
+  } catch (e) {
+    console.error("Failed to encode favicon SVG:", e);
+  }
+}
+
 function applyTheme(mode) {
   if (mode === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
   } else if (mode === "light") {
-    document.documentElement.removeAttribute("data-theme");
+    document.documentElement.setAttribute("data-theme", "light");
   } else {
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.toggleAttribute("data-theme", prefersDark);
+    document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
   }
   localStorage.setItem("sfm_theme", mode);
   updateCytoscapeStyle();
   updateThemeToggleIcon(mode);
+  updateFaviconTheme(mode).catch(() => {});
 }
 
 function cycleTheme() {
