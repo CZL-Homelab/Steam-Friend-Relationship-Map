@@ -12,6 +12,8 @@ from .models import (
     FriendEdge,
     GraphNode,
     GraphResponse,
+    PotentialFriendCandidate,
+    PotentialFriendsResponse,
     ProjectCreate,
     ProjectListResponse,
     SteamUserRecord,
@@ -161,6 +163,18 @@ class IGraphRepository(ABC):
         project_id: str = "default",
     ) -> FriendCircleAnalysisResponse:
         """分析并获取用户的“朋友圈推荐”候选人列表（二度/三度潜在人脉社区）。"""
+        pass
+
+    @abstractmethod
+    def get_potential_friends(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> PotentialFriendsResponse:
+        """分析并获取二度/三度潜在好友推荐列表（基于 Jaccard 相似度）。"""
         pass
 
     @abstractmethod

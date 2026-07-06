@@ -105,17 +105,41 @@ function updateCytoscapeStyle() {
     .style({
       "border-color": rose,
     })
+    .selector("node[mcl_color]")
+    .style({
+      "background-color": "data(mcl_color)",
+      "shadow-color": "data(mcl_color)"
+    })
+    .selector("node[?is_intersection]")
+    .style({
+      "border-width": 4,
+      "border-style": "double",
+      "border-color": blue,
+      "shadow-blur": isDark ? 12 : 0,
+      "shadow-color": blue,
+      "shadow-opacity": 0.8
+    })
     .selector("node.analysis-focus")
     .style({
       "border-color": blue,
+      "border-width": 3
     })
     .selector("node.analysis-evidence")
     .style({
       "border-color": amber,
+      "border-width": 3
+    })
+    .selector("node.dimmed")
+    .style({
+      "opacity": 0.15
     })
     .selector("edge")
     .style({
       "line-color": muted,
+    })
+    .selector("edge.dimmed")
+    .style({
+      "opacity": 0.05
     })
     .selector(":selected")
     .style({
@@ -380,6 +404,7 @@ function setProgress(percent) {
 
 function setFieldError(id, message) {
   const input = $(id);
+  if (!input) return;
   input.classList.toggle("field-invalid", Boolean(message));
   let error = input.parentElement.querySelector(".field-error");
   if (!error) {
@@ -505,6 +530,7 @@ function metricValue(node, metric) {
   if (metric === "friend_count") return node.friend_count ?? 0;
   if (metric === "prior_pool_links") return node.prior_pool_link_count ?? 0;
   if (metric === "closeness") return node.root_closeness_score ?? 0;
+  if (metric === "pagerank") return node.pagerank_score ?? 0;
   return node.degree ?? 0;
 }
 
@@ -534,6 +560,34 @@ function buildRootFriendCircleScale(nodes) {
     },
   };
 }
+
+function calculatePageRank() {
+  if (!cy || cy.nodes().length === 0) return;
+  const pr = cy.elements().pageRank({
+    dampingFactor: 0.85,
+    precision: 0.0001
+  });
+  const ranks = [];
+  cy.nodes().forEach((node) => {
+    const rank = pr.rank(node);
+    node.data("pagerank_score", rank);
+    const rawNode = node.data("node");
+    if (rawNode) {
+      rawNode.pagerank_score = rank;
+    }
+    ranks.push(rank);
+  });
+  const maxRank = Math.max(1e-5, ...ranks);
+  const sizeBy = $("graphSizeBy").value || "root_friend_circle";
+  if (sizeBy === "pagerank") {
+    cy.nodes().forEach((node) => {
+      const rank = node.data("pagerank_score") || 0;
+      const size = Math.max(5, Math.min(100, (rank / maxRank) * 100));
+      node.data("visualSize", size);
+    });
+  }
+}
+
 
 function renderGraph(data) {
   activeRenderId++;
@@ -575,6 +629,7 @@ function renderGraph(data) {
     if (renderId !== activeRenderId) return;
 
     if (index >= elements.length) {
+      calculatePageRank();
       runLayout();
       updateGraphSummary();
       $("graphEmpty").classList.toggle("hidden", data.nodes.length > 0);
@@ -652,6 +707,7 @@ function fillProfile(node) {
   $("profileFriendCount").textContent = node.friend_count ?? "-";
   $("profilePriorLinks").textContent = node.prior_pool_link_count ?? 0;
   $("profileCloseness").textContent = node.root_closeness_score ?? 0;
+  $("profilePageRank").textContent = node.pagerank_score ? node.pagerank_score.toFixed(5) : "0";
   $("profileRootRoutes").textContent = node.root_route_count ?? 0;
   $("profileRootRouteHops").textContent = node.root_route_total_hops ?? 0;
   $("profileRootFriendCircle").textContent = node.root_friend_circle_score ?? 0;
@@ -724,7 +780,8 @@ async function loadDbStats() {
   // 如果当前项目有历史抓取，自动填入 Root 并加载图谱
   if (stats.latest_crawl && !$("graphRoot").value.trim()) {
     $("graphRoot").value = stats.latest_crawl.root_steam_id || "";
-    $("analysisRoot").value = stats.latest_crawl.root_steam_id || "";
+    if ($("analysisRoot")) $("analysisRoot").value = stats.latest_crawl.root_steam_id || "";
+    if ($("potentialRoot")) $("potentialRoot").value = stats.latest_crawl.root_steam_id || "";
     loadGraph().catch(() => {});
   }
 }
@@ -1066,7 +1123,8 @@ async function startCrawl() {
   $("crawlLogs").innerHTML = "";
   setProgress(1);
   $("graphRoot").value = run.root_steam_id;
-  $("analysisRoot").value = run.root_steam_id;
+  if ($("analysisRoot")) $("analysisRoot").value = run.root_steam_id;
+  if ($("potentialRoot")) $("potentialRoot").value = run.root_steam_id;
   toast(t("toast.crawlStarted"));
   appendSystemLog("info", "crawl", t("toast.crawlStarted"));
   startTimer();
@@ -1293,31 +1351,34 @@ async function loadTopDegree() {
 
 async function loadFriendCircles() {
   clearFieldErrors(["analysisRoot", "analysisMaxDepth", "analysisMinMutual", "analysisLimit"]);
-  const root = $("analysisRoot").value.trim() || $("graphRoot").value.trim();
+  const root = ($("analysisRoot") ? $("analysisRoot").value.trim() : "") || $("graphRoot").value.trim();
   if (!root) {
-    setFieldError("analysisRoot", t("validation.required"));
+    if ($("analysisRoot")) setFieldError("analysisRoot", t("validation.required"));
     throw new Error(t("validation.rootSteamIdRequired"));
   }
-  $("analysisRoot").value = root;
+  if ($("analysisRoot")) $("analysisRoot").value = root;
   const params = new URLSearchParams({
     root,
-    max_depth: $("analysisMaxDepth").value || "3",
-    min_mutual: $("analysisMinMutual").value || "2",
-    limit: $("analysisLimit").value || "30",
+    max_depth: $("analysisMaxDepth") ? $("analysisMaxDepth").value : "3",
+    min_mutual: $("analysisMinMutual") ? $("analysisMinMutual").value : "2",
+    limit: $("analysisLimit") ? $("analysisLimit").value : "30",
   });
   const data = await api(`/api/analysis/friend-circles?${params.toString()}`);
-  $("friendCircleList").innerHTML = data.candidates
-    .map(
-      (item) =>
-        `<li><button class="rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(t("analysis.row", {
-          mutual: item.mutual_count,
-          score: item.score,
-        }))}</span></button></li>`,
-    )
-    .join("");
-  document.querySelectorAll(".rank-button").forEach((button) => {
-    button.addEventListener("click", () => focusAnalysisCandidate(button.dataset.steamId, data.candidates));
-  });
+  const listDom = $("friendCircleList");
+  if (listDom) {
+    listDom.innerHTML = data.candidates
+      .map(
+        (item) =>
+          `<li><button class="rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(t("analysis.row", {
+            mutual: item.mutual_count,
+            score: item.score,
+          }))}</span></button></li>`,
+      )
+      .join("");
+    document.querySelectorAll(".rank-button").forEach((button) => {
+      button.addEventListener("click", () => focusAnalysisCandidate(button.dataset.steamId, data.candidates));
+    });
+  }
   toast(t("toast.analysisLoaded"));
 }
 
@@ -1448,7 +1509,22 @@ function wireEvents() {
   $("saveProfile").addEventListener("click", (event) => withButtonState(event.currentTarget, saveProfile).catch(() => {}));
   $("findPath").addEventListener("click", (event) => withButtonState(event.currentTarget, findPath).catch(() => {}));
   $("loadTopDegree").addEventListener("click", (event) => withButtonState(event.currentTarget, loadTopDegree).catch(() => {}));
-  $("loadFriendCircles").addEventListener("click", (event) => withButtonState(event.currentTarget, loadFriendCircles).catch(() => {}));
+  if ($("loadFriendCircles")) {
+    $("loadFriendCircles").addEventListener("click", (event) => withButtonState(event.currentTarget, loadFriendCircles).catch(() => {}));
+  }
+  $("loadPotentialFriends").addEventListener("click", (event) => withButtonState(event.currentTarget, loadPotentialFriends).catch(() => {}));
+  $("runMcl").addEventListener("click", runMclClustering);
+  $("clearMcl").addEventListener("click", clearMclClustering);
+  $("potentialRoot").addEventListener("input", (event) => {
+    const val = event.target.value.trim();
+    const profileMatch = val.match(/profiles\/([0-9]{17})/);
+    const idMatch = val.match(/id\/([a-zA-Z0-9_-]+)/);
+    if (profileMatch) {
+      event.target.value = profileMatch[1];
+    } else if (idMatch) {
+      event.target.value = idMatch[1];
+    }
+  });
   $("refreshSystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, () => loadSystemLogs(true)).catch(() => {}));
   $("copySystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, copySystemLogs).catch(() => {}));
   $("clearSystemLogs").addEventListener("click", () => {
@@ -1877,3 +1953,124 @@ function initMagneticButtons() {
     }
   }
 }
+
+async function loadPotentialFriends() {
+  clearFieldErrors(["potentialRoot", "potentialMaxDepth", "potentialMinMutual", "potentialLimit"]);
+  const root = $("potentialRoot").value.trim() || $("graphRoot").value.trim();
+  if (!root) {
+    setFieldError("potentialRoot", t("validation.required"));
+    throw new Error(t("validation.rootSteamIdRequired"));
+  }
+  $("potentialRoot").value = root;
+  const params = new URLSearchParams({
+    root,
+    max_depth: $("potentialMaxDepth").value || "3",
+    min_mutual: $("potentialMinMutual").value || "2",
+    limit: $("potentialLimit").value || "30",
+  });
+  const data = await api(`/api/analysis/potential-friends?${params.toString()}`);
+  $("potentialFriendList").innerHTML = data.candidates
+    .map(
+      (item) =>
+        `<li><button class="rank-button potential-rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>Jaccard: ${(item.jaccard_coefficient * 100).toFixed(1)}% · Score: ${item.score}</span></button></li>`,
+    )
+    .join("");
+  document.querySelectorAll(".potential-rank-button").forEach((button) => {
+    button.addEventListener("click", () => focusAnalysisCandidate(button.dataset.steamId, data.candidates));
+  });
+  toast(t("toast.analysisLoaded"));
+}
+
+let communityColors = {};
+
+function runMclClustering() {
+  if (!cy || cy.nodes().length === 0) {
+    toast(t("toast.selectNodeFirst"));
+    return;
+  }
+  
+  try {
+    const clusters = cy.elements().markovClustering({
+      attributes: [ (edge) => edge.data('strength') || 1 ]
+    });
+
+    if (!clusters || clusters.length === 0) {
+      $("mclStats").textContent = t("mcl.empty");
+      return;
+    }
+
+    communityColors = {};
+    clusters.forEach((cluster, index) => {
+      const hue = (index * 360 / clusters.length) % 360;
+      const color = `hsl(${hue}, 75%, 45%)`;
+      
+      cluster.nodes().forEach(node => {
+        node.data('mcl_color', color);
+        node.data('mcl_community_id', index);
+      });
+    });
+
+    const communityListDom = $("mclCommunityList");
+    communityListDom.innerHTML = clusters
+      .map((cluster, index) => {
+        const size = cluster.nodes().length;
+        const color = `hsl(${(index * 360 / clusters.length) % 360}, 75%, 45%)`;
+        let maxDeg = -1;
+        let repLabel = `社区 ${index + 1}`;
+        cluster.nodes().forEach(node => {
+          const deg = node.data('degree') || 0;
+          if (deg > maxDeg) {
+            maxDeg = deg;
+            repLabel = node.data('label') || node.id();
+          }
+        });
+        
+        return `
+          <li>
+            <button class="rank-button mcl-community-button" data-community-id="${index}" style="border-left: 4px solid ${color}; padding-left: 8px;">
+              <strong>${escapeHtml(repLabel)} 的圈子</strong>
+              <span>${size} 个成员</span>
+            </button>
+          </li>
+        `;
+      })
+      .join("");
+
+    document.querySelectorAll(".mcl-community-button").forEach(button => {
+      const cid = parseInt(button.dataset.communityId);
+      button.addEventListener("click", () => {
+        const targetNodes = cy.nodes().filter(node => node.data('mcl_community_id') === cid);
+        if (button.classList.contains("active-comm")) {
+          button.classList.remove("active-comm");
+          cy.elements().removeClass("dimmed");
+        } else {
+          document.querySelectorAll(".mcl-community-button").forEach(b => b.classList.remove("active-comm"));
+          button.classList.add("active-comm");
+          cy.elements().addClass("dimmed");
+          targetNodes.removeClass("dimmed");
+          targetNodes.connectedEdges().removeClass("dimmed");
+        }
+      });
+    });
+
+    $("mclStats").textContent = `成功划分出 ${clusters.length} 个社交圈子`;
+    toast("圈子划分已完成");
+  } catch (err) {
+    console.error("MCL Clustering failed:", err);
+    toast("MCL 圈子划分失败");
+  }
+}
+
+function clearMclClustering() {
+  if (!cy) return;
+  cy.nodes().forEach(node => {
+    node.removeData('mcl_color');
+    node.removeData('mcl_community_id');
+  });
+  cy.elements().removeClass("dimmed");
+  $("mclCommunityList").innerHTML = "";
+  $("mclStats").textContent = t("mcl.empty");
+  document.querySelectorAll(".mcl-community-button").forEach(b => b.classList.remove("active-comm"));
+  toast("已清除圈子划分");
+}
+

@@ -26,6 +26,7 @@ from .models import (
     FriendCircleAnalysisResponse,
     GraphNode,
     GraphResponse,
+    PotentialFriendsResponse,
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
@@ -517,6 +518,20 @@ def create_app(
         except Exception as exc:
             log_buffer.append("error", "analysis", f"朋友圈分析失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+
+    @app.get("/api/analysis/potential-friends", response_model=PotentialFriendsResponse)
+    async def potential_friends(
+        root: str,
+        max_depth: Annotated[int, Query(ge=2, le=4)] = 3,
+        min_mutual: Annotated[int, Query(ge=0)] = 2,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ) -> PotentialFriendsResponse:
+        try:
+            return repo.get_potential_friends(root=root, max_depth=max_depth, min_mutual=min_mutual, limit=limit, project_id=settings.active_project)
+        except Exception as exc:
+            log_buffer.append("error", "analysis", f"潜在好友分析失败: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+
 
     @app.post("/api/export", response_model=ExportResponse)
     async def export_graph(format: str = "json") -> Response | ExportResponse:
