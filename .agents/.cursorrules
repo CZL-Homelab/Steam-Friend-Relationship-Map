@@ -146,12 +146,12 @@ The repository follows a tiered branching model. All feature development must ev
 
 > [!IMPORTANT]
 > **绝不直接在 `dev-base` 分支进行开发 / Never develop directly on the `dev-base` branch.**
-> 所有开发工作必须在特定的功能分支（如 `dev-N` 或具描述性的分支）上进行，严禁直接在 `dev-base` 分支上进行提交或开发。
-> All development work must be done on specific feature branches (e.g., `dev-N` or descriptive branches). Direct commits and development on the `dev-base` branch are strictly prohibited.
+> 所有开发工作必须在特定类型的功能分支（如 `dev/feat/...`、`dev/fix/...` 或 `dev/chore/...`）上进行，严禁直接在 `dev-base` 分支上进行提交或开发。
+> All development work must be done on specific feature branches (e.g., `dev/feat/...`, `dev/fix/...`, or `dev/chore/...`). Direct commits and development on the `dev-base` branch are strictly prohibited.
 
 
 ```
-dev-N (Feature Development)
+dev/feat/... or dev/fix/... or dev/chore/... (Feature Development)
    ↓  PR / merge
 dev-base (Integration Branch)
    ↓  Security Audit & Code Normalization
@@ -161,7 +161,7 @@ main (Production Branch)
 ```
 
 ### Workflow Steps
-1. Create a feature branch `dev-N` (or a descriptive name) from `dev-base`.
+1. Create a feature branch starting with `dev/feat/`, `dev/fix/`, or `dev/chore/` (e.g., `dev/feat/my-feature`) from `dev-base`.
 2. Perform development and submit a PR to merge into `dev-base`.
 3. Once features accumulate on `dev-base`, create `security-check-before-main` from it.
 4. On `security-check-before-main`, execute:
