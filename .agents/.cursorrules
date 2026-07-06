@@ -144,6 +144,12 @@ All code changes must strictly adhere to the following security design patterns 
 
 The repository follows a tiered branching model. All feature development must eventually go through a security check branch before merging into `main`.
 
+> [!IMPORTANT]
+> **绝不直接在 `dev-base` 分支进行开发 / Never develop directly on the `dev-base` branch.**
+> 所有开发工作必须在特定的功能分支（如 `dev-N` 或具描述性的分支）上进行，严禁直接在 `dev-base` 分支上进行提交或开发。
+> All development work must be done on specific feature branches (e.g., `dev-N` or descriptive branches). Direct commits and development on the `dev-base` branch are strictly prohibited.
+
+
 ```
 dev-N (Feature Development)
    ↓  PR / merge
