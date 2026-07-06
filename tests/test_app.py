@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from steam_friend_relationship_map.app import create_app
+import steam_friend_relationship_map.app as app_module
 from steam_friend_relationship_map.models import DbStats, ExportResponse, FriendCircleAnalysisResponse, FriendCircleCandidate, GraphEdge, GraphNode, GraphResponse
 from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.steam import SteamApiError, SteamClient
@@ -73,6 +73,14 @@ class FakeRepo:
             root="root",
             candidates=[FriendCircleCandidate(steam_id="candidate", label="Candidate", mutual_count=2, score=18)],
         )
+
+    def get_potential_friends(self, **_: object) -> PotentialFriendsResponse:
+        from steam_friend_relationship_map.models import PotentialFriendCandidate, PotentialFriendsResponse
+        return PotentialFriendsResponse(
+            root="root",
+            candidates=[PotentialFriendCandidate(steam_id="candidate", label="Candidate", mutual_count=2, jaccard_coefficient=0.5, score=50.0)],
+        )
+
 
     def export_graph(self, project_id: str = "default") -> ExportResponse:
         return ExportResponse(nodes=[{"steam_id": "root", "persona_name": "Root"}], edges=[])
@@ -307,9 +315,21 @@ def test_friend_circle_analysis_endpoint() -> None:
     assert response.json()["candidates"][0]["steam_id"] == "candidate"
 
 
+def test_potential_friends_endpoint() -> None:
+    app = app_module.create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/analysis/potential-friends?root=root&max_depth=3&min_mutual=2&limit=10")
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["steam_id"] == "candidate"
+    assert response.json()["candidates"][0]["jaccard_coefficient"] == 0.5
+
+
+
 def test_project_switch_strips_crlf() -> None:
     from unittest.mock import patch
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = app_module.create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
 
     with patch("steam_friend_relationship_map.app.set_key") as mock_set_key:
@@ -322,7 +342,6 @@ def test_project_switch_strips_crlf() -> None:
 
 
 def test_project_switch_keeps_existing_repository_when_only_active_project_changes(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    import steam_friend_relationship_map.app as app_module
 
     class TrackingRepo(FakeRepo):
         def __init__(self) -> None:
@@ -360,7 +379,7 @@ def test_project_switch_keeps_existing_repository_when_only_active_project_chang
     monkeypatch.setattr(app_module, "get_repository", fake_get_repository)
     monkeypatch.setattr(app_module, "get_settings", lambda: switched_settings)
 
-    app = create_app(settings=initial_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = app_module.create_app(settings=initial_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.post("/api/projects/switch", json={"name": "project-a"})

@@ -18,6 +18,8 @@ from .models import (
     GraphEdge,
     GraphNode,
     GraphResponse,
+    PotentialFriendCandidate,
+    PotentialFriendsResponse,
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
@@ -478,14 +480,32 @@ class Neo4jRepositoryImpl(IGraphRepository):
         }
         order_expr = sort_map.get(sort_by, sort_map["depth"])
         direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
+        root_ids = [r.strip() for r in root.split(",") if r.strip()] if root else []
+        intersection_ids = set()
         with self.driver.session() as session:
-            if root:
-                params["root"] = root
-                # Root 查询只取指定层数内的子图，防止前端一次渲染过大的全库图。
-                # 过滤路径中的关系必须属于该项目，节点自身不再受限于 u.project_id (因为用户节点在 Neo4j 中是全局唯一的)
+            if root_ids:
+                params["root_ids"] = root_ids
+                if len(root_ids) > 1:
+                    intersect_records = list(
+                        session.run(
+                            f"""
+                            MATCH p=(r:SteamUser)-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
+                            WHERE r.steam_id IN $root_ids
+                              AND all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
+                            RETURN n.steam_id AS node_id, collect(distinct r.steam_id) AS reached_from_roots
+                            """,
+                            root_ids=root_ids,
+                            project_id=project_id,
+                        )
+                    )
+                    for rec in intersect_records:
+                        if len(rec["reached_from_roots"]) > 1:
+                            intersection_ids.add(rec["node_id"])
+
                 node_query = f"""
-                MATCH p=(r:SteamUser {{steam_id: $root}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
-                WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
+                MATCH p=(r:SteamUser)-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
+                WHERE r.steam_id IN $root_ids
+                  AND all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
                 WITH DISTINCT n
                 {where}
                 RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
@@ -504,7 +524,11 @@ class Neo4jRepositoryImpl(IGraphRepository):
             limited = len(records) > limit
             records = records[:limit]
             nodes = [self._graph_node(record["n"], record["degree"]) for record in records]
+            for node in nodes:
+                if node.id in intersection_ids:
+                    node.is_intersection = True
             ids = [node.id for node in nodes]
+
             edge_records = list(
                 session.run(
                     """
@@ -611,7 +635,107 @@ class Neo4jRepositoryImpl(IGraphRepository):
             )
         return FriendCircleAnalysisResponse(root=root, candidates=candidates)
 
+    def get_potential_friends(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> PotentialFriendsResponse:
+        max_depth = self._safe_depth(max_depth, 4)
+        min_mutual = max(0, min_mutual)
+        limit = max(1, min(limit, 100))
+
+        with self.driver.session() as session:
+            # Check if root exists
+            root_res = list(
+                session.run(
+                    "MATCH (r:SteamUser) WHERE r.steam_id = $root RETURN r.steam_id AS id",
+                    root=root
+                )
+            )
+            if not root_res:
+                return PotentialFriendsResponse(root=root, candidates=[])
+
+            # Get root degree
+            root_deg_res = list(
+                session.run(
+                    """
+                    MATCH (root:SteamUser {steam_id: $root})-[r:STEAM_FRIEND]-()
+                    WHERE coalesce(r.project_id, '') IN ['', $project_id]
+                    RETURN COUNT { (root)-[:STEAM_FRIEND]-() } AS deg
+                    """,
+                    root=root,
+                    project_id=project_id,
+                )
+            )
+            root_deg = root_deg_res[0]["deg"] if root_deg_res else 0
+
+            # Query candidates
+            query = """
+            MATCH (root:SteamUser {steam_id: $root})
+            MATCH p = (root)-[:STEAM_FRIEND*2..$max_depth]-(candidate:SteamUser)
+            WHERE candidate.steam_id <> $root
+              AND ALL(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
+              AND NOT EXISTS {
+                MATCH (root)-[r3:STEAM_FRIEND]-(candidate)
+                WHERE coalesce(r3.project_id, '') IN ['', $project_id]
+              }
+            WITH root, candidate, min(length(p)) AS depth
+            MATCH (root)-[r1:STEAM_FRIEND]-(mutual:SteamUser)-[r2:STEAM_FRIEND]-(candidate)
+            WHERE coalesce(r1.project_id, '') IN ['', $project_id]
+              AND coalesce(r2.project_id, '') IN ['', $project_id]
+            WITH candidate, depth, collect(distinct mutual)[0..6] AS mutual_friends, count(distinct mutual) AS mutual_count
+            WHERE mutual_count >= $min_mutual
+            RETURN candidate, depth, mutual_friends, mutual_count, COUNT { (candidate)-[:STEAM_FRIEND]-() } AS candidate_deg
+            ORDER BY mutual_count DESC
+            LIMIT 1000
+            """
+            records = list(
+                session.run(
+                    query,
+                    root=root,
+                    project_id=project_id,
+                    min_mutual=min_mutual,
+                    max_depth=max_depth,
+                )
+            )
+
+        candidates = []
+        for record in records:
+            node = self._graph_node(record["candidate"], record["candidate_deg"])
+            evidence_list = [self._graph_node(evidence, 0) for evidence in record["mutual_friends"]]
+            
+            c_deg = record["candidate_deg"] or 0
+            mutual_count = record["mutual_count"] or 0
+            # Calculate Jaccard Coefficient
+            union_count = root_deg + c_deg - mutual_count
+            jaccard = (mutual_count / union_count) if union_count > 0 else 0.0
+            score = jaccard * 100.0
+
+            candidates.append(
+                PotentialFriendCandidate(
+                    steam_id=node.id,
+                    label=node.label,
+                    depth=record["depth"],
+                    avatar=node.avatar,
+                    profile_url=node.profile_url,
+                    degree=c_deg,
+                    friend_count=node.friend_count,
+                    mutual_count=mutual_count,
+                    jaccard_coefficient=round(jaccard, 4),
+                    score=round(score, 2),
+                    evidence=evidence_list,
+                )
+            )
+
+        # Sort candidates by score / jaccard descending
+        candidates.sort(key=lambda x: (x.score, x.mutual_count), reverse=True)
+        return PotentialFriendsResponse(root=root, candidates=candidates[:limit])
+
     def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
+
         with self.driver.session() as session:
             records = list(
                 session.run(

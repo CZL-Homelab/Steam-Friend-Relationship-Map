@@ -293,6 +293,7 @@
                   <option value="friend_count" data-i18n="sort.friendCount">好友数</option>
                   <option value="prior_pool_links" data-i18n="sort.priorPoolLinks">朋友圈连接</option>
                   <option value="closeness" data-i18n="sort.closeness">紧密度</option>
+                  <option value="pagerank" data-i18n="sort.pagerank">PageRank 影响力</option>
                 </select>
               </label>
               <label data-i18n-label="field.layoutBias">
@@ -430,6 +431,7 @@
               <div><dt data-i18n="metric.friendCount">好友数</dt><dd id="profileFriendCount">-</dd></div>
               <div><dt data-i18n="metric.priorPoolLinks">朋友圈连接</dt><dd id="profilePriorLinks">0</dd></div>
               <div><dt data-i18n="metric.closeness">紧密度</dt><dd id="profileCloseness">0</dd></div>
+              <div><dt>PageRank</dt><dd id="profilePageRank">0</dd></div>
               <div><dt data-i18n="metric.rootRoutes">Root 路线</dt><dd id="profileRootRoutes">0</dd></div>
               <div><dt data-i18n="metric.rootRouteHops">总跳数</dt><dd id="profileRootRouteHops">0</dd></div>
               <div><dt data-i18n="metric.rootFriendCircle">朋友圈分数</dt><dd id="profileRootFriendCircle">0</dd></div>
@@ -453,7 +455,11 @@
         <div class="inspector-tabs">
           <button class="ins-tab-button active" data-target="insTabPath">
             <i data-lucide="route"></i>
-            <span data-i18n="instab.path">路径与社交圈</span>
+            <span data-i18n="instab.path">路径</span>
+          </button>
+          <button class="ins-tab-button" data-target="insTabAnalysis">
+            <i data-lucide="line-chart"></i>
+            <span data-i18n="instab.analysis">分析</span>
           </button>
           <button class="ins-tab-button" data-target="insTabRank">
             <i data-lucide="bar-chart-3"></i>
@@ -468,59 +474,74 @@
         <div class="inspector-tabs-container">
           <div class="inspector-tab-slider" id="inspectorTabSlider" data-active-index="0">
             <div class="inspector-tab-content" id="insTabPath">
-          <section class="panel">
-            <div class="panel-title">
-              <span data-i18n="section.shortestPath">最短路径</span>
-              <button class="icon-button" id="findPath" title="查询路径" data-i18n-title="action.findPath"><i data-lucide="route"></i></button>
+              <section class="panel">
+                <div class="panel-title">
+                  <span data-i18n="section.shortestPath">最短路径</span>
+                  <button class="icon-button" id="findPath" title="查询路径" data-i18n-title="action.findPath"><i data-lucide="route"></i></button>
+                </div>
+                <label data-i18n-label="field.from">
+                  起点
+                  <input id="pathFrom" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
+                </label>
+                <label data-i18n-label="field.to">
+                  终点
+                  <input id="pathTo" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
+                </label>
+                <div id="pathResult" class="path-result" data-i18n="path.empty">未选择路径</div>
+              </section>
             </div>
-            <label data-i18n-label="field.from">
-              起点
-              <input id="pathFrom" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
-            </label>
-            <label data-i18n-label="field.to">
-              终点
-              <input id="pathTo" placeholder="SteamID" data-i18n-placeholder="placeholder.steamId" />
-            </label>
-            <div id="pathResult" class="path-result" data-i18n="path.empty">未选择路径</div>
-          </section>
 
-          <section class="panel">
-            <div class="panel-title">
-              <span data-i18n="section.friendCircles">朋友圈分析</span>
-              <button class="icon-button" id="loadFriendCircles" title="分析朋友圈" data-i18n-title="action.analyzeCircles"><i data-lucide="users-round"></i></button>
-            </div>
-            <label data-i18n-label="field.rootSteamId">
-              Root SteamID
-              <input id="analysisRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
-            </label>
-            <div class="two-col">
-              <label data-i18n-label="field.maxDepth">
-                最大层数
-                <input id="analysisMaxDepth" type="number" min="2" max="4" value="3" />
-              </label>
-              <label data-i18n-label="field.minMutual">
-                最少共同连接
-                <input id="analysisMinMutual" type="number" min="0" value="2" />
-              </label>
-            </div>
-            <label data-i18n-label="field.limit">
-              限制
-              <input id="analysisLimit" type="number" min="1" max="100" value="30" />
-            </label>
-            <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
-            <ol id="friendCircleList" class="rank-list"></ol>
-          </section>
-        </div>
+            <div class="inspector-tab-content" id="insTabAnalysis">
+              <section class="panel">
+                <div class="panel-title">
+                  <span data-i18n="section.potentialFriends">潜在好友推荐</span>
+                  <button class="icon-button" id="loadPotentialFriends" title="分析潜在好友" data-i18n-title="action.analyzePotentialFriends"><i data-lucide="sparkles"></i></button>
+                </div>
+                <label data-i18n-label="field.rootSteamId">
+                  Root SteamID
+                  <input id="potentialRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
+                </label>
+                <div class="two-col">
+                  <label data-i18n-label="field.maxDepth">
+                    最大层数
+                    <input id="potentialMaxDepth" type="number" min="2" max="4" value="3" />
+                  </label>
+                  <label data-i18n-label="field.minMutual">
+                    最少共同连接
+                    <input id="potentialMinMutual" type="number" min="0" value="2" />
+                  </label>
+                </div>
+                <label data-i18n-label="field.limit">
+                  限制
+                  <input id="potentialLimit" type="number" min="1" max="100" value="30" />
+                </label>
+                <p class="hint" data-i18n="potential.hint">潜在好友与 Root 没有直接好友关系，但与其拥有较多共同好友，推荐度基于 Jaccard 相似度系数排序。</p>
+                <ol id="potentialFriendList" class="rank-list"></ol>
+              </section>
 
-        <div class="inspector-tab-content" id="insTabRank">
-          <section class="panel">
-            <div class="panel-title">
-              <span data-i18n="section.centralNodes">中心节点</span>
-              <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
+              <section class="panel">
+                <div class="panel-title">
+                  <span data-i18n="section.communityMcl">好友圈子聚类</span>
+                  <div class="panel-title-actions">
+                    <button class="icon-button" id="runMcl" title="划分圈子" data-i18n-title="action.runMcl"><i data-lucide="play"></i></button>
+                    <button class="icon-button" id="clearMcl" title="清除划分" data-i18n-title="action.clearMcl"><i data-lucide="rotate-ccw"></i></button>
+                  </div>
+                </div>
+                <p class="hint" data-i18n="mcl.hint">使用 MCL (马尔可夫聚类) 算法对已载入的好友关系网络进行自动群落划分与色彩渲染。</p>
+                <div id="mclStats" class="mcl-stats-hint" data-i18n="mcl.empty">未执行圈子划分</div>
+                <ol id="mclCommunityList" class="rank-list"></ol>
+              </section>
             </div>
-            <ol id="topDegreeList" class="rank-list"></ol>
-          </section>
-        </div>
+
+            <div class="inspector-tab-content" id="insTabRank">
+              <section class="panel">
+                <div class="panel-title">
+                  <span data-i18n="section.centralNodes">中心节点</span>
+                  <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
+                </div>
+                <ol id="topDegreeList" class="rank-list"></ol>
+              </section>
+            </div>
 
         <div class="inspector-tab-content" id="insTabCypher">
           <section class="panel" id="bloomCypherPanel">
