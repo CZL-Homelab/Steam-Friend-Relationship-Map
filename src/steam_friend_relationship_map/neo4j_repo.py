@@ -673,19 +673,22 @@ class Neo4jRepositoryImpl(IGraphRepository):
             root_deg = root_deg_res[0]["deg"] if root_deg_res else 0
 
             # Query candidates
-            query = f"""
-            MATCH (root:SteamUser {{steam_id: $root}})
-            MATCH (root)-[r1:STEAM_FRIEND]-(mutual:SteamUser)-[r2:STEAM_FRIEND]-(candidate:SteamUser)
+            query = """
+            MATCH (root:SteamUser {steam_id: $root})
+            MATCH p = (root)-[:STEAM_FRIEND*2..$max_depth]-(candidate:SteamUser)
             WHERE candidate.steam_id <> $root
-              AND coalesce(r1.project_id, '') IN ['', $project_id]
-              AND coalesce(r2.project_id, '') IN ['', $project_id]
-              AND NOT EXISTS {{
+              AND ALL(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
+              AND NOT EXISTS {
                 MATCH (root)-[r3:STEAM_FRIEND]-(candidate)
                 WHERE coalesce(r3.project_id, '') IN ['', $project_id]
-              }}
-            WITH candidate, collect(distinct mutual)[0..6] AS mutual_friends, count(distinct mutual) AS mutual_count
+              }
+            WITH root, candidate, min(length(p)) AS depth
+            MATCH (root)-[r1:STEAM_FRIEND]-(mutual:SteamUser)-[r2:STEAM_FRIEND]-(candidate)
+            WHERE coalesce(r1.project_id, '') IN ['', $project_id]
+              AND coalesce(r2.project_id, '') IN ['', $project_id]
+            WITH candidate, depth, collect(distinct mutual)[0..6] AS mutual_friends, count(distinct mutual) AS mutual_count
             WHERE mutual_count >= $min_mutual
-            RETURN candidate, 2 AS depth, mutual_friends, mutual_count, COUNT {{ (candidate)-[:STEAM_FRIEND]-() }} AS candidate_deg
+            RETURN candidate, depth, mutual_friends, mutual_count, COUNT { (candidate)-[:STEAM_FRIEND]-() } AS candidate_deg
             ORDER BY mutual_count DESC
             LIMIT 1000
             """
@@ -695,6 +698,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     root=root,
                     project_id=project_id,
                     min_mutual=min_mutual,
+                    max_depth=max_depth,
                 )
             )
 
