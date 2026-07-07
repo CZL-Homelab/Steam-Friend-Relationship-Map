@@ -100,17 +100,17 @@ graph TD
 
 ## 3. 开发优先级与复杂度矩阵
 
-| 迭代阶段 | 待办特性 | 优先级 | 估算复杂度 | 依赖模块 |
-| :--- | :--- | :--- | :--- | :--- |
-| **Phase 1** | 代理 (Proxy) 配置支持 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` |
-| **Phase 1** | 增量抓取与本地缓存 | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `neo4j_repo.py` |
-| **Phase 1** | 自适应并发限速器 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py` |
-| **Phase 1** | Neo4j 批量写入优化 | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` |
-| **Phase 2** | 图算法集成 (Louvain/PageRank) | ⭐⭐⭐⭐ | 🔴 困难 (Hard) | `neo4j_repo.py`, `app.js` |
-| **Phase 2** | 多 Root 关系对比与交集 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `app.js` |
-| **Phase 2** | ECharts 图表可视化面板 | ⭐⭐ | 🟡 中等 (Medium) | `app.js`, `index.html` |
-| **Phase 3** | Docker 容器化一键部署 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | 部署脚本 |
-| **Phase 3** | 云端 Neo4j AuraDB 支持 | ⭐⭐⭐ | 🟢 简单 (Easy) | `settings.py` |
+| 迭代阶段 | 待办特性 | 优先级 | 估算复杂度 | 依赖模块 | 当前状态 / Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Phase 1** | 代理 (Proxy) 配置支持 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` | 🔴 未开始 (Pending) |
+| **Phase 1** | 增量抓取与本地缓存 | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `neo4j_repo.py` | 🟢 已完成 (Completed) |
+| **Phase 1** | 自适应并发限速器 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py` | 🟢 已完成 (Completed) |
+| **Phase 1** | Neo4j 批量写入优化 | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` | 🟢 已完成 (Completed) |
+| **Phase 2** | 图算法集成 (Louvain/PageRank) | ⭐⭐⭐⭐ | 🔴 困难 (Hard) | `neo4j_repo.py`, `app.js` | 🟢 已完成 (Completed) |
+| **Phase 2** | 多 Root 关系对比与交集 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `app.js` | 🟢 已完成 (Completed) |
+| **Phase 2** | ECharts 图表可视化面板 | ⭐⭐ | 🟡 中等 (Medium) | `app.js`, `index.html` | 🔴 未开始 (Pending) |
+| **Phase 3** | Docker 容器化一键部署 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | 部署脚本 | 🔴 未开始 (Pending) |
+| **Phase 3** | 云端 Neo4j AuraDB 支持 | ⭐⭐⭐ | 🟢 简单 (Easy) | `settings.py` | 🔴 未开始 (Pending) |
 
 ---
 
@@ -180,12 +180,12 @@ NEO4J_PASSWORD=my_secure_password
 
 ### 4.3 实施步骤与排班表 (Implementation Steps)
 
-| 阶段 | 核心任务 | 预估工期 | 关键交付物 |
-| :--- | :--- | :--- | :--- |
-| **阶段一** | 新分支初始化与接口抽象 | 1 天 | 定义统一接口 [IGraphRepository](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/graph_repo.py)，归拢原有 Neo4j 代码至 [Neo4jRepositoryImpl](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/neo4j_repo.py) |
-| **阶段二** | 引入 Kùzu 引擎与 Schema 适配 | 2 天 | 集成 Kùzu 依赖，编写 [KuzuRepositoryImpl](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/kuzu_repo.py) 初始化强 Schema 与数据迁移脚本 |
-| **阶段三** | Cypher 语法对齐与差异调优 | 2 天 | 参数化查询符号适配，调优深层拓扑遍历语句（如 `-[*1..3]->`）在 Kùzu 的性能 |
-| **阶段四** | 多平台交叉验证与 CI/CD 优化 | 1 天 | Windows/macOS/Linux 免安装启动验证，CI/CD 默认采用 Kùzu 运行集成测试 |
+| 阶段 | 核心任务 | 预估工期 | 关键交付物 | 当前状态 / Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **阶段一** | 新分支初始化与接口抽象 | 1 天 | 定义统一接口 [IGraphRepository](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/graph_repo.py)，归拢原有 Neo4j 代码至 [Neo4jRepositoryImpl](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/neo4j_repo.py) | 🟢 已完成 (Completed) |
+| **阶段二** | 引入 Kùzu 引擎与 Schema 适配 | 2 天 | 集成 Kùzu 依赖，编写 [KuzuRepositoryImpl](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/kuzu_repo.py) 初始化强 Schema 与数据迁移脚本 | 🟢 已完成 (Completed) |
+| **阶段三** | Cypher 语法对齐与差异调优 | 2 天 | 参数化查询符号适配，调优深层拓扑遍历语句（如 `-[*1..3]->`）在 Kùzu 的性能 | 🟢 已完成 (Completed) |
+| **阶段四** | 多平台交叉验证与 CI/CD 优化 | 1 天 | Windows/macOS/Linux 免安装启动验证，CI/CD 默认采用 Kùzu 运行集成测试 | 🟢 已完成 (Completed) |
 
 #### 4.3.1 阶段一：新分支初始化与接口抽象 (1天)
 1. **创建分支**：基于 `dev-base` 创建规范命名分支 `dev/feat/graph-dual-engine`（已建）。
@@ -256,21 +256,21 @@ Kùzu 是 Schema-first（强 Schema）数据库，需要显式声明节点表（
 
 ## 5. 前端 UI/UX 体验优化专项路线图 (UI/UX Optimization Roadmap)
 
-为了进一步提升页面的操作效率、视觉美感和多分辨率适配性，本项目在开发分支 [dev/feat/ui-optimization](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/) 下规划了以下前端体验调优任务：
+为了进一步提升页面的操作效率、视觉美感和多分辨率适配性，本项目在开发分支 [dev/feat/ui-optimization](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/) 下规划了以下前端体验调优任务（**已全部完成 / All Completed**）：
 
-### 5.1 侧边栏布局精简与折叠重构 (Sidebar Density & Collapsing)
+### 5.1 侧边栏布局精简与折叠重构 (Sidebar Density & Collapsing) 🟢 已完成 (Completed)
 - **任务目标**：针对左侧侧边栏 [.sidebar](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/index.html#L13-L323) 中过多的配置面板，进行分类整理或多 Tab 标签页改造，减少小分辨率屏幕下的剧烈垂直滚动。
 - **实施计划**：
   1. 将核心扫描参数（Root URL, 层数, 节点数）与辅助参数（扫描前筛选、朋友圈/路径筛选）进行页签化（Tabs）或者手风琴式互斥折叠（Accordion）隔离。
   2. 将偏全局的“项目管理”与“安全配置”移动至顶部标题栏的侧边抽屉（Drawer）或设置弹窗（Modal）中，精简侧边栏常驻空间。
 
-### 5.2 自定义美化滚动条 (Custom Scrollbar Design)
+### 5.2 自定义美化滚动条 (Custom Scrollbar Design) 🟢 已完成 (Completed)
 - **任务目标**：替代各浏览器默认的粗大、不美观的系统级滚动条，使页面滚动组件视觉风格与 Steam 经典暗色/阳极氧化铝亮色保持高度统一。
 - **实施计划**：
   1. 在 [styles.css](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/styles.css) 中为 Webkit 引擎和 Firefox 的滚动条属性设计自定义变量与滑块配色。
   2. 实现滚动条在 Hover 状态下加深、Leave 状态下半透明缩窄的现代微交互。
 
-### 5.3 移除局部 px 硬编码，引入弹性单位与流式布局 (Fluid Typography & Relative Units)
+### 5.3 移除局部 px 硬编码，引入弹性单位与流式布局 (Fluid Typography & Relative Units) 🟢 已完成 (Completed)
 - **任务目标**：提升系统在不同显示屏及缩放比例下的可读性，增强多端适配的健壮度。
 - **实施计划**：
   1. 全面排查 [styles.css](file:///Users/jingfu/development/Steam-Friend-Relationship-Map/src/steam_friend_relationship_map/static/styles.css) 与 inline 样式，逐步将表单控件大小、文字字号、图标外边距等硬编码像素值改为 `rem` / `em`。
