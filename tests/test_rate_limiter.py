@@ -1,9 +1,39 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-import httpx
-from unittest.mock import AsyncMock, MagicMock
 
 from steam_friend_relationship_map.rate_limiter import AdaptiveRateLimiter
 from steam_friend_relationship_map.steam import SteamClient, SteamApiError
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_starts_immediately_then_spaces_requests() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
+    loop = MagicMock()
+    loop.time.side_effect = [10.0, 10.0]
+
+    with (
+        patch("steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop", return_value=loop),
+        patch("steam_friend_relationship_map.rate_limiter.asyncio.sleep", new=AsyncMock()) as sleep,
+    ):
+        await limiter.wait()
+        sleep.assert_not_awaited()
+
+        await limiter.wait()
+        sleep.assert_awaited_once_with(pytest.approx(0.3))
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_can_back_off_from_zero_delay() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=0.0)
+    loop = MagicMock()
+    loop.time.return_value = 20.0
+
+    with patch("steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop", return_value=loop):
+        await limiter.report_backoff(retry_after_ms=1500.0)
+
+    assert limiter.current_delay_ms == 100.0
+    assert limiter._next_request_at == pytest.approx(21.5)
 
 
 @pytest.mark.asyncio

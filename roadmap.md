@@ -51,8 +51,8 @@ graph TD
 1. **增量抓取与本地缓存**
    - **内容**：支持对已抓取的节点设置有效期（例如 7 天）。在有效期内，若再次爬取该用户的关联网络，直接读取本地 Neo4j 数据库数据，跳过 Steam API 请求。
    - **收益**：大幅减少 API 额度消耗，二次图谱刷新速度提升 90% 以上。
-2. **自适应并发限速器 (Rate Limiter)**
-   - **内容**：目前请求为串行延时（通过 Delay ms 保证）。后续引入自适应滑动窗口限速，在维持安全频控的同时，允许安全限额下的异步并发请求。
+2. **自适应并发限速器 (Rate Limiter，进行中)**
+   - **内容**：已完成按请求起始时间调度、AIMD 动态延迟、零延迟退避和 `Retry-After` 支持；后续为 BFS 抓取增加有界异步并发，在维持安全频控的同时缩短任务耗时。
    - **收益**：缩短多层抓取任务的总耗时。
 3. **代理 (Proxy) 配置支持（已完成）**
    - **内容**：Web GUI 安全配置已支持 HTTP/HTTPS/SOCKS5/SOCKS5H 代理，凭据保存到系统凭据库；同时支持 `STEAM_PROXY_URL` 以及系统 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量回退。
@@ -104,7 +104,7 @@ graph TD
 | :--- | :--- | :--- | :--- | :--- |
 | **Phase 1** | 代理 (Proxy) 配置支持 ✅ | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` |
 | **Phase 1** | 增量抓取与本地缓存 | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `neo4j_repo.py` |
-| **Phase 1** | 自适应并发限速器 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py` |
+| **Phase 1** | 自适应并发限速器 🚧 | ⭐⭐⭐ | 🟡 中等 (Medium) | `rate_limiter.py`, `steam.py`, `crawler.py` |
 | **Phase 1** | Neo4j 批量写入优化 | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` |
 | **Phase 2** | 图算法集成 (Louvain/PageRank) | ⭐⭐⭐⭐ | 🔴 困难 (Hard) | `neo4j_repo.py`, `app.js` |
 | **Phase 2** | 多 Root 关系对比与交集 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `app.js` |

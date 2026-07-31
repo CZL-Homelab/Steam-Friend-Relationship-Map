@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -13,6 +15,23 @@ from .rate_limiter import AdaptiveRateLimiter
 
 
 STEAM_ID_RE = re.compile(r"^\d{17}$")
+
+
+def parse_retry_after(value: str | None, now: datetime | None = None) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return max(0.0, float(value.strip()))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    return max(0.0, (retry_at - current).total_seconds())
 
 
 class SteamApiError(RuntimeError):
@@ -165,16 +184,21 @@ class SteamClient:
                 if self.rate_limiter:
                     await self.rate_limiter.wait()
                 response = await self._client.get(url, params=params)
+                retry_after = parse_retry_after(response.headers.get("Retry-After"))
                 # 429 和 5xx 通常是临时问题，做轻量退避后重试。
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < retries - 1:
                     if self.rate_limiter:
-                        await self.rate_limiter.report_backoff()
-                    delay = 1.2 * (2 ** attempt)
+                        await self.rate_limiter.report_backoff(
+                            retry_after_ms=(retry_after * 1000.0) if retry_after is not None else None
+                        )
+                    delay = max(1.2 * (2 ** attempt), retry_after or 0.0)
                     await asyncio.sleep(delay + random.uniform(0.1, 0.5 * delay))
                     continue
                 if response.status_code >= 400:
                     if self.rate_limiter:
-                        await self.rate_limiter.report_backoff()
+                        await self.rate_limiter.report_backoff(
+                            retry_after_ms=(retry_after * 1000.0) if retry_after is not None else None
+                        )
                     raise SteamApiError(f"Steam API 请求失败: HTTP {response.status_code}", response.status_code)
                 if self.rate_limiter:
                     await self.rate_limiter.report_success()

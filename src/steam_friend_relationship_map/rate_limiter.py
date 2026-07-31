@@ -22,15 +22,22 @@ class AdaptiveRateLimiter:
         self.max_delay_ms = max(max_delay_ms, base_delay_ms)
         self.decrease_step_ms = 10.0  # 每次成功减少 10ms 延迟（请求加快）
         self.increase_factor = 1.5    # 每次重试/失败增加 1.5 倍延迟（请求放慢）
+        self.backoff_floor_ms = min(100.0, self.max_delay_ms)
         self.on_change_callback = on_change_callback
         self.lock = asyncio.Lock()
+        self._next_request_at = 0.0
 
     async def wait(self) -> None:
-        """根据当前延迟间隔进行等待"""
+        """Reserve a request start time while allowing in-flight requests to overlap."""
+        loop = asyncio.get_running_loop()
         async with self.lock:
             delay = self.current_delay_ms / 1000.0
-            if delay > 0:
-                await asyncio.sleep(delay)
+            now = loop.time()
+            scheduled_at = max(now, self._next_request_at)
+            self._next_request_at = scheduled_at + delay
+        wait_seconds = scheduled_at - now
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
 
     async def report_success(self) -> None:
         """报告请求成功，使用非线性曲线缩短延迟（加快）"""
@@ -45,11 +52,18 @@ class AdaptiveRateLimiter:
                 if self.on_change_callback:
                     self.on_change_callback(old_delay, new_delay, "success")
 
-    async def report_backoff(self) -> None:
+    async def report_backoff(self, retry_after_ms: float | None = None) -> None:
         """报告请求拥堵或受限，乘性延长延迟（退避）"""
         async with self.lock:
             old_delay = self.current_delay_ms
-            new_delay = min(self.max_delay_ms, old_delay * self.increase_factor)
+            adaptive_delay = max(self.backoff_floor_ms, old_delay * self.increase_factor)
+            new_delay = min(self.max_delay_ms, adaptive_delay)
+            requested_delay = max(new_delay, max(0.0, retry_after_ms or 0.0))
+            loop = asyncio.get_running_loop()
+            self._next_request_at = max(
+                self._next_request_at,
+                loop.time() + requested_delay / 1000.0,
+            )
             if new_delay != old_delay:
                 self.current_delay_ms = new_delay
                 if self.on_change_callback:

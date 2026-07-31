@@ -1,11 +1,47 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from steam_friend_relationship_map.steam import SteamApiError, SteamClient
+from steam_friend_relationship_map.rate_limiter import AdaptiveRateLimiter
+from steam_friend_relationship_map.steam import SteamApiError, SteamClient, parse_retry_after
+
+
+def test_parse_retry_after_supports_seconds_and_http_dates() -> None:
+    now = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    retry_at = now + timedelta(seconds=12)
+
+    assert parse_retry_after("7.5", now=now) == 7.5
+    assert parse_retry_after(retry_at.strftime("%a, %d %b %Y %H:%M:%S GMT"), now=now) == 12.0
+    assert parse_retry_after("not-a-date", now=now) is None
+
+
+@pytest.mark.asyncio
+async def test_steam_client_honors_retry_after_header() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=0)
+    limiter.wait = AsyncMock()
+    limiter.report_success = AsyncMock()
+    limiter.report_backoff = AsyncMock()
+    responses = [
+        httpx.Response(429, headers={"Retry-After": "7"}),
+        httpx.Response(200, json={"response": {"players": []}}),
+    ]
+    http_client = AsyncMock()
+    http_client.get.side_effect = responses
+    client = SteamClient("key", client=http_client, rate_limiter=limiter)
+
+    with (
+        patch("steam_friend_relationship_map.steam.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch("random.uniform", return_value=0.0),
+    ):
+        result = await client._get_json("/test", {}, retries=2)
+
+    assert result == {"response": {"players": []}}
+    limiter.report_backoff.assert_awaited_once_with(retry_after_ms=7000.0)
+    sleep.assert_awaited_once_with(7.0)
 
 
 @pytest.mark.asyncio
