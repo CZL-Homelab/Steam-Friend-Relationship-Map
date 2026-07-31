@@ -111,6 +111,25 @@ def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert retrieved2.nodes_discovered == 10
 
 
+def test_kuzu_friend_list_cache_round_trip(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.mark_friend_list_status(
+        "1",
+        "public",
+        friend_count=2,
+        friend_count_status="public",
+        friend_ids=["2", "3"],
+        project_id="default",
+    )
+
+    assert repo.get_cached_friend_list("1", valid_days=14, project_id="default") == (
+        "public",
+        ["2", "3"],
+    )
+    assert repo.get_cached_friend_list("1", valid_days=0, project_id="default") is None
+
+
 def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()

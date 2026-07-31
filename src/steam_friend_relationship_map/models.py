@@ -49,6 +49,7 @@ class CrawlCreate(BaseModel):
     max_depth: int = Field(default=2, ge=1, le=4)
     max_nodes: int = Field(default=2000, ge=1, le=10000)
     delay_ms: int = Field(default=300, ge=0, le=10000)
+    request_concurrency: int = Field(default=4, ge=1, le=16)
     friend_count_min: int | None = Field(default=None, ge=0)
     friend_count_max: int | None = Field(default=None, ge=0)
     prior_pool_min_links: int = Field(default=0, ge=0)

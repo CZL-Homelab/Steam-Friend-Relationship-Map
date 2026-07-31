@@ -131,11 +131,15 @@
                 延迟 ms
                 <input id="delayMs" type="number" min="0" max="10000" value="500" />
               </label>
-              <label data-i18n-label="field.cacheValidDays">
-                好友列表缓存天数
-                <input id="cacheValidDays" type="number" min="0" value="14" />
+              <label data-i18n-label="field.requestConcurrency">
+                并发请求数
+                <input id="requestConcurrency" type="number" min="1" max="16" value="4" />
               </label>
             </div>
+            <label data-i18n-label="field.cacheValidDays">
+              好友列表缓存天数
+              <input id="cacheValidDays" type="number" min="0" value="14" />
+            </label>
             <p class="hint" data-i18n="hint.cacheValidDays">已抓取的好友列表在此天数内跳过重复请求（0=每次重新抓取）。</p>
             <details class="subsection" open>
               <summary data-i18n="section.preScanFilters">扫描前筛选</summary>

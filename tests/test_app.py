@@ -621,3 +621,15 @@ def test_app_crawls_conflict_returns_409() -> None:
     assert resp.status_code == 409
     assert "已有活跃的抓取任务在运行中" in resp.json()["detail"]
 
+
+def test_app_crawls_reject_out_of_range_request_concurrency() -> None:
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/crawls",
+        json={"root_url": "root", "max_depth": 2, "request_concurrency": 17},
+    )
+
+    assert response.status_code == 422
+

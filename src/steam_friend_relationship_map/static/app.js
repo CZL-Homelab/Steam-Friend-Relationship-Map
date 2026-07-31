@@ -851,7 +851,7 @@ async function testSettings({ silent = false } = {}) {
 }
 
 function validateCrawlPayload() {
-  clearFieldErrors(["rootUrl", "maxDepth", "maxNodes", "delayMs", "crawlFriendCountMin", "crawlFriendCountMax", "crawlPriorPoolMinLinks"]);
+  clearFieldErrors(["rootUrl", "maxDepth", "maxNodes", "delayMs", "requestConcurrency", "crawlFriendCountMin", "crawlFriendCountMax", "crawlPriorPoolMinLinks"]);
   let ok = true;
   if (!$("rootUrl").value.trim()) {
     setFieldError("rootUrl", t("validation.required"));
@@ -862,6 +862,7 @@ function validateCrawlPayload() {
     ["maxDepth", 1, 4],
     ["maxNodes", 1, 10000],
     ["delayMs", 0, 10000],
+    ["requestConcurrency", 1, 16],
     ["crawlPriorPoolMinLinks", 0, Number.MAX_SAFE_INTEGER],
     ["cacheValidDays", 0, Number.MAX_SAFE_INTEGER],
   ];
@@ -954,6 +955,7 @@ function getCurrentConfig() {
     max_depth: $("maxDepth").value,
     max_nodes: $("maxNodes").value,
     delay_ms: $("delayMs").value,
+    request_concurrency: $("requestConcurrency").value,
     cache_valid_days: $("cacheValidDays").value,
     friend_count_min: $("crawlFriendCountMin").value,
     friend_count_max: $("crawlFriendCountMax").value,
@@ -963,8 +965,8 @@ function getCurrentConfig() {
 
 function applyConfig(cfg) {
   if (!cfg) return;
-  const fields = ["root_url","max_depth","max_nodes","delay_ms","cache_valid_days","friend_count_min","friend_count_max","prior_pool_min_links"];
-  const ids = ["rootUrl","maxDepth","maxNodes","delayMs","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"];
+  const fields = ["root_url","max_depth","max_nodes","delay_ms","request_concurrency","cache_valid_days","friend_count_min","friend_count_max","prior_pool_min_links"];
+  const ids = ["rootUrl","maxDepth","maxNodes","delayMs","requestConcurrency","cacheValidDays","crawlFriendCountMin","crawlFriendCountMax","crawlPriorPoolMinLinks"];
   fields.forEach((f, i) => { if (cfg[f] !== undefined) $(ids[i]).value = cfg[f]; });
 }
 
@@ -1040,6 +1042,7 @@ async function startCrawl() {
     max_depth: Number($("maxDepth").value || 2),
     max_nodes: Number($("maxNodes").value || 2000),
     delay_ms: Number($("delayMs").value || 300),
+    request_concurrency: Number($("requestConcurrency").value || 4),
     prior_pool_min_links: Number($("crawlPriorPoolMinLinks").value || 0),
     cache_valid_days: Number($("cacheValidDays").value === "" ? 14 : $("cacheValidDays").value),
   };

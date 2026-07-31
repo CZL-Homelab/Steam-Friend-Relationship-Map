@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from steam_friend_relationship_map.crawler import CrawlManager
@@ -74,6 +76,131 @@ class FakeRepo:
             links = len([n for n in neighbors if n in inner_pool])
             res[cid] = links
         return res
+
+
+class TrackingSteam(FakeSteam):
+    def __init__(self, friend_graph: dict[str, list[str]]) -> None:
+        super().__init__()
+        self.friend_graph = friend_graph
+        self.active_requests = 0
+        self.peak_requests = 0
+
+    async def get_friend_list(self, steam_id: str) -> FriendListResult:
+        self.active_requests += 1
+        self.peak_requests = max(self.peak_requests, self.active_requests)
+        try:
+            await asyncio.sleep(0.01)
+            return FriendListResult(
+                steam_id=steam_id,
+                friend_ids=self.friend_graph.get(steam_id, []),
+            )
+        finally:
+            self.active_requests -= 1
+
+
+class CachedFakeRepo(FakeRepo):
+    def __init__(self, cached_lists: dict[str, tuple[str, list[str]]]) -> None:
+        super().__init__()
+        self.cached_lists = cached_lists
+
+    def get_cached_friend_list(
+        self,
+        steam_id: str,
+        valid_days: int,
+        project_id: str = "default",
+    ) -> tuple[str, list[str]] | None:
+        return self.cached_lists.get(steam_id) if valid_days > 0 else None
+
+
+@pytest.mark.asyncio
+async def test_crawl_uses_cached_friend_lists_without_api_requests() -> None:
+    steam = TrackingSteam({})
+    repo = CachedFakeRepo({"root": ("public", ["a"])})
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+    )
+    await manager.controls[run.id].task
+
+    assert repo.runs[run.id].status == CrawlStatus.completed
+    assert set(repo.users) == {"root", "a"}
+    assert steam.peak_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_crawl_bounds_concurrent_layer_expansion() -> None:
+    friend_ids = [f"f{index}" for index in range(6)]
+    steam = TrackingSteam({"root": friend_ids})
+    repo = FakeRepo()
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=2,
+            max_nodes=20,
+            delay_ms=0,
+            request_concurrency=3,
+        )
+    )
+    await manager.controls[run.id].task
+
+    assert repo.runs[run.id].status == CrawlStatus.completed
+    assert steam.peak_requests == 3
+    assert set(repo.users) == {"root", *friend_ids}
+
+
+@pytest.mark.asyncio
+async def test_crawl_bounds_concurrent_friend_count_filter_requests() -> None:
+    friend_ids = [f"f{index}" for index in range(6)]
+    steam = TrackingSteam({"root": friend_ids})
+    repo = FakeRepo()
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=1,
+            max_nodes=20,
+            delay_ms=0,
+            request_concurrency=2,
+            friend_count_min=0,
+        )
+    )
+    await manager.controls[run.id].task
+
+    assert repo.runs[run.id].status == CrawlStatus.completed
+    assert steam.peak_requests == 2
+    assert all(repo.users[steam_id].friend_count == 0 for steam_id in friend_ids)
+
+
+@pytest.mark.asyncio
+async def test_crawl_persists_new_edges_between_same_layer_users() -> None:
+    steam = TrackingSteam(
+        {
+            "root": ["a", "b"],
+            "a": ["root", "b"],
+            "b": ["root", "a"],
+        }
+    )
+    repo = FakeRepo()
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=2,
+            max_nodes=10,
+            delay_ms=0,
+            request_concurrency=2,
+        )
+    )
+    await manager.controls[run.id].task
+
+    assert repo.runs[run.id].status == CrawlStatus.completed
+    assert repo.runs[run.id].edges_discovered == 3
+    assert ("a", "b") in repo.edges
 
 
 @pytest.mark.asyncio
@@ -192,7 +319,7 @@ class MockAuthBreakerSteam:
     async def get_friend_list(self, steam_id: str) -> FriendListResult:
         self.calls += 1
         if steam_id == "root":
-            return FriendListResult(steam_id="root", friend_ids=["f1", "f2", "f3", "f4", "f5"])
+            return FriendListResult(steam_id="root", friend_ids=[f"f{index}" for index in range(1, 11)])
         from steam_friend_relationship_map.steam import SteamApiError
         raise SteamApiError("Unauthorized", status_code=401)
 
@@ -203,11 +330,19 @@ async def test_crawl_auth_error_circuit_breaker() -> None:
     steam = MockAuthBreakerSteam()
     manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
 
-    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=2, max_nodes=100, delay_ms=0))
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=2,
+            max_nodes=100,
+            delay_ms=0,
+            request_concurrency=3,
+        )
+    )
     await manager.controls[run.id].task
 
     finished = repo.runs[run.id]
     assert finished.status == CrawlStatus.failed
     assert "认证失败连续超过 5 次" in finished.message
-    # Check that error_count was incremented for each failed call
     assert finished.error_count >= 5
+    assert steam.calls == 7
