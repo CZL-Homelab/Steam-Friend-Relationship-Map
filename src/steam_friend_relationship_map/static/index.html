@@ -450,6 +450,8 @@
               <div><dt data-i18n="metric.rootRoutes">Root 路线</dt><dd id="profileRootRoutes">0</dd></div>
               <div><dt data-i18n="metric.rootRouteHops">总跳数</dt><dd id="profileRootRouteHops">0</dd></div>
               <div><dt data-i18n="metric.rootFriendCircle">朋友圈分数</dt><dd id="profileRootFriendCircle">0</dd></div>
+              <div><dt data-i18n="metric.pagerank">PageRank</dt><dd id="profilePageRank">-</dd></div>
+              <div><dt data-i18n="metric.community">社区</dt><dd id="profileCommunity">-</dd></div>
             </dl>
             <label data-i18n-label="field.category">
               分类
@@ -532,10 +534,23 @@
         <div class="inspector-tab-content" id="insTabRank">
           <section class="panel">
             <div class="panel-title">
-              <span data-i18n="section.centralNodes">中心节点</span>
-              <button class="icon-button" id="loadTopDegree" title="刷新排行" data-i18n-title="action.loadTopDegree"><i data-lucide="bar-chart-3"></i></button>
+              <span data-i18n="section.networkInfluence">网络影响力</span>
+              <button class="icon-button" id="loadNetworkAnalysis" title="刷新网络分析" data-i18n-title="action.analyzeNetwork"><i data-lucide="refresh-cw"></i></button>
             </div>
-            <ol id="topDegreeList" class="rank-list"></ol>
+            <div class="network-summary" aria-live="polite">
+              <div><span data-i18n="metric.communities">社区数</span><strong id="networkCommunityCount">-</strong></div>
+              <div><span data-i18n="metric.modularity">模块度</span><strong id="networkModularity">-</strong></div>
+              <div><span data-i18n="metric.analyzed">已分析</span><strong id="networkAnalyzed">-</strong></div>
+            </div>
+            <label class="checkbox-label network-color-toggle">
+              <input type="checkbox" id="communityColors" checked />
+              <span class="switch-slider"></span>
+              <span data-i18n="field.communityColors">按社区着色</span>
+            </label>
+            <p class="hint" data-i18n="analysis.networkHint">PageRank 衡量节点在整个项目网络中的影响力，颜色表示 Louvain 社区。</p>
+            <ol id="networkLeaderList" class="rank-list">
+              <li class="rank-empty" data-i18n="analysis.networkIdle">打开此页后开始分析。</li>
+            </ol>
           </section>
         </div>
 
@@ -577,6 +592,6 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="/static/app.js?v=1.0.8"></script>
+    <script src="/static/app.js?v=1.0.13"></script>
   </body>
 </html>

@@ -515,6 +515,35 @@ def test_friend_circle_analysis_endpoint() -> None:
     assert response.json()["candidates"][0]["steam_id"] == "candidate"
 
 
+def test_network_analysis_endpoint() -> None:
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/analysis/network?limit=10")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["analyzed_nodes"] == 1
+    assert body["analyzed_edges"] == 0
+    assert body["community_count"] == 1
+    assert body["leaders"][0]["id"] == "root"
+    assert body["leaders"][0]["pagerank"] == 1
+
+
+def test_network_analysis_errors_return_json_detail() -> None:
+    class FailingExportRepo(FakeRepo):
+        def export_graph(self, project_id: str = "default") -> ExportResponse:
+            raise RuntimeError("analysis export failed")
+
+    app = create_app(settings=Settings(), repo=FailingExportRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/analysis/network")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "analysis export failed"
+
+
 def test_project_switch_strips_crlf() -> None:
     from unittest.mock import patch
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]

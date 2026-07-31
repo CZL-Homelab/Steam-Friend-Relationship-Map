@@ -1009,6 +1009,62 @@ dd {
   background: var(--surface-teal-light);
 }
 
+.rank-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.rank-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-swatch {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  background: var(--community-color, var(--teal));
+}
+
+.rank-empty {
+  padding: 8px 2px;
+  line-height: 1.45;
+}
+
+.network-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.network-summary div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.network-summary span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.network-summary strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.network-color-toggle {
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
 .path-result {
   margin-top: 10px;
   padding: 10px;

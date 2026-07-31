@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import re
@@ -15,6 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from neo4j.exceptions import AuthError, ServiceUnavailable
 
+from .analytics import analyze_network
 from .crawler import CrawlManager
 from .logs import AppLogBuffer, install_log_handler
 from .models import (
@@ -29,6 +31,7 @@ from .models import (
     GraphNode,
     GraphResponse,
     HealthResponse,
+    NetworkAnalysisResponse,
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
@@ -760,6 +763,23 @@ def create_app(
             return repo.get_friend_circle_analysis(root=root, max_depth=max_depth, min_mutual=min_mutual, limit=limit, project_id=settings.active_project)
         except Exception as exc:
             log_buffer.append("error", "analysis", f"朋友圈分析失败: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+
+    @app.get("/api/analysis/network", response_model=NetworkAnalysisResponse)
+    async def network_analysis(
+        limit: Annotated[int, Query(ge=1, le=100)] = 12,
+        resolution: Annotated[float, Query(gt=0, le=5)] = 1.0,
+    ) -> NetworkAnalysisResponse:
+        try:
+            exported = repo.export_graph(project_id=settings.active_project)
+            return await asyncio.to_thread(
+                analyze_network,
+                exported,
+                limit=limit,
+                resolution=resolution,
+            )
+        except Exception as exc:
+            log_buffer.append("error", "analysis", f"网络影响力分析失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/export", response_model=ExportResponse)

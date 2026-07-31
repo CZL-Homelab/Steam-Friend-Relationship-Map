@@ -29,11 +29,17 @@ let crawlStartTime = null;
 let dbStatsTimer = null;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
+let currentNetworkAnalysis = null;
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
 let activeRenderId = 0;
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
+
+const COMMUNITY_COLORS = [
+  "#16a34a", "#dc2626", "#d97706", "#7c3aed", "#0891b2", "#c026d3",
+  "#65a30d", "#ea580c", "#4f46e5", "#0f766e", "#be123c", "#0369a1",
+];
 
 async function loadI18n() {
   try {
@@ -59,6 +65,8 @@ function setLanguage(lang) {
   currentLang = i18n[lang] ? lang : "zh-CN";
   localStorage.setItem("sfm_lang", currentLang);
   applyTranslations();
+  if (currentNetworkAnalysis) renderNetworkAnalysisResults(currentNetworkAnalysis);
+  if (selectedNode) fillProfile(selectedNode);
 }
 
 // ── Theme ─────────────────────────────────────────────────────────
@@ -88,7 +96,7 @@ function updateCytoscapeStyle() {
   const muted = getCssVar("--muted");
   const isDark = document.documentElement.getAttribute("data-theme") === "dark";
 
-  cy.style()
+  const style = cy.style()
     .selector("node")
     .style({
       "background-color": teal,
@@ -100,7 +108,14 @@ function updateCytoscapeStyle() {
       "shadow-opacity": isDark ? 0.65 : 0,
       "shadow-offset-x": 0,
       "shadow-offset-y": 0,
-    })
+    });
+  COMMUNITY_COLORS.forEach((color, index) => {
+    style.selector(`node[community = ${index + 1}][hasCommunity = 1]`).style({
+      "border-color": color,
+      "border-width": 4,
+    });
+  });
+  style
     .selector("node[status = 'private']")
     .style({
       "border-color": rose,
@@ -423,6 +438,14 @@ function initGraph() {
         },
       },
       {
+        selector: "node[hasCommunity = 1]",
+        style: { "border-width": 4 },
+      },
+      ...COMMUNITY_COLORS.map((color, index) => ({
+        selector: `node[community = ${index + 1}][hasCommunity = 1]`,
+        style: { "border-color": color, "border-width": 4 },
+      })),
+      {
         selector: "node[status = 'private']",
         style: { "border-color": "#be123c", "border-width": 3 },
       },
@@ -503,23 +526,39 @@ function renderGraph(data) {
   const sizeBy = $("graphSizeBy").value || "root_friend_circle";
   const maxMetric = Math.max(1, ...data.nodes.map((node) => metricValue(node, sizeBy)));
   const rootCircleScale = buildRootFriendCircleScale(data.nodes);
+  const networkMetrics = new Map((currentNetworkAnalysis?.metrics || []).map((metric) => [metric.id, metric]));
+  const useCommunityColors = $("communityColors")?.checked !== false;
+  const fallbackBorder = getCssVar("--panel") || "#ffffff";
   const elements = [
-    ...data.nodes.map((node) => ({
-      data: {
-        id: node.id,
-        label: node.label,
-        avatar: node.avatar,
-        degree: node.degree || 1,
-        closeness: node.root_closeness_score || 0,
-        rootFriendCircle: node.root_friend_circle_score || 0,
-        rootFriendCircleRank: rootCircleScale.rank(node),
-        visualSize: sizeBy === "root_friend_circle"
-          ? rootCircleScale.visualSize(node)
-          : Math.max(5, Math.min(100, (metricValue(node, sizeBy) / maxMetric) * 100)),
-        status: node.friend_list_status,
-        node,
-      },
-    })),
+    ...data.nodes.map((node) => {
+      const networkMetric = networkMetrics.get(node.id);
+      const hasCommunity = Boolean(networkMetric && useCommunityColors);
+      const enrichedNode = networkMetric
+        ? { ...node, pagerank: networkMetric.pagerank, network_community: networkMetric.community, community_size: networkMetric.community_size }
+        : node;
+      return {
+        data: {
+          id: node.id,
+          label: node.label,
+          avatar: node.avatar || "none",
+          degree: node.degree || 1,
+          closeness: node.root_closeness_score || 0,
+          rootFriendCircle: node.root_friend_circle_score || 0,
+          rootFriendCircleRank: rootCircleScale.rank(node),
+          visualSize: sizeBy === "root_friend_circle"
+            ? rootCircleScale.visualSize(node)
+            : Math.max(5, Math.min(100, (metricValue(node, sizeBy) / maxMetric) * 100)),
+          status: node.friend_list_status,
+          pagerank: networkMetric?.pagerank || 0,
+          community: networkMetric?.community || 0,
+          hasCommunity: hasCommunity ? 1 : 0,
+          communityColor: hasCommunity
+            ? COMMUNITY_COLORS[(networkMetric.community - 1) % COMMUNITY_COLORS.length]
+            : fallbackBorder,
+          node: enrichedNode,
+        },
+      };
+    }),
     ...data.edges.map((edge) => ({ data: { id: edge.id, source: edge.source, target: edge.target, strength: Math.max(1, edge.strength || 1) } })),
   ];
 
@@ -615,6 +654,11 @@ function fillProfile(node) {
   $("profileRootRoutes").textContent = node.root_route_count ?? 0;
   $("profileRootRouteHops").textContent = node.root_route_total_hops ?? 0;
   $("profileRootFriendCircle").textContent = node.root_friend_circle_score ?? 0;
+  const networkMetric = currentNetworkAnalysis?.metrics.find((metric) => metric.id === node.id);
+  $("profilePageRank").textContent = networkMetric ? formatPageRank(networkMetric.pagerank) : "-";
+  $("profileCommunity").textContent = networkMetric
+    ? t("analysis.communityValue", { community: networkMetric.community, size: networkMetric.community_size })
+    : "-";
   $("profileStatus").dataset.status = node.friend_list_status || "unknown";
   $("profileStatus").textContent = statusText(node.friend_list_status);
   $("profileCategory").value = node.category || "";
@@ -1051,6 +1095,7 @@ async function startCrawl() {
   if (friendMin) payload.friend_count_min = Number(friendMin);
   if (friendMax) payload.friend_count_max = Number(friendMax);
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
+  invalidateNetworkAnalysis(false);
   currentRunId = run.id;
   saveRecentRoot(payload.root_url, run.root_steam_id, "", run.root_steam_id);
   startDbStatsPolling();
@@ -1084,6 +1129,7 @@ async function pollRun() {
     updateCrawlButtons(run.status);
     toast(run.message || statusText(run.status));
     appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
+    invalidateNetworkAnalysis(false);
     await loadGraph().catch(() => {});
     await loadDbStats().catch(() => {});
     // 更新最近扫描的 Root 头像和昵称
@@ -1206,10 +1252,10 @@ function renderProjectList(data) {
       if (pid === data.active_project_id) return;
       await withButtonState(item, async () => {
         await api("/api/projects/switch", { method: "POST", body: JSON.stringify({ name: pid }) });
+        invalidateNetworkAnalysis(false);
         await loadSettings();
         await loadDbStats().catch(() => {});
         await loadGraph().catch(() => {});
-        await loadTopDegree().catch(() => {});
         toast(t("toast.projectSwitched"));
       });
     });
@@ -1223,6 +1269,7 @@ function renderProjectList(data) {
       if (!confirm(t("project.confirmDelete", { name: pid }))) return;
       await withButtonState(btn, async () => {
         await api(`/api/projects/${pid}`, { method: "DELETE" });
+        invalidateNetworkAnalysis(false);
         await loadSettings();
         await loadProjects();
         await loadDbStats().catch(() => {});
@@ -1284,11 +1331,80 @@ async function findPath() {
   $("pathResult").textContent = data.nodes.map((node) => node.label || node.id).join(" -> ");
 }
 
-async function loadTopDegree() {
-  const rows = await api("/api/stats/top-degree?limit=12");
-  $("topDegreeList").innerHTML = rows
-    .map((node) => `<li><strong>${escapeHtml(node.label)}</strong> · ${node.degree}</li>`)
-    .join("");
+function formatPageRank(value) {
+  const numeric = Number(value || 0) * 100;
+  return `${numeric.toFixed(numeric < 0.01 ? 4 : 3)}%`;
+}
+
+function networkCommunityColor(community) {
+  return COMMUNITY_COLORS[(Math.max(1, Number(community)) - 1) % COMMUNITY_COLORS.length];
+}
+
+function invalidateNetworkAnalysis(rerender = true) {
+  currentNetworkAnalysis = null;
+  if ($("networkCommunityCount")) $("networkCommunityCount").textContent = "-";
+  if ($("networkModularity")) $("networkModularity").textContent = "-";
+  if ($("networkAnalyzed")) $("networkAnalyzed").textContent = "-";
+  if ($("networkLeaderList")) {
+    $("networkLeaderList").innerHTML = `<li class="rank-empty">${escapeHtml(t("analysis.networkIdle"))}</li>`;
+  }
+  if (rerender && cy && currentGraph.nodes.length) renderGraph(currentGraph);
+  if (selectedNode) fillProfile(selectedNode);
+}
+
+function renderNetworkAnalysisResults(data) {
+  $("networkCommunityCount").textContent = data.community_count;
+  $("networkModularity").textContent = Number(data.modularity || 0).toFixed(3);
+  $("networkAnalyzed").textContent = t("analysis.analyzedValue", {
+    nodes: data.analyzed_nodes,
+    edges: data.analyzed_edges,
+  });
+  $("networkLeaderList").innerHTML = data.leaders.length
+    ? data.leaders.map((leader) => {
+      const color = networkCommunityColor(leader.community);
+      const detail = t("analysis.networkRow", {
+        pagerank: formatPageRank(leader.pagerank),
+        community: leader.community,
+        degree: leader.degree,
+      });
+      return `<li><button class="rank-button" data-network-id="${escapeHtml(leader.id)}"><span class="rank-title"><span class="community-swatch" style="--community-color: ${color}"></span><strong>${escapeHtml(leader.label)}</strong></span><span>${escapeHtml(detail)}</span></button></li>`;
+    }).join("")
+    : `<li class="rank-empty">${escapeHtml(t("analysis.networkEmpty"))}</li>`;
+  $("networkLeaderList").querySelectorAll(".rank-button").forEach((button) => {
+    button.addEventListener("click", () => focusNetworkLeader(button.dataset.networkId));
+  });
+}
+
+async function loadNetworkAnalysis(options = {}) {
+  const data = await api("/api/analysis/network?limit=12");
+  currentNetworkAnalysis = data;
+  renderNetworkAnalysisResults(data);
+  if (currentGraph.nodes.length) renderGraph(currentGraph);
+  if (selectedNode) fillProfile(selectedNode);
+  if (!options.silent) toast(t("toast.networkAnalysisLoaded"));
+}
+
+function focusNetworkLeader(steamId) {
+  const leader = currentNetworkAnalysis?.leaders.find((item) => item.id === steamId);
+  cy.elements().removeClass("analysis-focus analysis-evidence");
+  const node = cy.getElementById(steamId);
+  if (node.length) {
+    node.addClass("analysis-focus");
+    cy.center(node);
+    fillProfile(node.data().node);
+  } else if (leader) {
+    fillProfile({
+      id: leader.id,
+      label: leader.label,
+      avatar: leader.avatar,
+      profile_url: leader.profile_url,
+      degree: leader.degree,
+      friend_list_status: "unknown",
+      note: "",
+      tags: [],
+      category: "",
+    });
+  }
 }
 
 async function loadFriendCircles() {
@@ -1448,7 +1564,7 @@ function wireEvents() {
   $("layoutGraph").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => runLayout()).catch(() => {}));
   $("saveProfile").addEventListener("click", (event) => withButtonState(event.currentTarget, saveProfile).catch(() => {}));
   $("findPath").addEventListener("click", (event) => withButtonState(event.currentTarget, findPath).catch(() => {}));
-  $("loadTopDegree").addEventListener("click", (event) => withButtonState(event.currentTarget, loadTopDegree).catch(() => {}));
+  $("loadNetworkAnalysis").addEventListener("click", (event) => withButtonState(event.currentTarget, loadNetworkAnalysis).catch(() => {}));
   $("loadFriendCircles").addEventListener("click", (event) => withButtonState(event.currentTarget, loadFriendCircles).catch(() => {}));
   $("refreshSystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, () => loadSystemLogs(true)).catch(() => {}));
   $("copySystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, copySystemLogs).catch(() => {}));
@@ -1459,6 +1575,12 @@ function wireEvents() {
   $("systemLogLevel").addEventListener("change", () => loadSystemLogs(true).catch(() => {}));
   $("graphSizeBy").addEventListener("change", () => renderGraph(currentGraph));
   $("graphLayoutBias").addEventListener("change", runLayout);
+  const savedCommunityColors = localStorage.getItem("sfm_community_colors");
+  if (savedCommunityColors !== null) $("communityColors").checked = savedCommunityColors === "true";
+  $("communityColors").addEventListener("change", () => {
+    localStorage.setItem("sfm_community_colors", String($("communityColors").checked));
+    renderGraph(currentGraph);
+  });
   
   // Graph Limit Toggle logic
   const limitInput = $("graphLimit");
@@ -1540,6 +1662,9 @@ function wireEvents() {
       button.classList.add("active");
       if (inspectorSlider) {
         inspectorSlider.dataset.activeIndex = idx;
+      }
+      if (button.dataset.target === "insTabRank" && !currentNetworkAnalysis) {
+        withButtonState("loadNetworkAnalysis", () => loadNetworkAnalysis({ silent: true })).catch(() => {});
       }
     });
   });
@@ -1754,7 +1879,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     .catch((error) => appendSystemLog("error", "settings", error.message));
   loadGraph().catch(() => {});
   loadDbStats().catch((error) => appendSystemLog("error", "db", error.message));
-  loadTopDegree().catch((error) => appendSystemLog("error", "stats", error.message));
   loadSystemLogs(true).catch(() => {});
   startSystemLogPolling();
 });

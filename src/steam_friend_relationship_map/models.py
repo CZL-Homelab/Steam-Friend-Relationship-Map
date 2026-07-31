@@ -242,6 +242,34 @@ class ExportResponse(BaseModel):
     edges: list[dict[str, Any]]
 
 
+class NetworkMetric(BaseModel):
+    id: str
+    pagerank: float
+    community: int
+    community_size: int
+    degree: int
+
+
+class NetworkLeader(BaseModel):
+    id: str
+    label: str
+    avatar: str = ""
+    profile_url: str = ""
+    pagerank: float
+    degree: int
+    community: int
+    community_size: int
+
+
+class NetworkAnalysisResponse(BaseModel):
+    metrics: list[NetworkMetric] = Field(default_factory=list)
+    leaders: list[NetworkLeader] = Field(default_factory=list)
+    analyzed_nodes: int = 0
+    analyzed_edges: int = 0
+    community_count: int = 0
+    modularity: float = 0
+
+
 class FriendCircleCandidate(BaseModel):
     steam_id: str
     label: str
