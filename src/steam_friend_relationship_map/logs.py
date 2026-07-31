@@ -73,12 +73,22 @@ class AppLogHandler(logging.Handler):
 
 
 def install_log_handler(buffer: AppLogBuffer) -> AppLogHandler:
-    handler = AppLogHandler(buffer)
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    handler.setLevel(logging.INFO)
+    handler: AppLogHandler | None = None
     for name in ("steam_friend_relationship_map", "uvicorn.error"):
         logger = logging.getLogger(name)
-        if not any(isinstance(existing, AppLogHandler) for existing in logger.handlers):
+        existing = next(
+            (candidate for candidate in logger.handlers if isinstance(candidate, AppLogHandler)),
+            None,
+        )
+        if existing is not None:
+            existing.buffer = buffer
+            handler = handler or existing
+        else:
+            if handler is None:
+                handler = AppLogHandler(buffer)
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                handler.setLevel(logging.INFO)
             logger.addHandler(handler)
         logger.setLevel(logging.INFO)
+    assert handler is not None
     return handler

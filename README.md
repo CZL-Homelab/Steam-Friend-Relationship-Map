@@ -440,7 +440,7 @@ uv sync
 
 ### 第 10 步：启动本地应用
 
-如果您使用的是 Neo4j 引擎，请确认 Neo4j Desktop 数据库已经 Start 运行；如果使用的是默认 the Kùzu 引擎，则无需启动任何外部数据库。
+如果您使用的是 Neo4j 引擎，请确认 Neo4j Desktop 数据库已经 Start 运行；如果使用默认的 Kùzu 引擎，则无需启动任何外部数据库。
 
 在终端中运行：
 
@@ -453,6 +453,14 @@ uv run steam-friend-map
 ```text
 http://127.0.0.1:8000
 ```
+
+可用健康接口确认应用和图数据库都已就绪：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+```
+
+图数据库可用时返回 HTTP 200；不可用时返回 HTTP 503 和已脱敏的错误信息。服务退出会先停止后台抓取任务，再依次关闭 Steam HTTP 客户端和数据库，避免遗留 Kuzu 文件锁。
 
 ## 第一次成功运行检查清单
 
@@ -694,6 +702,8 @@ This project is a local Steam friend graph crawler and Neo4j visualizer. The Web
    ```text
    http://127.0.0.1:8000
    ```
+
+   Check readiness at `http://127.0.0.1:8000/api/health`. It returns HTTP 503 when the graph database is unavailable. Shutdown stops background crawls before closing the Steam HTTP client and database.
 
 8. Use the Secure Settings panel to save your Steam API Key and Neo4j password into the system credential store.
 

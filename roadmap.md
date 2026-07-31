@@ -17,6 +17,7 @@ graph TD
         B["自适应并发限速器 ✅"]
         C["HTTP/SOCKS 代理配置 ✅"]
         D["Neo4j 批量写入优化 ✅"]
+        J["优雅关闭与健康检查 ✅"]
     end
 
     subgraph Phase2["🟡 阶段 2: 社交网络分析深度赋能 (中期规划)"]
@@ -33,7 +34,7 @@ graph TD
     Phase1 --> Phase2
     Phase2 --> Phase3
 
-    class A,B,C,D p1;
+    class A,B,C,D,J p1;
     class E,F,G p2;
     class H,I p3;
 ```
@@ -42,7 +43,7 @@ graph TD
 
 ## 2. 迭代阶段规划详情
 
-### 🟢 阶段 1：本地体验优化与性能强化 (近期规划)
+### 🟢 阶段 1：本地体验优化与性能强化 (已完成)
 本阶段的核心目标是**优化数据抓取效率，减少等待时间，并提升本地运行的健壮性**。
 
 > [!NOTE]
@@ -60,6 +61,9 @@ graph TD
 4. **Neo4j 批量写入优化（已完成）**
    - **内容**：节点与关系通过 `UNWIND` 分批写入，关系批次限制为 1000 条，降低大规模导入时的单次事务压力。
    - **收益**：降低爬取中后期 Neo4j 本地数据库的写入抖动与 CPU 负载。
+5. **优雅关闭与健康检查（已完成）**
+   - **内容**：服务退出时先停止并等待后台抓取任务，再关闭 HTTP 客户端和图数据库；`/api/health` 同时报告数据库、活动项目和抓取状态。
+   - **收益**：减少 Kuzu 文件锁残留和任务状态悬空，并为本地脚本或后续容器编排提供就绪探针。
 
 ---
 
@@ -106,6 +110,7 @@ graph TD
 | **Phase 1** | 增量抓取与本地缓存 ✅ | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `kuzu_repo.py`, `neo4j_repo.py` |
 | **Phase 1** | 自适应并发限速器 ✅ | ⭐⭐⭐ | 🟡 中等 (Medium) | `rate_limiter.py`, `steam.py`, `crawler.py` |
 | **Phase 1** | Neo4j 批量写入优化 ✅ | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` |
+| **Phase 1** | 优雅关闭与健康检查 ✅ | ⭐⭐⭐⭐ | 🟢 简单 (Easy) | `app.py`, `crawler.py`, `logs.py` |
 | **Phase 2** | 图算法集成 (Louvain/PageRank) | ⭐⭐⭐⭐ | 🔴 困难 (Hard) | `neo4j_repo.py`, `app.js` |
 | **Phase 2** | 多 Root 关系对比与交集 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `app.js` |
 | **Phase 2** | ECharts 图表可视化面板 | ⭐⭐ | 🟡 中等 (Medium) | `app.js`, `index.html` |

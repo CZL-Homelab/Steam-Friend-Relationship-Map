@@ -112,6 +112,40 @@ class CachedFakeRepo(FakeRepo):
         return self.cached_lists.get(steam_id) if valid_days > 0 else None
 
 
+class HangingSteam(FakeSteam):
+    def __init__(self) -> None:
+        super().__init__()
+        self.friend_request_started = asyncio.Event()
+
+    async def get_friend_list(self, steam_id: str) -> FriendListResult:
+        self.friend_request_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+@pytest.mark.asyncio
+async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs() -> None:
+    steam = HangingSteam()
+    repo = FakeRepo()
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+    )
+    await asyncio.wait_for(steam.friend_request_started.wait(), timeout=1)
+
+    await manager.shutdown(timeout_seconds=0)
+
+    assert manager.controls[run.id].task is not None
+    assert manager.controls[run.id].task.done()
+    assert manager.has_active_crawl() is False
+    assert repo.runs[run.id].status == CrawlStatus.stopped
+    assert "应用关闭" in repo.runs[run.id].message
+    with pytest.raises(RuntimeError, match="应用正在关闭"):
+        await manager.create_crawl(
+            CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+        )
+
+
 @pytest.mark.asyncio
 async def test_crawl_uses_cached_friend_lists_without_api_requests() -> None:
     steam = TrackingSteam({})

@@ -28,6 +28,7 @@ from .models import (
     FriendCircleAnalysisResponse,
     GraphNode,
     GraphResponse,
+    HealthResponse,
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
@@ -359,8 +360,13 @@ def create_app(
         try:
             yield
         finally:
-            await steam.aclose()
-            repo.close()
+            try:
+                await manager.shutdown()
+            finally:
+                try:
+                    await steam.aclose()
+                finally:
+                    repo.close()
 
     app = FastAPI(title="Steam Friend Relationship Map", lifespan=lifespan)
     app.state.repo = repo
@@ -438,6 +444,23 @@ def create_app(
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/api/health", response_model=HealthResponse)
+    async def health(response: Response) -> HealthResponse:
+        try:
+            database_message = repo.test_connection()
+            health_status = "ok"
+        except Exception as exc:
+            response.status_code = 503
+            database_message = safe_detail(exc)
+            health_status = "unavailable"
+        return HealthResponse(
+            status=health_status,
+            database=settings.graph_db_engine,
+            database_message=database_message,
+            active_crawl=manager.has_active_crawl(),
+            project_id=settings.active_project,
+        )
 
     @app.get("/api/settings", response_model=PublicSettings)
     async def get_public_settings() -> PublicSettings:

@@ -41,6 +41,7 @@ class CrawlManager:
         self.event_seq: dict[str, int] = {}
         self.run_history: list[str] = []
         self._lock = asyncio.Lock()
+        self._shutting_down = False
 
     def _gc_completed_runs(self) -> None:
         completed_run_ids = []
@@ -64,8 +65,32 @@ class CrawlManager:
                 return True
         return False
 
+    async def shutdown(self, timeout_seconds: float = 15.0) -> None:
+        """Stop background crawls before their shared HTTP and database resources close."""
+        async with self._lock:
+            self._shutting_down = True
+            tasks: list[asyncio.Task] = []
+            for run_id, control in self.controls.items():
+                if control.task is None or control.task.done():
+                    continue
+                control.force_stop = True
+                control.pause = False
+                self.append_event(run_id, "warn", "shutdown", "应用正在关闭，停止抓取任务")
+                tasks.append(control.task)
+
+        if not tasks:
+            return
+
+        _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout_seconds))
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     async def create_crawl(self, payload: CrawlCreate) -> CrawlRun:
         async with self._lock:
+            if self._shutting_down:
+                raise RuntimeError("应用正在关闭，不能创建新的抓取任务。")
             self._gc_completed_runs()
             if self.has_active_crawl():
                 raise RuntimeError("已有活跃的抓取任务在运行中，请先停止或等待其完成。")
@@ -220,6 +245,8 @@ class CrawlManager:
         friend_count_filtered_count = 0
         prior_pool_filtered_count = 0
         consecutive_auth_errors = 0
+        nodes_discovered = 0
+        edges_discovered = 0
         try:
             event = self.append_event(run.id, "info", "root", "正在抓取 Root 用户资料")
             self.repo.update_crawl_run(
@@ -236,7 +263,6 @@ class CrawlManager:
             root.last_scored_crawl_id = run.id
             self.repo.upsert_users([root], self.project_id)
             nodes_discovered = 1
-            edges_discovered = 0
             self.append_event(run.id, "info", "root", f"Root 用户已写入: {run.root_steam_id}")
 
             for depth in range(run.max_depth):
@@ -642,6 +668,27 @@ class CrawlManager:
                 message=event.message,
                 last_event=event.message,
             )
+        except asyncio.CancelledError:
+            event = self.append_event(run.id, "warn", "stopped", "应用关闭，抓取任务已停止")
+            try:
+                self.repo.update_crawl_run(
+                    run.id,
+                    status=CrawlStatus.stopped.value,
+                    finished_at=utc_now_iso(),
+                    nodes_discovered=nodes_discovered,
+                    edges_discovered=edges_discovered,
+                    private_count=private_count,
+                    error_count=error_count,
+                    filtered_count=filtered_count,
+                    friend_count_filtered_count=friend_count_filtered_count,
+                    prior_pool_filtered_count=prior_pool_filtered_count,
+                    message=event.message,
+                    last_event=event.message,
+                )
+            except Exception as exc:
+                if self.logs is not None:
+                    self.logs.append("error", "crawl:shutdown", f"抓取停止状态写入失败: {exc}")
+            raise
         except Exception as exc:
             event = self.append_event(run.id, "error", "failed", str(exc))
             self.repo.update_crawl_run(

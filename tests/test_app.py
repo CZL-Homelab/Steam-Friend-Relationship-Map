@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from steam_friend_relationship_map.app import create_app
+from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
 from steam_friend_relationship_map.models import DbStats, ExportResponse, FriendCircleAnalysisResponse, FriendCircleCandidate, GraphEdge, GraphNode, GraphResponse
 from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.steam import SteamApiError, SteamClient
@@ -632,4 +634,81 @@ def test_app_crawls_reject_out_of_range_request_concurrency() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_app_lifespan_closes_resources_in_dependency_order() -> None:
+    events: list[str] = []
+
+    class LifecycleRepo(FakeRepo):
+        def close(self) -> None:
+            events.append("repo")
+
+    class LifecycleSteam(FakeSteam):
+        async def aclose(self) -> None:
+            events.append("steam")
+
+    app = create_app(
+        settings=Settings(active_project="default"),
+        repo=LifecycleRepo(),
+        steam=LifecycleSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    app.state.manager.shutdown = AsyncMock(side_effect=lambda: events.append("manager"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "ok",
+            "database": "kuzu",
+            "database_message": "Neo4j 连接正常",
+            "active_crawl": False,
+            "project_id": "default",
+        }
+
+    assert events == ["manager", "steam", "repo"]
+
+
+def test_health_returns_503_when_database_is_unavailable() -> None:
+    class UnhealthyRepo(FakeRepo):
+        def test_connection(self) -> str:
+            raise RuntimeError("database offline")
+
+    app = create_app(
+        settings=Settings(),
+        repo=UnhealthyRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["database_message"] == "database offline"
+
+
+def test_app_lifespan_releases_kuzu_database_lock(tmp_path: Path) -> None:
+    db_path = tmp_path / "app-lifecycle-kuzu"
+    app = create_app(
+        settings=Settings(
+            graph_db_engine="kuzu",
+            kuzu_db_path=str(db_path),
+            active_project="default",
+        ),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert response.json()["database"] == "kuzu"
+
+    reopened = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+    try:
+        assert reopened.test_connection() == "Kùzu 连接正常"
+    finally:
+        reopened.close()
 

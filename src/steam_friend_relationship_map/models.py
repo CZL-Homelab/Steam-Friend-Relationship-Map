@@ -130,6 +130,14 @@ class SettingsTestResult(BaseModel):
     neo4j_reason: str = "unknown"
 
 
+class HealthResponse(BaseModel):
+    status: Literal["ok", "unavailable"]
+    database: str
+    database_message: str
+    active_crawl: bool
+    project_id: str
+
+
 class PublicSettings(BaseModel):
     graph_db_engine: str
     kuzu_db_path: str
