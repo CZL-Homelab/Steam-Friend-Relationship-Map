@@ -97,6 +97,12 @@ def repository_settings_changed(old: Settings, new: Settings) -> bool:
     )
 
 
+def uses_same_kuzu_database(old: Settings, new: Settings) -> bool:
+    if old.graph_db_engine.lower() != "kuzu" or new.graph_db_engine.lower() != "kuzu":
+        return False
+    return Path(old.kuzu_db_path).resolve() == Path(new.kuzu_db_path).resolve()
+
+
 class UnavailableRepository(IGraphRepository):
     """Placeholder used when the configured graph database cannot be opened."""
 
@@ -259,12 +265,37 @@ def create_app(
             and repository_settings_changed(old_settings, settings)
         )
         if should_replace_repo:
-            old_repo.close()
+            candidate_repo: IGraphRepository | None = None
+            closed_old_repo = False
             try:
-                repo = get_repository(settings)
+                if uses_same_kuzu_database(old_settings, settings) and not isinstance(old_repo, UnavailableRepository):
+                    old_repo.close()
+                    closed_old_repo = True
+                candidate_repo = get_repository(settings)
+                candidate_repo.ensure_schema()
             except Exception as exc:
-                log_buffer.append("error", "database", f"Graph database open failed: {exc}")
-                repo = UnavailableRepository(exc)
+                if candidate_repo is not None:
+                    candidate_repo.close()
+                if closed_old_repo:
+                    try:
+                        repo = get_repository(old_settings)
+                        repo.ensure_schema()
+                    except Exception as restore_exc:
+                        log_buffer.append("error", "database", f"Previous graph database restore failed: {restore_exc}")
+                        repo = UnavailableRepository(restore_exc)
+                else:
+                    repo = old_repo
+                settings = old_settings
+                keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
+                log_buffer.set_secret_values(keys + [settings.neo4j_password])
+                manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
+                app.state.repo = repo
+                app.state.manager = manager
+                log_buffer.append("error", "database", f"Graph database configuration rejected: {exc}")
+                raise RuntimeError(f"Graph database configuration was not applied: {exc}") from exc
+            if not closed_old_repo:
+                old_repo.close()
+            repo = candidate_repo
         else:
             repo = old_repo
         try:
@@ -412,12 +443,24 @@ def create_app(
             raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
         ENV_PATH.touch(exist_ok=True)
         data = payload.model_dump(exclude_none=True)
+        previous_values = {field: getattr(settings, field) for field in data}
         for field, value in data.items():
             key = ENV_KEYS[field]
             # 安全：移除换行符防止 .env 注入
             safe_value = sanitize_env_value(value)
             set_key(str(ENV_PATH), key, safe_value, quote_mode="never")
-        await rebuild_runtime()
+        try:
+            await rebuild_runtime()
+        except RuntimeError as exc:
+            for field, value in previous_values.items():
+                set_key(
+                    str(ENV_PATH),
+                    ENV_KEYS[field],
+                    sanitize_env_value(value),
+                    quote_mode="never",
+                )
+            clear_settings_cache()
+            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
         message = "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
         log_buffer.append("info", "settings", "非敏感配置已保存")
         return public_settings(message)
@@ -427,10 +470,21 @@ def create_app(
         if manager.has_active_crawl():
             raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
         try:
+            previous_secret = secret_store.get(payload.name)
             secret_store.set(payload.name, payload.value)
         except SecretStorageError as exc:
             raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        await rebuild_runtime()
+        try:
+            await rebuild_runtime()
+        except RuntimeError as exc:
+            try:
+                if previous_secret:
+                    secret_store.set(payload.name, previous_secret)
+                else:
+                    secret_store.delete(payload.name)
+            finally:
+                clear_settings_cache()
+            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
         log_buffer.append("info", "settings", f"敏感配置已保存: {payload.name}")
         return public_settings("敏感配置已保存到系统凭据库。")
 
@@ -439,10 +493,19 @@ def create_app(
         if manager.has_active_crawl():
             raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
         try:
+            previous_secret = secret_store.get(name)
             secret_store.delete(name)
         except SecretStorageError as exc:
             raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        await rebuild_runtime()
+        try:
+            await rebuild_runtime()
+        except RuntimeError as exc:
+            try:
+                if previous_secret:
+                    secret_store.set(name, previous_secret)
+            finally:
+                clear_settings_cache()
+            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
         log_buffer.append("warn", "settings", f"敏感配置已删除: {name}")
         return public_settings("敏感配置已删除。")
 

@@ -7,6 +7,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from steam_friend_relationship_map.__main__ import init_env
+from steam_friend_relationship_map.settings import Settings
+
+
+def test_settings_accepts_python_field_names() -> None:
+    settings = Settings(app_host="0.0.0.0", app_port=8123, kuzu_db_path="data/custom")
+
+    assert settings.app_host == "0.0.0.0"
+    assert settings.app_port == 8123
+    assert settings.kuzu_db_path == "data/custom"
 
 
 def test_init_env_non_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

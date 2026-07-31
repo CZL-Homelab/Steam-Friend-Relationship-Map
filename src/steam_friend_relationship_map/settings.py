@@ -9,7 +9,12 @@ from .secrets import SecretStorageError, SecretStore
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     steam_api_key: str = Field(default="", alias="STEAM_API_KEY")
     graph_db_engine: str = Field(default="kuzu", alias="GRAPH_DB_ENGINE")

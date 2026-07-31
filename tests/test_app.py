@@ -124,6 +124,19 @@ class FailingRepo(FakeRepo):
         raise self.exc
 
 
+class TrackingRepo(FakeRepo):
+    def __init__(self, schema_error: Exception | None = None) -> None:
+        self.schema_error = schema_error
+        self.close_count = 0
+
+    def close(self) -> None:
+        self.close_count += 1
+
+    def ensure_schema(self) -> None:
+        if self.schema_error:
+            raise self.schema_error
+
+
 def test_graph_endpoint_uses_repo() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
@@ -235,6 +248,109 @@ def test_settings_patch_strips_crlf_before_env_write() -> None:
     args, _ = mock_set_key.call_args
     assert args[1] == "NEO4J_USER"
     assert args[2] == "neo4jINJECTED=1"
+
+
+def test_settings_patch_keeps_current_repo_when_new_database_fails() -> None:
+    old_settings = Settings().model_copy(update={"kuzu_db_path": "data/current"})
+    new_settings = Settings().model_copy(update={"kuzu_db_path": "data/missing"})
+    old_repo = TrackingRepo()
+    candidate_repo = TrackingRepo(RuntimeError("unable to open database"))
+
+    with (
+        patch("steam_friend_relationship_map.app.get_repository", side_effect=[old_repo, candidate_repo]),
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch("steam_friend_relationship_map.app.set_key") as mock_set_key,
+    ):
+        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.patch("/api/settings", json={"kuzu_db_path": "data/missing"})
+
+    assert response.status_code == 400
+    assert "configuration was not applied" in response.json()["detail"]
+    assert app.state.repo is old_repo
+    assert old_repo.close_count == 0
+    assert candidate_repo.close_count == 1
+    assert mock_set_key.call_args_list[-1].args[2] == "data/current"
+
+
+def test_settings_patch_restores_same_kuzu_database_after_failure() -> None:
+    old_settings = Settings().model_copy(
+        update={"kuzu_db_path": "data/current", "kuzu_buffer_pool_size_gb": 1}
+    )
+    new_settings = Settings().model_copy(
+        update={"kuzu_db_path": "data/current", "kuzu_buffer_pool_size_gb": 2}
+    )
+    old_repo = TrackingRepo()
+    candidate_repo = TrackingRepo(RuntimeError("buffer pool is full"))
+    restored_repo = TrackingRepo()
+
+    with (
+        patch(
+            "steam_friend_relationship_map.app.get_repository",
+            side_effect=[old_repo, candidate_repo, restored_repo],
+        ),
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch("steam_friend_relationship_map.app.set_key") as mock_set_key,
+    ):
+        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.patch("/api/settings", json={"kuzu_buffer_pool_size_gb": 2})
+
+    assert response.status_code == 400
+    assert app.state.repo is restored_repo
+    assert old_repo.close_count == 1
+    assert candidate_repo.close_count == 1
+    assert restored_repo.close_count == 0
+    assert mock_set_key.call_args_list[-1].args[2] == "1"
+
+
+def test_settings_patch_swaps_repo_only_after_candidate_is_ready() -> None:
+    old_settings = Settings().model_copy(update={"kuzu_db_path": "data/current"})
+    new_settings = Settings().model_copy(update={"kuzu_db_path": "data/new"})
+    old_repo = TrackingRepo()
+    candidate_repo = TrackingRepo()
+
+    with (
+        patch("steam_friend_relationship_map.app.get_repository", side_effect=[old_repo, candidate_repo]),
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch("steam_friend_relationship_map.app.set_key"),
+    ):
+        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.patch("/api/settings", json={"kuzu_db_path": "data/new"})
+
+    assert response.status_code == 200
+    assert app.state.repo is candidate_repo
+    assert old_repo.close_count == 1
+    assert candidate_repo.close_count == 0
+
+
+def test_secret_update_restores_previous_value_when_database_reconnect_fails() -> None:
+    old_settings = Settings().model_copy(
+        update={"graph_db_engine": "neo4j", "neo4j_password": "old-secret"}
+    )
+    new_settings = old_settings.model_copy(update={"neo4j_password": "bad-secret"})
+    old_repo = TrackingRepo()
+    candidate_repo = TrackingRepo(RuntimeError("authentication failed"))
+    secret_store = FakeSecretStore()
+    secret_store.values["neo4j_password"] = "old-secret"
+
+    with (
+        patch("steam_friend_relationship_map.app.get_repository", side_effect=[old_repo, candidate_repo]),
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+    ):
+        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=secret_store)  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.post(
+            "/api/settings/secrets",
+            json={"name": "neo4j_password", "value": "bad-secret"},
+        )
+
+    assert response.status_code == 400
+    assert app.state.repo is old_repo
+    assert old_repo.close_count == 0
+    assert candidate_repo.close_count == 1
+    assert secret_store.values["neo4j_password"] == "old-secret"
 
 
 def test_csrf_rejects_localhost_prefix_spoof() -> None:
