@@ -709,6 +709,15 @@ function secretLabel(configured, fromEnv) {
   return configured ? t("secret.configured") : t("secret.missing");
 }
 
+function isValidProxyUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return ["http:", "https:", "socks5:", "socks5h:"].includes(parsed.protocol) && Boolean(parsed.hostname);
+  } catch (_) {
+    return false;
+  }
+}
+
 function toggleEngineSettings(engine) {
   if (engine === "kuzu") {
     $("kuzuSettingsGroup").style.display = "block";
@@ -748,6 +757,8 @@ async function loadSettings() {
     $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
   }
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
+  $("steamProxyState").textContent = secretLabel(settings.steam_proxy_configured, settings.steam_proxy_from_env);
+  $("clearSteamProxy").disabled = !settings.steam_proxy_configured || settings.steam_proxy_from_env;
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
   $("settingsMessage").textContent = settings.message || "";
   const activeProjName = settings.active_project || "default";
@@ -759,8 +770,14 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  clearFieldErrors(["settingsKuzuDbPath", "settingsKuzuBufferPoolSizeGb", "settingsNeo4jUri", "settingsNeo4jUser"]);
+  clearFieldErrors(["steamProxyInput", "settingsKuzuDbPath", "settingsKuzuBufferPoolSizeGb", "settingsNeo4jUri", "settingsNeo4jUser"]);
   const engine = $("settingsGraphDbEngine").value;
+  const steamProxy = $("steamProxyInput").value.trim();
+
+  if (steamProxy && !isValidProxyUrl(steamProxy)) {
+    setFieldError("steamProxyInput", t("validation.proxyUrl"));
+    throw new Error(t("validation.fixFields"));
+  }
   
   if (engine === "kuzu") {
     if (!$("settingsKuzuDbPath").value.trim()) {
@@ -796,14 +813,25 @@ async function saveSettings() {
   if (steamKey) {
     await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "steam_api_key", value: steamKey }) });
   }
+  if (steamProxy) {
+    await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "steam_proxy_url", value: steamProxy }) });
+  }
   if (neo4jPassword) {
     await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "neo4j_password", value: neo4jPassword }) });
   }
   $("steamApiKeyInput").value = "";
+  $("steamProxyInput").value = "";
   $("neo4jPasswordInput").value = "";
   await loadSettings();
   await testSettings({ silent: true });
   toast(t("toast.settingsSaved"));
+}
+
+async function clearSteamProxy() {
+  await api("/api/settings/secrets/steam_proxy_url", { method: "DELETE" });
+  $("steamProxyInput").value = "";
+  await loadSettings();
+  toast(t("toast.proxyCleared"));
 }
 
 async function testSettings({ silent = false } = {}) {
@@ -1400,6 +1428,7 @@ function wireEvents() {
   $("testSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, testSettings).catch(() => {}));
   $("loadSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, loadSettings).catch(() => {}));
   $("saveSettings").addEventListener("click", (event) => withButtonState(event.currentTarget, saveSettings).catch(() => {}));
+  $("clearSteamProxy").addEventListener("click", (event) => withButtonState(event.currentTarget, clearSteamProxy).catch(() => {}));
   $("refreshDbStats").addEventListener("click", (event) => withButtonState(event.currentTarget, loadDbStats).catch(() => {}));
   $("dbStatsInterval").addEventListener("change", () => {
     if (currentRunId && ["running", "paused"].includes($("crawlStatus").dataset.status || "")) {

@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .proxy import normalize_proxy_url
+
 
 class CrawlStatus(StrEnum):
     pending = "pending"
@@ -141,8 +143,10 @@ class PublicSettings(BaseModel):
     default_cache_valid_days: int
     active_project: str = "default"
     steam_api_key_configured: bool
+    steam_proxy_configured: bool
     neo4j_password_configured: bool
     steam_api_key_from_env: bool = False
+    steam_proxy_from_env: bool = False
     neo4j_password_from_env: bool = False
     secure_store_available: bool = True
     message: str = ""
@@ -170,8 +174,14 @@ class SettingsPatch(BaseModel):
 
 
 class SecretUpdate(BaseModel):
-    name: Literal["steam_api_key", "neo4j_password"]
+    name: Literal["steam_api_key", "steam_proxy_url", "neo4j_password"]
     value: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_secret_value(self) -> "SecretUpdate":
+        if self.name == "steam_proxy_url":
+            self.value = normalize_proxy_url(self.value)
+        return self
 
 
 class DbStats(BaseModel):

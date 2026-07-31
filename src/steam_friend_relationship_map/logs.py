@@ -46,6 +46,7 @@ class AppLogBuffer:
         patterns = [
             (r"(?i)(authorization\s*[:=]\s*)(bearer\s+)?[^\s,;]+", r"\1" + SECRET_TOKEN),
             (r"(?i)(cookie|set-cookie)(\s*[:=]\s*)[^,\n\r]+", r"\1\2" + SECRET_TOKEN),
+            (r"(?i)\b((?:https?|socks5h?)://[^:\s/@]+:)[^@\s/]+@", r"\1" + SECRET_TOKEN + "@"),
             (r"(?i)(password|passwd|pwd|key|api[_-]?key|steam_api_key|neo4j_password)(\s*[:=]\s*)[^&\s,;]+", r"\1\2" + SECRET_TOKEN),
             (r"(?i)([?&](?:key|password|api_key|steam_api_key|neo4j_password)=)[^&\s]+", r"\1" + SECRET_TOKEN),
             (r"\b[A-Fa-f0-9]{32}\b", SECRET_TOKEN),

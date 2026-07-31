@@ -11,11 +11,22 @@ from steam_friend_relationship_map.settings import Settings
 
 
 def test_settings_accepts_python_field_names() -> None:
-    settings = Settings(app_host="0.0.0.0", app_port=8123, kuzu_db_path="data/custom")
+    settings = Settings(
+        app_host="0.0.0.0",
+        app_port=8123,
+        kuzu_db_path="data/custom",
+        steam_proxy_url="http://127.0.0.1:8080",
+    )
 
     assert settings.app_host == "0.0.0.0"
     assert settings.app_port == 8123
     assert settings.kuzu_db_path == "data/custom"
+    assert settings.steam_proxy_url == "http://127.0.0.1:8080"
+
+
+def test_settings_rejects_invalid_proxy_scheme() -> None:
+    with pytest.raises(ValueError, match="proxy URL"):
+        Settings(steam_proxy_url="ftp://127.0.0.1:21")
 
 
 def test_init_env_non_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

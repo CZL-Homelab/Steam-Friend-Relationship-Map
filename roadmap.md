@@ -54,8 +54,8 @@ graph TD
 2. **自适应并发限速器 (Rate Limiter)**
    - **内容**：目前请求为串行延时（通过 Delay ms 保证）。后续引入自适应滑动窗口限速，在维持安全频控的同时，允许安全限额下的异步并发请求。
    - **收益**：缩短多层抓取任务的总耗时。
-3. **代理 (Proxy) 配置支持**
-   - **内容**：在 Web GUI 安全配置中提供 HTTP/SOCKS 代理输入口，或通过 `.env` 中的 `HTTP_PROXY` / `HTTPS_PROXY` 加载。
+3. **代理 (Proxy) 配置支持（已完成）**
+   - **内容**：Web GUI 安全配置已支持 HTTP/HTTPS/SOCKS5/SOCKS5H 代理，凭据保存到系统凭据库；同时支持 `STEAM_PROXY_URL` 以及系统 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量回退。
    - **收益**：保障国内网络环境可以稳定直接地连通 Steam Web API。
 4. **Neo4j 批量写入优化**
    - **内容**：对现有的 `UNWIND` 逻辑进行调优，在导入超大规模节点或关系时优化批处理大小（Batching）。
@@ -102,7 +102,7 @@ graph TD
 
 | 迭代阶段 | 待办特性 | 优先级 | 估算复杂度 | 依赖模块 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Phase 1** | 代理 (Proxy) 配置支持 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` |
+| **Phase 1** | 代理 (Proxy) 配置支持 ✅ | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` |
 | **Phase 1** | 增量抓取与本地缓存 | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `neo4j_repo.py` |
 | **Phase 1** | 自适应并发限速器 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py` |
 | **Phase 1** | Neo4j 批量写入优化 | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` |

@@ -337,6 +337,19 @@
             <span class="field-hint" style="display: block; font-size: 0.75rem; color: var(--muted); margin-top: 4px; margin-bottom: 8px;" data-i18n="guide.steamApiKeyHint">
               支持配置多个 API Key 轮询以分担请求限制，用逗号或空格分隔。
             </span>
+            <div class="secret-state">
+              <span data-i18n="field.steamProxy">Steam 代理</span>
+              <div class="secret-state-controls">
+                <strong id="steamProxyState" data-i18n="secret.unknown">未知</strong>
+                <button class="icon-button" id="clearSteamProxy" type="button" title="清除代理" data-i18n-title="action.clearProxy">
+                  <i data-lucide="trash-2"></i>
+                </button>
+              </div>
+            </div>
+            <label data-i18n-label="field.steamProxy">
+              Steam 代理
+              <input id="steamProxyInput" type="password" autocomplete="off" data-i18n-placeholder="placeholder.secretUnchanged" placeholder="socks5://127.0.0.1:1080" />
+            </label>
             <label data-i18n-label="field.dbEngine">
               数据库引擎
               <select id="settingsGraphDbEngine">

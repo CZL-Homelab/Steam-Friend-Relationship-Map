@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -226,6 +226,63 @@ def test_secret_api_rejects_unknown_secret_name() -> None:
     assert response.status_code == 422
 
 
+def test_proxy_secret_status_does_not_echo_url() -> None:
+    proxy_url = "http://proxy-user:proxy-password@127.0.0.1:8080"
+    store = FakeSecretStore()
+    store.values["steam_proxy_url"] = proxy_url
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store)  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    assert response.json()["steam_proxy_configured"] is True
+    assert response.json()["steam_proxy_from_env"] is False
+    assert proxy_url not in response.text
+    assert "proxy-password" not in response.text
+
+
+def test_proxy_secret_rejects_unsupported_scheme() -> None:
+    store = FakeSecretStore()
+    app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store)  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/settings/secrets",
+        json={"name": "steam_proxy_url", "value": "ftp://127.0.0.1:21"},
+    )
+
+    assert response.status_code == 422
+    assert "steam_proxy_url" not in store.values
+
+
+def test_proxy_secret_update_rebuilds_steam_client() -> None:
+    proxy_url = "socks5://127.0.0.1:1080"
+    old_settings = Settings(steam_api_key="key")
+    new_settings = old_settings.model_copy(update={"steam_proxy_url": proxy_url})
+    old_steam = MagicMock()
+    old_steam.aclose = AsyncMock()
+    new_steam = MagicMock()
+    store = FakeSecretStore()
+
+    with (
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch("steam_friend_relationship_map.app.SteamClient", side_effect=[old_steam, new_steam]) as steam_client,
+    ):
+        app = create_app(settings=old_settings, repo=FakeRepo(), secret_store=store)  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.post(
+            "/api/settings/secrets",
+            json={"name": "steam_proxy_url", "value": proxy_url},
+        )
+
+    assert response.status_code == 200
+    assert app.state.steam is new_steam
+    old_steam.aclose.assert_awaited_once()
+    assert steam_client.call_args_list[0].kwargs == {"proxy_url": ""}
+    assert steam_client.call_args_list[1].kwargs == {"proxy_url": proxy_url}
+
+
 def test_settings_patch_rejects_invalid_graph_engine() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
@@ -424,13 +481,14 @@ def test_settings_test_reports_neo4j_server_unavailable() -> None:
 
 
 def test_logs_endpoint_redacts_sensitive_values() -> None:
-    app = create_app(settings=Settings(steam_api_key="abcd1234abcd1234abcd1234abcd1234", neo4j_password="pw-secret"), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    proxy_url = "http://proxy-user:proxy-secret@127.0.0.1:8080"
+    app = create_app(settings=Settings(steam_api_key="abcd1234abcd1234abcd1234abcd1234", steam_proxy_url=proxy_url, neo4j_password="pw-secret"), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
 
     app.state.logs.append(
         "error",
         "test",
-        "password=pw-secret key=abcd1234abcd1234abcd1234abcd1234 Authorization: Bearer token123 Cookie: sid=abc",
+        f"password=pw-secret key=abcd1234abcd1234abcd1234abcd1234 proxy={proxy_url} fallback=socks5://other-user:other-password@127.0.0.1:1080 Authorization: Bearer token123 Cookie: sid=abc",
     )
     response = client.get("/api/logs")
 
@@ -438,6 +496,8 @@ def test_logs_endpoint_redacts_sensitive_values() -> None:
     text = response.text
     assert "pw-secret" not in text
     assert "abcd1234abcd1234abcd1234abcd1234" not in text
+    assert "proxy-secret" not in text
+    assert "other-password" not in text
     assert "token123" not in text
     assert "sid=abc" not in text
     assert "[REDACTED]" in text

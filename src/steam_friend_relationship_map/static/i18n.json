@@ -3,6 +3,7 @@
     "action.analyzeCircles": "分析朋友圈",
     "action.cancelCrawl": "停止扫描",
     "action.clearLogs": "清空",
+    "action.clearProxy": "清除 Steam 代理",
     "action.copyBloom": "复制查询",
     "action.copyLogs": "复制",
     "action.createProject": "新建",
@@ -62,6 +63,7 @@
     "field.sortBy": "排序",
     "field.sortDir": "方向",
     "field.steamApiKey": "Steam API Key",
+    "field.steamProxy": "Steam 代理 URL",
     "field.tags": "标签",
     "field.to": "终点",
     "filter.preScanHint": "好友数筛选会额外请求候选人的公开好友列表；阈值越高，扫描越收敛。",
@@ -182,6 +184,7 @@
     "toast.projectCreated": "项目已创建",
     "toast.projectDeleted": "项目已删除",
     "toast.projectSwitched": "已切换项目",
+    "toast.proxyCleared": "Steam 代理已清除",
     "toast.resumed": "扫描已继续",
     "toast.rootRequired": "请输入 Root URL",
     "toast.selectNodeFirst": "请先选择一个节点",
@@ -202,12 +205,14 @@
     "validation.projectNameRequired": "请输入项目名称",
     "validation.range": "请输入 {min}-{max} 之间的数值",
     "validation.required": "必填",
+    "validation.proxyUrl": "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理 URL",
     "validation.rootSteamIdRequired": "请输入 Root SteamID"
   },
   "en": {
     "action.analyzeCircles": "Analyze circles",
     "action.cancelCrawl": "Stop crawl",
     "action.clearLogs": "Clear",
+    "action.clearProxy": "Clear Steam proxy",
     "action.copyBloom": "Copy query",
     "action.copyLogs": "Copy",
     "action.createProject": "Create",
@@ -267,6 +272,7 @@
     "field.sortBy": "Sort",
     "field.sortDir": "Direction",
     "field.steamApiKey": "Steam API Key",
+    "field.steamProxy": "Steam proxy URL",
     "field.tags": "Tags",
     "field.to": "To",
     "filter.preScanHint": "Friend-count filters request each candidate's public friend list; higher thresholds make crawling more focused.",
@@ -387,6 +393,7 @@
     "toast.projectCreated": "Project created",
     "toast.projectDeleted": "Project deleted",
     "toast.projectSwitched": "Project switched",
+    "toast.proxyCleared": "Steam proxy cleared",
     "toast.resumed": "Crawl resumed",
     "toast.rootRequired": "Root URL is required",
     "toast.selectNodeFirst": "Select a node first",
@@ -407,6 +414,7 @@
     "validation.projectNameRequired": "Project name is required",
     "validation.range": "Enter a value from {min} to {max}",
     "validation.required": "Required",
+    "validation.proxyUrl": "Enter a valid HTTP, HTTPS, or SOCKS5 proxy URL",
     "validation.rootSteamIdRequired": "Root SteamID is required"
   }
 }

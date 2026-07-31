@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .models import SteamUserRecord
+from .proxy import normalize_proxy_url
 from .rate_limiter import AdaptiveRateLimiter
 
 
@@ -33,11 +34,13 @@ class SteamClient:
         api_key: str,
         *,
         base_url: str = "https://api.steampowered.com",
+        proxy_url: str = "",
         client: httpx.AsyncClient | None = None,
         rate_limiter: AdaptiveRateLimiter | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        self.proxy_url = normalize_proxy_url(proxy_url)
         self._client = client
         self._owns_client = client is None
         self.rate_limiter = rate_limiter
@@ -55,7 +58,7 @@ class SteamClient:
 
     async def __aenter__(self) -> "SteamClient":
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=12)
+            self._client = self._create_http_client()
         return self
 
     async def __aexit__(self, *_: object) -> None:
@@ -65,6 +68,13 @@ class SteamClient:
         if self._client is not None and self._owns_client:
             await self._client.aclose()
         self._client = None
+
+    def _create_http_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=12,
+            proxy=self.proxy_url or None,
+            trust_env=not bool(self.proxy_url),
+        )
 
     async def resolve_steam_id(self, value: str) -> str:
         # 支持直接输入 64 位 SteamID，也支持 Steam 主页 URL。
@@ -144,7 +154,7 @@ class SteamClient:
             raise SteamApiError("缺少 STEAM_API_KEY")
         params["key"] = current_key
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=12)
+            self._client = self._create_http_client()
             self._owns_client = True
 
         url = f"{self.base_url}{path}"

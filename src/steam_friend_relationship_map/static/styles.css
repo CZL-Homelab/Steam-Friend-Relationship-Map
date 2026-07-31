@@ -1104,6 +1104,17 @@ dd {
   color: var(--ink);
 }
 
+.secret-state-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.secret-state-controls .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
 .log-drawer {
   margin-top: 12px;
 }

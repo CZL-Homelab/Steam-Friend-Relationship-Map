@@ -69,6 +69,11 @@ def sanitize_env_value(value: object) -> str:
     return str(value).replace("\n", "").replace("\r", "")
 
 
+def sensitive_setting_values(settings: Settings) -> list[str]:
+    api_keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
+    return api_keys + [value for value in (settings.neo4j_password, settings.steam_proxy_url) if value]
+
+
 def get_repository(settings: Settings) -> IGraphRepository:
     engine = settings.graph_db_engine.lower()
     if engine == "kuzu":
@@ -235,8 +240,7 @@ def create_app(
     settings = settings or get_settings()
     secret_store = secret_store or SecretStore()
     log_buffer = AppLogBuffer()
-    keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
-    log_buffer.set_secret_values(keys + [settings.neo4j_password])
+    log_buffer.set_secret_values(sensitive_setting_values(settings))
     install_log_handler(log_buffer)
     if repo is None:
         try:
@@ -248,7 +252,7 @@ def create_app(
         repo.ensure_schema()
     except Exception as exc:
         log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
-    steam = steam or SteamClient(settings.steam_api_key)
+    steam = steam or SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
 
     async def rebuild_runtime() -> None:
@@ -258,8 +262,7 @@ def create_app(
         old_steam = steam
         clear_settings_cache()
         settings = get_settings()
-        keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
-        log_buffer.set_secret_values(keys + [settings.neo4j_password])
+        log_buffer.set_secret_values(sensitive_setting_values(settings))
         should_replace_repo = (
             provided_repo is None
             and repository_settings_changed(old_settings, settings)
@@ -286,8 +289,7 @@ def create_app(
                 else:
                     repo = old_repo
                 settings = old_settings
-                keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
-                log_buffer.set_secret_values(keys + [settings.neo4j_password])
+                log_buffer.set_secret_values(sensitive_setting_values(settings))
                 manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
                 app.state.repo = repo
                 app.state.manager = manager
@@ -302,9 +304,13 @@ def create_app(
             repo.ensure_schema()
         except Exception as exc:
             log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
-        if provided_steam is None and old_settings.steam_api_key != settings.steam_api_key:
+        steam_settings_changed = (
+            old_settings.steam_api_key != settings.steam_api_key
+            or old_settings.steam_proxy_url != settings.steam_proxy_url
+        )
+        if provided_steam is None and steam_settings_changed:
             await old_steam.aclose()
-            steam = SteamClient(settings.steam_api_key)
+            steam = SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
         else:
             steam = old_steam
         manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
@@ -316,10 +322,12 @@ def create_app(
         raw = Settings()
         try:
             steam_secret = secret_store.get("steam_api_key")
+            proxy_secret = secret_store.get("steam_proxy_url")
             neo4j_secret = secret_store.get("neo4j_password")
             secure_store_available = True
         except SecretStorageError as exc:
             steam_secret = ""
+            proxy_secret = ""
             neo4j_secret = ""
             secure_store_available = False
             message = message or str(exc)
@@ -337,8 +345,10 @@ def create_app(
             default_cache_valid_days=settings.default_cache_valid_days,
             active_project=settings.active_project,
             steam_api_key_configured=bool(steam_secret or raw.steam_api_key),
+            steam_proxy_configured=bool(proxy_secret or raw.steam_proxy_url),
             neo4j_password_configured=bool(neo4j_secret or raw.neo4j_password),
             steam_api_key_from_env=not bool(steam_secret) and bool(raw.steam_api_key),
+            steam_proxy_from_env=not bool(proxy_secret) and bool(raw.steam_proxy_url),
             neo4j_password_from_env=not bool(neo4j_secret) and bool(raw.neo4j_password),
             secure_store_available=secure_store_available,
             message=message,
@@ -521,7 +531,10 @@ def create_app(
             if provided_steam is not None:
                 await steam.get_player_summaries(["76561197960435530"])
             else:
-                async with SteamClient(settings.steam_api_key) as test_steam:
+                async with SteamClient(
+                    settings.steam_api_key,
+                    proxy_url=settings.steam_proxy_url,
+                ) as test_steam:
                     await test_steam.get_player_summaries(["76561197960435530"])
             steam_ok = True
             steam_reason = "ok"

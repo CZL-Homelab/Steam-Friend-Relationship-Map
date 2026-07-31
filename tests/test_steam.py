@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import httpx
 import pytest
 
 from steam_friend_relationship_map.steam import SteamApiError, SteamClient
+
+
+@pytest.mark.asyncio
+async def test_steam_client_creates_owned_client_with_explicit_proxy() -> None:
+    proxy_url = "socks5h://user:password@127.0.0.1:1080"
+
+    with patch("steam_friend_relationship_map.steam.httpx.AsyncClient") as async_client:
+        client = SteamClient("key", proxy_url=proxy_url)
+        await client.__aenter__()
+
+    async_client.assert_called_once_with(
+        timeout=12,
+        proxy=proxy_url,
+        trust_env=False,
+    )
+
+
+def test_steam_client_rejects_invalid_proxy_url() -> None:
+    with pytest.raises(ValueError, match="proxy URL"):
+        SteamClient("key", proxy_url="ftp://127.0.0.1:21")
 
 
 @pytest.mark.asyncio

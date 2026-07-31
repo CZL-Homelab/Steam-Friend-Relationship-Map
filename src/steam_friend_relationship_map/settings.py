@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .proxy import normalize_proxy_url
 from .secrets import SecretStorageError, SecretStore
 
 
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     )
 
     steam_api_key: str = Field(default="", alias="STEAM_API_KEY")
+    steam_proxy_url: str = Field(default="", alias="STEAM_PROXY_URL")
     graph_db_engine: str = Field(default="kuzu", alias="GRAPH_DB_ENGINE")
     kuzu_db_path: str = Field(default="./data/graph_kuzu", alias="KUZU_DB_PATH")
     kuzu_buffer_pool_size_gb: int = Field(default=1, alias="KUZU_BUFFER_POOL_SIZE_GB")
@@ -31,6 +33,11 @@ class Settings(BaseSettings):
     default_cache_valid_days: int = Field(default=14, ge=0, alias="DEFAULT_CACHE_VALID_DAYS")
     active_project: str = Field(default="default", alias="ACTIVE_PROJECT")
 
+    @field_validator("steam_proxy_url")
+    @classmethod
+    def validate_steam_proxy_url(cls, value: str) -> str:
+        return normalize_proxy_url(value)
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -39,15 +46,19 @@ def get_settings() -> Settings:
     updates = {}
     try:
         steam_api_key = store.get("steam_api_key")
+        steam_proxy_url = store.get("steam_proxy_url")
         neo4j_password = store.get("neo4j_password")
     except SecretStorageError:
         steam_api_key = ""
+        steam_proxy_url = ""
         neo4j_password = ""
     if steam_api_key:
         updates["steam_api_key"] = steam_api_key
+    if steam_proxy_url:
+        updates["steam_proxy_url"] = steam_proxy_url
     if neo4j_password:
         updates["neo4j_password"] = neo4j_password
-    return settings.model_copy(update=updates)
+    return Settings.model_validate({**settings.model_dump(), **updates})
 
 
 def clear_settings_cache() -> None:

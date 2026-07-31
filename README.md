@@ -235,14 +235,16 @@ NEO4J_USER=neo4j                       # 用户名
 
 ## 网页端安全配置说明
 
-当前版本推荐在网页端填写 Steam API Key 和 Neo4j 密码。保存后它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。
+当前版本推荐在网页端填写 Steam API Key、Steam 代理 URL 和 Neo4j 密码。保存后它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。
 
 安全策略：
 
 - 前端输入框使用密码框。
 - 保存后输入框会清空。
-- API 只返回“已配置/未配置”，不会回显 Steam API Key 或 Neo4j 密码原文。
+- API 只返回“已配置/未配置”，不会回显 Steam API Key、代理 URL 或 Neo4j 密码原文。
+- Steam 代理支持 `http://`、`https://`、`socks5://` 和 `socks5h://`；包含账号密码的代理 URL 同样保存在系统凭据库并进入日志脱敏列表。
 - `.env` 只建议保存非敏感配置，例如 Neo4j 地址、用户名、端口和默认抓取参数。
+- `.env` 中的 `STEAM_PROXY_URL` 可作为兼容回退；若 URL 包含认证信息，仍建议迁移到网页端安全存储。
 - 旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍然兼容读取，但网页会提示建议迁移到安全存储。
 - 如果你需要真正的浏览器到后端传输层加密，应启用本地 HTTPS；普通 localhost HTTP 不应被描述为“全链路加密”。
 
