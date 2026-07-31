@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 from steam_friend_relationship_map.app import create_app
@@ -138,6 +140,34 @@ def test_graph_endpoint_uses_repo() -> None:
     assert body["nodes"][0]["root_route_count"] == 1
     assert body["nodes"][0]["root_route_total_hops"] == 0
     assert body["nodes"][0]["root_friend_circle_score"] == 1_000_000
+
+
+def test_project_list_errors_return_json_detail() -> None:
+    class BrokenProjectsRepo(FakeRepo):
+        def list_projects(self) -> object:
+            raise RuntimeError("buffer pool is full")
+
+    app = create_app(settings=Settings(), repo=BrokenProjectsRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/projects")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "buffer pool is full"
+
+
+def test_app_starts_when_repository_is_unavailable() -> None:
+    with patch("steam_friend_relationship_map.app.get_repository", side_effect=RuntimeError("Could not set lock on file")):
+        app = create_app(settings=Settings(), steam=SteamClient("key"), secret_store=FakeSecretStore())
+
+    client = TestClient(app)
+
+    settings_response = client.get("/api/settings")
+    projects_response = client.get("/api/projects")
+
+    assert settings_response.status_code == 200
+    assert projects_response.status_code == 500
+    assert "Graph database is unavailable" in projects_response.json()["detail"]
 
 
 def test_user_patch_endpoint() -> None:

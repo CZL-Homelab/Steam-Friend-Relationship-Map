@@ -4,6 +4,7 @@ import shutil
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
@@ -65,6 +66,24 @@ def test_kuzu_close_releases_database_lock(tmp_path: Path) -> None:
         assert reopened.test_connection()
     finally:
         reopened.close()
+
+
+def test_kuzu_open_failure_does_not_move_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "kuzu_db"
+    db_path.mkdir()
+
+    with (
+        patch("steam_friend_relationship_map.kuzu_repo.kuzu.Database", side_effect=RuntimeError("Could not set lock on file")) as database,
+        patch("shutil.move") as move,
+        patch("os.rename") as rename,
+    ):
+        with pytest.raises(RuntimeError, match="already in use"):
+            KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+
+    database.assert_called_once()
+    move.assert_not_called()
+    rename.assert_not_called()
+    assert db_path.exists()
 
 
 def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:

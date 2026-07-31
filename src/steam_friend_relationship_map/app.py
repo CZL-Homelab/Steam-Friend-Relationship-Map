@@ -3,9 +3,10 @@ from __future__ import annotations
 import csv
 import io
 import re
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from dotenv import set_key
@@ -23,6 +24,7 @@ from .models import (
     CrawlRun,
     DbStats,
     ExportResponse,
+    FriendEdge,
     FriendCircleAnalysisResponse,
     GraphNode,
     GraphResponse,
@@ -33,6 +35,7 @@ from .models import (
     SecretUpdate,
     SettingsPatch,
     SettingsTestResult,
+    SteamUserRecord,
     UserPatch,
     utc_now_iso,
 )
@@ -94,6 +97,127 @@ def repository_settings_changed(old: Settings, new: Settings) -> bool:
     )
 
 
+class UnavailableRepository(IGraphRepository):
+    """Placeholder used when the configured graph database cannot be opened."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.message = str(exc)
+
+    def _raise(self) -> None:
+        raise RuntimeError(f"Graph database is unavailable: {self.message}")
+
+    def close(self) -> None:
+        pass
+
+    def test_connection(self) -> str:
+        self._raise()
+
+    def ensure_schema(self) -> None:
+        self._raise()
+
+    def list_projects(self) -> ProjectListResponse:
+        self._raise()
+
+    def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
+        self._raise()
+
+    def delete_project(self, project_id: str) -> bool:
+        self._raise()
+
+    def project_exists(self, project_id: str) -> bool:
+        self._raise()
+
+    def get_crawl_run(self, run_id: str) -> CrawlRun | None:
+        self._raise()
+
+    def start_crawl_run(self, run: CrawlRun, project_id: str) -> None:
+        self._raise()
+
+    def update_crawl_run(self, run_id: str, **fields: Any) -> None:
+        self._raise()
+
+    def upsert_users(self, users: Iterable[SteamUserRecord], project_id: str) -> None:
+        self._raise()
+
+    def mark_friend_list_status(
+        self,
+        steam_id: str,
+        status: str,
+        friend_count: int | None,
+        friend_count_status: str,
+        friend_ids: list[str],
+        project_id: str,
+    ) -> None:
+        self._raise()
+
+    def get_cached_friend_list(
+        self, steam_id: str, valid_days: int, project_id: str
+    ) -> tuple[str, list[str]] | None:
+        self._raise()
+
+    def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
+        self._raise()
+
+    def patch_user(
+        self,
+        steam_id: str,
+        *,
+        note: str | None = None,
+        tags: list[str] | None = None,
+        category: str | None = None,
+    ) -> None:
+        self._raise()
+
+    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
+        self._raise()
+
+    def count_inner_layer_links(
+        self, candidate_ids: list[str], inner_pool_ids: list[str], project_id: str
+    ) -> dict[str, int]:
+        self._raise()
+
+    def get_graph(
+        self,
+        *,
+        root: str | None,
+        depth: int,
+        limit: int,
+        query: str | None = None,
+        category: str | None = None,
+        friend_count_min: int | None = None,
+        friend_count_max: int | None = None,
+        prior_pool_min_links: int = 0,
+        sort_by: str = "depth",
+        sort_dir: str = "asc",
+        project_id: str = "default",
+    ) -> GraphResponse:
+        self._raise()
+
+    def get_shortest_path(
+        self, from_id: str, to_id: str, max_depth: int, project_id: str = "default"
+    ) -> GraphResponse:
+        self._raise()
+
+    def get_friend_circle_analysis(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> FriendCircleAnalysisResponse:
+        self._raise()
+
+    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
+        self._raise()
+
+    def get_db_stats(self, project_id: str = "default") -> DbStats:
+        self._raise()
+
+    def export_graph(self, project_id: str = "default") -> ExportResponse:
+        self._raise()
+
+
 def create_app(
     settings: Settings | None = None,
     repo: IGraphRepository | None = None,
@@ -108,7 +232,12 @@ def create_app(
     keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
     log_buffer.set_secret_values(keys + [settings.neo4j_password])
     install_log_handler(log_buffer)
-    repo = repo or get_repository(settings)
+    if repo is None:
+        try:
+            repo = get_repository(settings)
+        except Exception as exc:
+            log_buffer.append("error", "database", f"Graph database open failed: {exc}")
+            repo = UnavailableRepository(exc)
     try:
         repo.ensure_schema()
     except Exception as exc:
@@ -131,7 +260,11 @@ def create_app(
         )
         if should_replace_repo:
             old_repo.close()
-            repo = get_repository(settings)
+            try:
+                repo = get_repository(settings)
+            except Exception as exc:
+                log_buffer.append("error", "database", f"Graph database open failed: {exc}")
+                repo = UnavailableRepository(exc)
         else:
             repo = old_repo
         try:
@@ -354,9 +487,13 @@ def create_app(
 
     @app.get("/api/projects", response_model=ProjectListResponse)
     async def list_projects() -> ProjectListResponse:
-        result = repo.list_projects()
-        result.active_project_id = settings.active_project
-        return result
+        try:
+            result = repo.list_projects()
+            result.active_project_id = settings.active_project
+            return result
+        except Exception as exc:
+            log_buffer.append("error", "project", f"Project list read failed: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/projects", response_model=ProjectInfo)
     async def create_project(payload: ProjectCreate) -> ProjectInfo:
@@ -397,9 +534,13 @@ def create_app(
         set_key(str(ENV_PATH), "ACTIVE_PROJECT", sanitize_env_value(pid), quote_mode="never")
         await rebuild_runtime()
         log_buffer.append("info", "project", f"已切换到项目: {pid}")
-        result = repo.list_projects()
-        result.active_project_id = pid
-        return result
+        try:
+            result = repo.list_projects()
+            result.active_project_id = pid
+            return result
+        except Exception as exc:
+            log_buffer.append("error", "project", f"Project list read failed: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/crawls", response_model=CrawlRun)
     async def create_crawl(payload: CrawlCreate) -> CrawlRun:
@@ -503,7 +644,11 @@ def create_app(
 
     @app.get("/api/stats/top-degree", response_model=list[GraphNode])
     async def top_degree(limit: Annotated[int, Query(ge=1, le=50)] = 12) -> list[GraphNode]:
-        return repo.get_top_degree(limit, project_id=settings.active_project)
+        try:
+            return repo.get_top_degree(limit, project_id=settings.active_project)
+        except Exception as exc:
+            log_buffer.append("error", "stats", f"Top degree read failed: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.get("/api/analysis/friend-circles", response_model=FriendCircleAnalysisResponse)
     async def friend_circles(

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import datetime
 import gc
+import logging
 import threading
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import kuzu
@@ -26,6 +28,8 @@ from .models import (
     utc_now_iso,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _parse_node(row_val: Any) -> dict[str, Any]:
     """将 Kùzu 查询返回的节点转换为标准的 Python 字典。"""
@@ -41,36 +45,31 @@ class KuzuRepositoryImpl(IGraphRepository):
 
     def __init__(self, db_path: str, buffer_pool_size_gb: int = 1) -> None:
         self.db_path = db_path
-        from pathlib import Path
-        import os
-        import shutil
-        from datetime import datetime
-        import logging
-
-        logger = logging.getLogger("kuzu_repo")
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         buffer_pool_size_bytes = int(buffer_pool_size_gb * 1024 * 1024 * 1024)
-        
+
         try:
             self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
-        except Exception as e:
-            err_msg = str(e).lower()
-            if any(term in err_msg for term in ["io", "lock", "database", "corrupt", "unable to open", "cannot open"]):
-                backup_path = f"{db_path}_corrupted_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                logger.error(f"Kuzu DB initialization failed: {e}. Archiving to {backup_path} and recreating...")
-                if os.path.exists(db_path):
-                    try:
-                        shutil.move(db_path, backup_path)
-                    except Exception as move_err:
-                        logger.error(f"Failed to move corrupted database: {move_err}")
-                        try:
-                            os.rename(db_path, backup_path)
-                        except Exception as rename_err:
-                            logger.error(f"Failed to rename corrupted database: {rename_err}")
-                self.db = kuzu.Database(db_path, buffer_pool_size=buffer_pool_size_bytes)
-                logger.info("Successfully recreated Kuzu database.")
+        except Exception as exc:
+            detail = str(exc) or repr(exc)
+            lowered = detail.lower()
+            if any(term in lowered for term in ["lock", "already in use", "could not set lock", "being used"]):
+                hint = (
+                    "Kuzu database is already in use. Stop other steam-friend-map/uvicorn "
+                    "processes that are using this database, or choose a different KUZU_DB_PATH."
+                )
+            elif any(term in lowered for term in ["buffer pool", "out of memory", "memory"]):
+                hint = (
+                    "Kuzu could not open the database because its buffer pool is too small. "
+                    "Try lowering the graph query size or increasing KUZU_BUFFER_POOL_SIZE_GB."
+                )
             else:
-                raise e
+                hint = (
+                    "Kuzu could not open the database. No database files were moved, deleted, "
+                    "or recreated; your existing project data was left untouched."
+                )
+            logger.exception("Failed to open Kuzu database at %s", db_path)
+            raise RuntimeError(f"{hint} Original error: {detail}") from exc
 
         self._local = threading.local()
         self._closed = False
@@ -196,6 +195,15 @@ class KuzuRepositoryImpl(IGraphRepository):
     def ensure_default_project(self) -> str:
         return self.create_project(ProjectCreate(name="默认项目"), project_id="default")
 
+    @staticmethod
+    def _visible_project_ids(project_id: str) -> list[str]:
+        return ["", project_id] if project_id == "default" else [project_id]
+
+    @staticmethod
+    def _scalar_count(conn: kuzu.Connection, query: str, params: dict[str, Any]) -> int:
+        res = conn.execute(query, params)
+        return int(res.get_next()[0] or 0) if res.has_next() else 0
+
     def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
         import uuid
         pid = project_id or str(uuid.uuid4())
@@ -245,24 +253,36 @@ class KuzuRepositoryImpl(IGraphRepository):
         res = conn.execute(
             """
             MATCH (p:Project)
-            OPTIONAL MATCH (u:SteamUser) WHERE u.project_id = p.id
-            OPTIONAL MATCH (c:CrawlRun) WHERE c.project_id = p.id
-            WITH p, count(DISTINCT u) AS user_count, count(DISTINCT c) AS crawl_count
-            OPTIONAL MATCH ()-[r:STEAM_FRIEND]->() WHERE r.project_id = p.id
-            RETURN p.id, p.name, p.created_at, user_count, count(DISTINCT r), crawl_count
+            RETURN p.id, p.name, p.created_at
             ORDER BY p.created_at DESC
             """
         )
         projects = []
         while res.has_next():
             row = res.get_next()
+            project_ids = self._visible_project_ids(row[0])
+            user_count = self._scalar_count(
+                conn,
+                "MATCH (u:SteamUser) WHERE coalesce(u.project_id, '') IN $project_ids RETURN count(u)",
+                {"project_ids": project_ids},
+            )
+            relationship_count = self._scalar_count(
+                conn,
+                "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN $project_ids RETURN count(r)",
+                {"project_ids": project_ids},
+            )
+            crawl_count = self._scalar_count(
+                conn,
+                "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN $project_ids RETURN count(c)",
+                {"project_ids": project_ids},
+            )
             projects.append(ProjectInfo(
                 id=row[0],
                 name=row[1],
                 created_at=row[2],
-                steam_users=row[3] or 0,
-                relationships=row[4] or 0,
-                crawl_runs=row[5] or 0
+                steam_users=user_count,
+                relationships=relationship_count,
+                crawl_runs=crawl_count,
             ))
         if not projects:
             self.ensure_schema()
@@ -798,14 +818,15 @@ class KuzuRepositoryImpl(IGraphRepository):
         depth = max(0, min(depth, 4))
         limit = max(1, min(limit, 100000))
         filters = []
-        params = {"project_id": project_id}
+        params: dict[str, Any] = {}
         requested_depth: int | None = depth
         traversal_depth_reached: int | None = None
         root_found: bool | None = None
         depth_incomplete = False
 
         if not root:
-            filters.append("(coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { MATCH (n)-[r:STEAM_FRIEND]-(:SteamUser) WHERE r.project_id = $project_id })")
+            filters.append("coalesce(n.project_id, '') IN $project_ids")
+            params["project_ids"] = self._visible_project_ids(project_id)
         if query:
             params["query"] = query.lower()
             filters.append("(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)")
@@ -837,6 +858,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         conn = self._get_conn()
         root_metrics: dict[str, tuple[int, int, float]] = {}
         if root:
+            params["project_id"] = project_id
             reachable_ids, root_found, traversal_depth_reached, depth_incomplete = self._reachable_ids_from_root(conn, root, depth, project_id)
             if not root_found or not reachable_ids:
                 return GraphResponse(
@@ -860,21 +882,44 @@ class KuzuRepositoryImpl(IGraphRepository):
             """
             params["limit"] = limit + 1
         else:
-            node_query = f"""
-            MATCH (n:SteamUser)
-            {where}
-            OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN ['', $project_id]
-            WITH n, count(DISTINCT rel) AS degree
-            RETURN n, degree
-            ORDER BY {order_expr} {direction}, degree DESC
-            LIMIT $limit
-            """
             params["limit"] = limit + 1
+            if query or category or friend_count_min is not None or friend_count_max is not None or prior_pool_min_links:
+                node_query = f"""
+                MATCH (n:SteamUser)
+                {where}
+                OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN $project_ids
+                WITH n, count(DISTINCT rel) AS degree
+                RETURN n, degree
+                ORDER BY {order_expr} {direction}, degree DESC
+                LIMIT $limit
+                """
+            else:
+                node_query = f"""
+                MATCH (a:SteamUser)-[rel:STEAM_FRIEND]-(n:SteamUser)
+                WHERE coalesce(rel.project_id, '') IN $project_ids
+                WITH n, count(DISTINCT rel) AS degree
+                RETURN n, degree
+                ORDER BY {order_expr} {direction}, degree DESC
+                LIMIT $limit
+                """
 
         res_nodes = conn.execute(node_query, params)
         records = []
         while res_nodes.has_next():
             records.append(res_nodes.get_next())
+        if not records and not root and not query and not category and friend_count_min is None and friend_count_max is None and not prior_pool_min_links:
+            fallback_res = conn.execute(
+                f"""
+                MATCH (n:SteamUser)
+                WHERE coalesce(n.project_id, '') IN $project_ids
+                RETURN n, 0 AS degree
+                ORDER BY {order_expr} {direction}
+                LIMIT $limit
+                """,
+                {"project_ids": self._visible_project_ids(project_id), "limit": limit + 1},
+            )
+            while fallback_res.has_next():
+                records.append(fallback_res.get_next())
 
         limited = len(records) > limit
         records = records[:limit]
@@ -1048,16 +1093,14 @@ class KuzuRepositoryImpl(IGraphRepository):
         conn = self._get_conn()
         res = conn.execute(
             """
-            MATCH (n:SteamUser)
-            WHERE coalesce(n.project_id, '') IN ['', $project_id]
-               OR EXISTS { MATCH (n)-[rel:STEAM_FRIEND]-(:SteamUser) WHERE rel.project_id = $project_id }
-            OPTIONAL MATCH (n)-[r:STEAM_FRIEND]-()
+            MATCH (n:SteamUser)-[r:STEAM_FRIEND]-()
+            WHERE coalesce(r.project_id, '') IN $project_ids
             WITH n, count(DISTINCT r) AS degree
             RETURN n, degree
             ORDER BY degree DESC
             LIMIT $limit
             """,
-            {"project_id": project_id, "limit": limit}
+            {"project_ids": self._visible_project_ids(project_id), "limit": limit}
         )
         nodes = []
         while res.has_next():
@@ -1068,38 +1111,32 @@ class KuzuRepositoryImpl(IGraphRepository):
 
     def get_db_stats(self, project_id: str = "default") -> DbStats:
         conn = self._get_conn()
-        res_users = conn.execute(
-            """
-            MATCH (u:SteamUser)
-            WHERE coalesce(u.project_id, '') IN ['', $project_id]
-               OR EXISTS { MATCH (u)-[r:STEAM_FRIEND]-(:SteamUser) WHERE r.project_id = $project_id }
-            RETURN count(u)
-            """,
-            {"project_id": project_id}
+        project_ids = self._visible_project_ids(project_id)
+        steam_users = self._scalar_count(
+            conn,
+            "MATCH (u:SteamUser) WHERE coalesce(u.project_id, '') IN $project_ids RETURN count(u)",
+            {"project_ids": project_ids},
         )
-        steam_users = res_users.get_next()[0] if res_users.has_next() else 0
-
-        res_rels = conn.execute(
-            "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN ['', $project_id] RETURN count(r)",
-            {"project_id": project_id}
+        relationships = self._scalar_count(
+            conn,
+            "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN $project_ids RETURN count(r)",
+            {"project_ids": project_ids},
         )
-        relationships = res_rels.get_next()[0] if res_rels.has_next() else 0
-
-        res_crawls = conn.execute(
-            "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN ['', $project_id] RETURN count(c)",
-            {"project_id": project_id}
+        crawl_runs = self._scalar_count(
+            conn,
+            "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN $project_ids RETURN count(c)",
+            {"project_ids": project_ids},
         )
-        crawl_runs = res_crawls.get_next()[0] if res_crawls.has_next() else 0
 
         res_latest = conn.execute(
             """
             MATCH (latest:CrawlRun)
-            WHERE coalesce(latest.project_id, '') IN ['', $project_id]
+            WHERE coalesce(latest.project_id, '') IN $project_ids
             RETURN latest
             ORDER BY latest.started_at DESC
             LIMIT 1
             """,
-            {"project_id": project_id}
+            {"project_ids": project_ids}
         )
         latest = None
         if res_latest.has_next():

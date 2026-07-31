@@ -753,7 +753,8 @@ async function loadSettings() {
   const activeProjName = settings.active_project || "default";
   $("activeProjectName").textContent = activeProjName === "default" ? t("project.defaultName") : activeProjName;
   loadProjects().catch(() => {
-    $("projectList").innerHTML = `<div class="project-item active" data-project-id="default"><span>${t("project.defaultName")}</span><span class="project-meta">${t("status.offline") || "Offline"}</span></div>`;
+    const label = activeProjName === "default" ? t("project.defaultName") : escapeHtml(activeProjName);
+    $("projectList").innerHTML = `<div class="project-item active" data-project-id="${escapeHtml(activeProjName)}"><span>${label}</span><span class="project-meta">${t("project.loadFailed")}</span></div>`;
   });
 }
 
@@ -1137,10 +1138,18 @@ function updateCrawlButtons(status) {
 }
 
 async function loadProjects() {
-  const data = await api("/api/projects");
-  const activeProjId = data.active_project_id || "default";
-  $("activeProjectName").textContent = activeProjId === "default" ? t("project.defaultName") : activeProjId;
-  renderProjectList(data);
+  try {
+    const data = await api("/api/projects");
+    const activeProjId = data.active_project_id || "default";
+    $("activeProjectName").textContent = activeProjId === "default" ? t("project.defaultName") : activeProjId;
+    renderProjectList(data);
+  } catch (error) {
+    const activeProjId = $("activeProjectName").textContent.trim() || "default";
+    const message = error.message.includes("buffer pool is full") ? t("graph.memoryHint") : error.message;
+    appendUiLog("error", t("project.loadFailed"), message);
+    $("projectList").innerHTML = `<div class="project-item active" data-project-id="${escapeHtml(activeProjId)}"><span>${escapeHtml(activeProjId)}</span><span class="project-meta">${t("project.loadFailed")}</span></div>`;
+    throw error;
+  }
 }
 
 function renderProjectList(data) {
