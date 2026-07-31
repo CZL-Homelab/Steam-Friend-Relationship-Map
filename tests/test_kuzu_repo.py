@@ -372,6 +372,127 @@ def test_kuzu_relationships_are_isolated_by_project(temp_kuzu_repo: KuzuReposito
     assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="project-b").edges) == 1
 
 
+def test_kuzu_shared_users_and_isolated_members_survive_other_project_deletion(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.create_project(ProjectCreate(name="Project A"), project_id="project-a")
+    repo.create_project(ProjectCreate(name="Project B"), project_id="project-b")
+
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="shared", persona_name="Shared"),
+            SteamUserRecord(steam_id="a-only", persona_name="A Only"),
+            SteamUserRecord(steam_id="a-isolated", persona_name="A Isolated"),
+        ],
+        "project-a",
+    )
+    repo.upsert_relationships(
+        [FriendEdge(from_id="shared", to_id="a-only", crawl_id="a-run", source_depth=0)],
+        "project-a",
+    )
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="shared", persona_name="Shared"),
+            SteamUserRecord(steam_id="b-only", persona_name="B Only"),
+            SteamUserRecord(steam_id="b-isolated", persona_name="B Isolated"),
+        ],
+        "project-b",
+    )
+    repo.upsert_relationships(
+        [FriendEdge(from_id="shared", to_id="b-only", crawl_id="b-run", source_depth=0)],
+        "project-b",
+    )
+
+    project_a = repo.get_graph(root=None, depth=1, limit=20, project_id="project-a")
+    project_b = repo.get_graph(root=None, depth=1, limit=20, project_id="project-b")
+    assert {node.id for node in project_a.nodes} == {"shared", "a-only", "a-isolated"}
+    assert {node.id for node in project_b.nodes} == {"shared", "b-only", "b-isolated"}
+    assert repo.get_db_stats("project-a").steam_users == 3
+    assert repo.get_db_stats("project-b").steam_users == 3
+    project_counts = {project.id: project.steam_users for project in repo.list_projects().projects}
+    assert project_counts["project-a"] == 3
+    assert project_counts["project-b"] == 3
+    assert {node["steam_id"] for node in repo.export_graph("project-a").nodes} == {
+        "shared",
+        "a-only",
+        "a-isolated",
+    }
+
+    assert repo.delete_project("project-a")
+
+    remaining = repo.get_graph(root=None, depth=1, limit=20, project_id="project-b")
+    assert {node.id for node in remaining.nodes} == {"shared", "b-only", "b-isolated"}
+    assert {(edge.source, edge.target) for edge in remaining.edges} == {("b-only", "shared")}
+    assert repo.get_db_stats("project-b").steam_users == 3
+    assert not repo.project_exists("project-a")
+
+
+def test_kuzu_project_membership_migration_backfills_legacy_relationships(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.create_project(ProjectCreate(name="Project A"), project_id="project-a")
+    repo.create_project(ProjectCreate(name="Project B"), project_id="project-b")
+    users = [
+        SteamUserRecord(steam_id="shared", persona_name="Shared"),
+        SteamUserRecord(steam_id="neighbor", persona_name="Neighbor"),
+    ]
+    edge = FriendEdge(from_id="shared", to_id="neighbor", crawl_id="run", source_depth=0)
+    repo.upsert_users(users, "project-a")
+    repo.upsert_relationships([edge], "project-b")
+
+    conn = repo._get_conn()
+    conn.execute("MATCH (:SteamUser)-[m:IN_PROJECT]->(:Project) DELETE m")
+    conn.execute(
+        "MATCH (m:SchemaMigration) WHERE m.id = 'project-membership-v1' DELETE m"
+    )
+    conn.execute(
+        "MATCH (p:Project) WHERE p.id IN ['project-a', 'project-b'] DELETE p"
+    )
+    conn.execute("DROP TABLE IN_PROJECT")
+    conn.execute("DROP TABLE SchemaMigration")
+
+    repo.ensure_schema()
+
+    assert repo.project_exists("project-a")
+    assert repo.project_exists("project-b")
+    assert {node.id for node in repo.get_graph(root=None, depth=1, limit=10, project_id="project-a").nodes} == {
+        "shared",
+        "neighbor",
+    }
+    assert {node.id for node in repo.get_graph(root=None, depth=1, limit=10, project_id="project-b").nodes} == {
+        "shared",
+        "neighbor",
+    }
+
+
+def test_kuzu_legacy_default_edges_do_not_leak_into_other_projects(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    users = [
+        SteamUserRecord(steam_id="1", persona_name="One"),
+        SteamUserRecord(steam_id="2", persona_name="Two"),
+    ]
+    edge = FriendEdge(from_id="1", to_id="2", crawl_id="legacy", source_depth=0)
+    repo.upsert_users(users, "default")
+    repo.upsert_relationships([edge], "default")
+    repo.upsert_users(users, "project-b")
+
+    repo._get_conn().execute(
+        "MATCH ()-[r:STEAM_FRIEND]->() WHERE r.project_id = 'default' SET r.project_id = ''"
+    )
+
+    assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="default").edges) == 1
+    assert len(repo.get_graph(root="1", depth=1, limit=10, project_id="project-b").edges) == 0
+    assert len(repo.export_graph("default").edges) == 1
+    assert len(repo.export_graph("project-b").edges) == 0
+
+
 def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()

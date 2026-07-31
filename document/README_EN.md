@@ -97,6 +97,8 @@ Core capabilities:
 - Uses public Steam Web API; does not read cookies or bypass privacy settings.
 - Crawl depth limited to 1–4 layers; max user count 10000.
 - Automatically creates `SteamUser` nodes and `STEAM_FRIEND` relationships.
+- Isolates projects with explicit `IN_PROJECT` memberships; the same Steam user can safely belong to multiple projects, and deleting one project preserves users still referenced elsewhere.
+- Automatically performs a one-time idempotent membership migration for legacy databases that only stored `project_id` properties.
 - GUI supports Chinese / English language switching.
 - Avatar cards, notes, tags, categories, central node rankings, and shortest path queries.
 

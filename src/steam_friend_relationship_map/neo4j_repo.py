@@ -48,6 +48,10 @@ class Neo4jRepositoryImpl(IGraphRepository):
         """将深度值钳制到安全范围，供 f-string 拼接 Cypher 查询使用。"""
         return max(0, min(int(value), maximum))
 
+    @staticmethod
+    def _visible_project_ids(project_id: str) -> list[str]:
+        return ["", project_id] if project_id == "default" else [project_id]
+
     def test_connection(self) -> str:
         self.driver.verify_connectivity()
         return "Neo4j 连接正常"
@@ -58,10 +62,63 @@ class Neo4jRepositoryImpl(IGraphRepository):
             "CREATE CONSTRAINT steam_user_id IF NOT EXISTS FOR (u:SteamUser) REQUIRE u.steam_id IS UNIQUE",
             "CREATE CONSTRAINT crawl_run_id IF NOT EXISTS FOR (r:CrawlRun) REQUIRE r.id IS UNIQUE",
             "CREATE CONSTRAINT project_id IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE",
+            "CREATE CONSTRAINT schema_migration_id IF NOT EXISTS FOR (m:SchemaMigration) REQUIRE m.id IS UNIQUE",
         ]
         with self.driver.session() as session:
             for statement in statements:
                 session.run(statement).consume()
+            self._migrate_project_memberships(session)
+
+    @staticmethod
+    def _migrate_project_memberships(session: Any) -> None:
+        migration_id = "project-membership-v1"
+        if session.run(
+            "MATCH (m:SchemaMigration {id: $id}) RETURN m.id AS id",
+            id=migration_id,
+        ).single() is not None:
+            return
+
+        now = utc_now_iso()
+        session.run(
+            """
+            MERGE (p:Project {id: 'default'})
+            ON CREATE SET p.name = '默认项目', p.created_at = $now
+            """,
+            now=now,
+        ).consume()
+        session.run(
+            """
+            MATCH (u:SteamUser)
+            WITH u, CASE
+                WHEN coalesce(u.project_id, '') = '' THEN 'default'
+                ELSE u.project_id
+            END AS project_id
+            MERGE (p:Project {id: project_id})
+            ON CREATE SET p.name = project_id, p.created_at = $now
+            MERGE (u)-[:IN_PROJECT]->(p)
+            """,
+            now=now,
+        ).consume()
+        session.run(
+            """
+            MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+            WHERE a.steam_id < b.steam_id
+            WITH a, b, CASE
+                WHEN coalesce(r.project_id, '') = '' THEN 'default'
+                ELSE r.project_id
+            END AS project_id
+            MERGE (p:Project {id: project_id})
+            ON CREATE SET p.name = project_id, p.created_at = $now
+            MERGE (a)-[:IN_PROJECT]->(p)
+            MERGE (b)-[:IN_PROJECT]->(p)
+            """,
+            now=now,
+        ).consume()
+        session.run(
+            "MERGE (m:SchemaMigration {id: $id}) SET m.applied_at = $now",
+            id=migration_id,
+            now=now,
+        ).consume()
 
     # ── Project management ────────────────────────────────────────────
 
@@ -95,8 +152,8 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 return False
             session.run(
                 """
-                MATCH (u:SteamUser {project_id: $pid})
-                DETACH DELETE u
+                MATCH ()-[r:STEAM_FRIEND {project_id: $pid}]-()
+                DELETE r
                 """,
                 pid=project_id,
             ).consume()
@@ -114,6 +171,14 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 """,
                 pid=project_id,
             ).consume()
+            session.run(
+                """
+                MATCH (u:SteamUser)
+                WHERE NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }
+                  AND NOT EXISTS { MATCH (u)-[:STEAM_FRIEND]-(:SteamUser) }
+                DETACH DELETE u
+                """
+            ).consume()
         return True
 
     def project_exists(self, project_id: str) -> bool:
@@ -126,9 +191,10 @@ class Neo4jRepositoryImpl(IGraphRepository):
             records = list(session.run(
                 """
                 MATCH (p:Project)
-                OPTIONAL MATCH (u:SteamUser)
-                WHERE u.project_id = p.id OR EXISTS { (u)-[:STEAM_FRIEND {project_id: p.id}]-() }
-                OPTIONAL MATCH ()-[r:STEAM_FRIEND {project_id: p.id}]-()
+                OPTIONAL MATCH (u:SteamUser)-[:IN_PROJECT]->(p)
+                OPTIONAL MATCH ()-[r:STEAM_FRIEND]-()
+                WHERE coalesce(r.project_id, '') = p.id
+                   OR (p.id = 'default' AND coalesce(r.project_id, '') = '')
                 OPTIONAL MATCH (c:CrawlRun {project_id: p.id})
                 RETURN p,
                        count(DISTINCT u) AS user_count,
@@ -218,6 +284,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 batch_rows = rows[i : i + batch_size]
                 session.run(
                     """
+                    MERGE (p:Project {id: $project_id})
+                    ON CREATE SET p.name = $project_name, p.created_at = $now
+                    WITH p
                     UNWIND $users AS user
                     MERGE (u:SteamUser {steam_id: user.steam_id})
                     ON CREATE SET u.first_seen_at = $now
@@ -265,10 +334,12 @@ class Neo4jRepositoryImpl(IGraphRepository):
                         u.note = coalesce(u.note, ""),
                         u.tags = coalesce(u.tags, []),
                         u.category = coalesce(u.category, "")
+                    MERGE (u)-[:IN_PROJECT]->(p)
                     """,
                     users=batch_rows,
                     now=now,
                     project_id=project_id,
+                    project_name="默认项目" if project_id == "default" else project_id,
                 ).consume()
     def mark_friend_list_status(
         self,
@@ -283,6 +354,8 @@ class Neo4jRepositoryImpl(IGraphRepository):
         with self.driver.session() as session:
             session.run(
                 """
+                MERGE (p:Project {id: $project_id})
+                ON CREATE SET p.name = $project_name, p.created_at = $now
                 MERGE (u:SteamUser {steam_id: $steam_id})
                 SET u.friend_list_status = $status,
                     u.project_id = CASE
@@ -303,6 +376,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     END,
                     u.friend_list_fetched_at = $now,
                     u.last_seen_at = $now
+                MERGE (u)-[:IN_PROJECT]->(p)
                 """,
                 steam_id=steam_id,
                 status=status,
@@ -310,6 +384,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 friend_count_status=friend_count_status,
                 friend_ids=friend_ids,
                 project_id=project_id,
+                project_name="默认项目" if project_id == "default" else project_id,
                 now=utc_now_iso(),
             ).consume()
 
@@ -353,9 +428,14 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 batch_rows = rows[i : i + batch_size]
                 session.run(
                     """
+                    MERGE (p:Project {id: $project_id})
+                    ON CREATE SET p.name = $project_name, p.created_at = $now
+                    WITH p
                     UNWIND $edges AS edge
                     MATCH (a:SteamUser {steam_id: edge.from_id})
                     MATCH (b:SteamUser {steam_id: edge.to_id})
+                    MERGE (a)-[:IN_PROJECT]->(p)
+                    MERGE (b)-[:IN_PROJECT]->(p)
                     MERGE (a)-[r:STEAM_FRIEND {project_id: $project_id}]-(b)
                     ON CREATE SET r.first_seen_at = $now
                     SET r.last_seen_at = $now,
@@ -365,6 +445,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     edges=batch_rows,
                     now=now,
                     project_id=project_id,
+                    project_name="默认项目" if project_id == "default" else project_id,
                 ).consume()
 
     def patch_user(self, steam_id: str, *, note: str | None = None, tags: list[str] | None = None, category: str | None = None) -> None:
@@ -423,12 +504,12 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 UNWIND $candidates AS cid
                 MATCH (c:SteamUser {steam_id: cid})-[r:STEAM_FRIEND]-(inner:SteamUser)
                 WHERE inner.steam_id IN $inner_pool
-                  AND coalesce(r.project_id, '') IN ['', $project_id]
+                  AND coalesce(r.project_id, '') IN $project_ids
                 RETURN cid AS candidate, count(DISTINCT inner) AS links
                 """,
                 candidates=candidate_ids,
                 inner_pool=inner_pool_ids,
-                project_id=project_id,
+                project_ids=self._visible_project_ids(project_id),
             )
             return {row["candidate"]: row["links"] for row in records}
 
@@ -450,9 +531,13 @@ class Neo4jRepositoryImpl(IGraphRepository):
         depth = self._safe_depth(depth)
         limit = max(1, min(limit, 100000))
         filters = []
-        params: dict[str, Any] = {"limit": limit, "project_id": project_id}
+        params: dict[str, Any] = {
+            "limit": limit,
+            "project_id": project_id,
+            "project_ids": self._visible_project_ids(project_id),
+        }
         if not root:
-            filters.append("(coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $project_id}]-() })")
+            filters.append("EXISTS { (n)-[:IN_PROJECT]->(:Project {id: $project_id}) }")
         if query:
             params["query"] = query.lower()
             filters.append("(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)")
@@ -482,13 +567,16 @@ class Neo4jRepositoryImpl(IGraphRepository):
             if root:
                 params["root"] = root
                 # Root 查询只取指定层数内的子图，防止前端一次渲染过大的全库图。
-                # 过滤路径中的关系必须属于该项目，节点自身不再受限于 u.project_id (因为用户节点在 Neo4j 中是全局唯一的)
                 node_query = f"""
-                MATCH p=(r:SteamUser {{steam_id: $root}})-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
-                WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN ['', $project_id])
+                MATCH (r:SteamUser {{steam_id: $root}})-[:IN_PROJECT]->(:Project {{id: $project_id}})
+                MATCH p=(r)-[:STEAM_FRIEND*0..{depth}]-(n:SteamUser)
+                WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN $project_ids)
                 WITH DISTINCT n
                 {where}
-                RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
+                RETURN n, COUNT {{
+                    (n)-[degree_rel:STEAM_FRIEND]-()
+                    WHERE coalesce(degree_rel.project_id, '') IN $project_ids
+                }} AS degree
                 ORDER BY {order_expr} {direction}, degree DESC
                 LIMIT $limit + 1
                 """
@@ -496,7 +584,10 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 node_query = f"""
                 MATCH (n:SteamUser)
                 {where}
-                RETURN n, COUNT {{ (n)-[:STEAM_FRIEND]-() }} AS degree
+                RETURN n, COUNT {{
+                    (n)-[degree_rel:STEAM_FRIEND]-()
+                    WHERE coalesce(degree_rel.project_id, '') IN $project_ids
+                }} AS degree
                 ORDER BY {order_expr} {direction}, degree DESC
                 LIMIT $limit + 1
                 """
@@ -510,14 +601,18 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     """
                     MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
                     WHERE a.steam_id IN $ids AND b.steam_id IN $ids AND a.steam_id < b.steam_id
-                      AND coalesce(r.project_id, '') IN ['', $project_id]
+                      AND coalesce(r.project_id, '') IN $project_ids
                     RETURN a.steam_id AS source,
                            b.steam_id AS target,
-                           COUNT { (a)-[:STEAM_FRIEND]-(:SteamUser)-[:STEAM_FRIEND]-(b) } AS strength
+                           COUNT {
+                             MATCH (a)-[left_rel:STEAM_FRIEND]-(:SteamUser)-[right_rel:STEAM_FRIEND]-(b)
+                             WHERE coalesce(left_rel.project_id, '') IN $project_ids
+                               AND coalesce(right_rel.project_id, '') IN $project_ids
+                           } AS strength
                     LIMIT 5000
                     """,
                     ids=ids,
-                    project_id=project_id,
+                    project_ids=self._visible_project_ids(project_id),
                 )
             )
         edges = [
@@ -532,12 +627,12 @@ class Neo4jRepositoryImpl(IGraphRepository):
             record = session.run(
                 f"""
                 MATCH p=shortestPath((a:SteamUser {{steam_id: $from_id}})-[:STEAM_FRIEND*..{max_depth}]-(b:SteamUser {{steam_id: $to_id}}))
-                WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN ['', $project_id])
+                WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN $project_ids)
                 RETURN nodes(p) AS nodes, relationships(p) AS rels
                 """,
                 from_id=from_id,
                 to_id=to_id,
-                project_id=project_id,
+                project_ids=self._visible_project_ids(project_id),
             ).single()
             if record is None:
                 return GraphResponse(nodes=[], edges=[])
@@ -560,22 +655,30 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     f"""
                     MATCH (root:SteamUser {{steam_id: $root}})
                     MATCH p=(root)-[:STEAM_FRIEND*2..{max_depth}]-(candidate:SteamUser)
-                    WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN ['', $project_id])
+                    WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN $project_ids)
                     WITH root, candidate, min(length(p)) AS depth
                     WHERE candidate.steam_id <> $root
                       AND NOT EXISTS {{
-                        MATCH (root)-[:STEAM_FRIEND]-(candidate)
+                        MATCH (root)-[direct:STEAM_FRIEND]-(candidate)
+                        WHERE coalesce(direct.project_id, '') IN $project_ids
                       }}
-                    MATCH (candidate)-[:STEAM_FRIEND]-(evidence:SteamUser)
-                    WHERE coalesce(evidence.depth_min, 999) < coalesce(candidate.depth_min, 999)
-                       OR EXISTS {{
-                        MATCH (root)-[:STEAM_FRIEND]-(evidence)
-                       }}
+                    MATCH (candidate)-[evidence_rel:STEAM_FRIEND]-(evidence:SteamUser)
+                    WHERE coalesce(evidence_rel.project_id, '') IN $project_ids
+                      AND (
+                        coalesce(evidence.depth_min, 999) < coalesce(candidate.depth_min, 999)
+                        OR EXISTS {{
+                          MATCH (root)-[root_rel:STEAM_FRIEND]-(evidence)
+                          WHERE coalesce(root_rel.project_id, '') IN $project_ids
+                        }}
+                      )
                     WITH candidate,
                          depth,
                          collect(DISTINCT evidence)[0..6] AS evidence_nodes,
                          count(DISTINCT evidence) AS mutual_count,
-                         COUNT {{ (candidate)-[:STEAM_FRIEND]-() }} AS degree
+                         COUNT {{
+                           (candidate)-[degree_rel:STEAM_FRIEND]-()
+                           WHERE coalesce(degree_rel.project_id, '') IN $project_ids
+                         }} AS degree
                     WHERE mutual_count >= $min_mutual
                     RETURN candidate,
                            depth,
@@ -589,7 +692,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     root=root,
                     min_mutual=min_mutual,
                     limit=limit,
-                    project_id=project_id,
+                    project_ids=self._visible_project_ids(project_id),
                 )
             )
         candidates = []
@@ -616,14 +719,17 @@ class Neo4jRepositoryImpl(IGraphRepository):
             records = list(
                 session.run(
                     """
-                    MATCH (n:SteamUser)
-                    WHERE coalesce(n.project_id, '') IN ['', $project_id] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $project_id}]-() }
-                    RETURN n, COUNT { (n)-[:STEAM_FRIEND]-() } AS degree
+                    MATCH (n:SteamUser)-[:IN_PROJECT]->(:Project {id: $project_id})
+                    RETURN n, COUNT {
+                        (n)-[degree_rel:STEAM_FRIEND]-()
+                        WHERE coalesce(degree_rel.project_id, '') IN $project_ids
+                    } AS degree
                     ORDER BY degree DESC
                     LIMIT $limit
                     """,
                     limit=max(1, min(limit, 50)),
                     project_id=project_id,
+                    project_ids=self._visible_project_ids(project_id),
                 )
             )
         return [self._graph_node(record["n"], record["degree"]) for record in records]
@@ -632,29 +738,28 @@ class Neo4jRepositoryImpl(IGraphRepository):
         with self.driver.session() as session:
             steam_users = session.run(
                 """
-                MATCH (u:SteamUser)
-                WHERE coalesce(u.project_id, '') IN ['', $pid] OR EXISTS { (u)-[:STEAM_FRIEND {project_id: $pid}]-() }
+                MATCH (u:SteamUser)-[:IN_PROJECT]->(:Project {id: $pid})
                 RETURN count(u) AS count
                 """,
                 pid=project_id,
             ).single()["count"]
             relationships = session.run(
-                "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN ['', $pid] RETURN count(r) AS count",
-                pid=project_id,
+                "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN $project_ids RETURN count(r) AS count",
+                project_ids=self._visible_project_ids(project_id),
             ).single()["count"]
             crawl_runs = session.run(
-                "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN ['', $pid] RETURN count(c) AS count",
-                pid=project_id,
+                "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN $project_ids RETURN count(c) AS count",
+                project_ids=self._visible_project_ids(project_id),
             ).single()["count"]
             latest_record = session.run(
                 """
                 MATCH (latest:CrawlRun)
-                WHERE coalesce(latest.project_id, '') IN ['', $pid]
+                WHERE coalesce(latest.project_id, '') IN $project_ids
                 RETURN latest
                 ORDER BY latest.started_at DESC
                 LIMIT 1
                 """,
-                pid=project_id,
+                project_ids=self._visible_project_ids(project_id),
             ).single()
         latest = latest_record["latest"] if latest_record is not None else None
         return DbStats(
@@ -670,8 +775,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 dict(record["n"])
                 for record in session.run(
                     """
-                    MATCH (n:SteamUser)
-                    WHERE coalesce(n.project_id, '') IN ['', $pid] OR EXISTS { (n)-[:STEAM_FRIEND {project_id: $pid}]-() }
+                    MATCH (n:SteamUser)-[:IN_PROJECT]->(:Project {id: $pid})
                     RETURN n ORDER BY n.depth_min, n.persona_name
                     """,
                     pid=project_id,
@@ -682,11 +786,11 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 for record in session.run(
                     """
                     MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
-                    WHERE a.steam_id < b.steam_id AND coalesce(r.project_id, '') IN ['', $pid]
+                    WHERE a.steam_id < b.steam_id AND coalesce(r.project_id, '') IN $project_ids
                     RETURN a.steam_id AS source, b.steam_id AS target
                     ORDER BY source, target
                     """,
-                    pid=project_id,
+                    project_ids=self._visible_project_ids(project_id),
                 )
             ]
         return ExportResponse(nodes=nodes, edges=edges)

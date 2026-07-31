@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from steam_friend_relationship_map.models import FriendEdge, SteamUserRecord
+from steam_friend_relationship_map.neo4j_repo import Neo4jRepositoryImpl
+
+
+class _FakeResult:
+    def __init__(self, query: str, driver: "_FakeDriver") -> None:
+        self.query = query
+        self.driver = driver
+
+    def consume(self) -> None:
+        return None
+
+    def single(self) -> dict[str, Any] | None:
+        if "RETURN m.id AS id" in self.query:
+            return {"id": "project-membership-v1"} if self.driver.migration_applied else None
+        if "RETURN p" in self.query:
+            return {"p": {"id": "project-a"}}
+        if "AS count" in self.query:
+            return {"count": 0}
+        return None
+
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        return iter(())
+
+
+class _FakeSession:
+    def __init__(self, driver: "_FakeDriver") -> None:
+        self.driver = driver
+
+    def __enter__(self) -> "_FakeSession":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def run(self, query: str, **params: Any) -> _FakeResult:
+        placeholders = set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", query))
+        assert placeholders <= set(params), f"Missing Cypher params {placeholders - set(params)} for query: {query}"
+        self.driver.queries.append(query)
+        if "MERGE (m:SchemaMigration" in query:
+            self.driver.migration_applied = True
+        return _FakeResult(query, self.driver)
+
+
+class _FakeDriver:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+        self.migration_applied = False
+
+    def session(self) -> _FakeSession:
+        return _FakeSession(self)
+
+    def close(self) -> None:
+        return None
+
+
+def _repo() -> tuple[Neo4jRepositoryImpl, _FakeDriver]:
+    driver = _FakeDriver()
+    repo = Neo4jRepositoryImpl.__new__(Neo4jRepositoryImpl)
+    repo.driver = driver  # type: ignore[assignment]
+    return repo, driver
+
+
+def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
+    repo, driver = _repo()
+    users = [
+        SteamUserRecord(steam_id="1", persona_name="One"),
+        SteamUserRecord(steam_id="2", persona_name="Two"),
+    ]
+    edge = FriendEdge(from_id="1", to_id="2", crawl_id="run", source_depth=0)
+
+    repo.ensure_schema()
+    repo.upsert_users(users, "project-a")
+    repo.mark_friend_list_status(
+        "1",
+        "public",
+        friend_count=1,
+        friend_count_status="public",
+        friend_ids=["2"],
+        project_id="project-a",
+    )
+    repo.upsert_relationships([edge], "project-a")
+    repo.count_inner_layer_links(["2"], ["1"], "project-a")
+    repo.get_graph(root=None, depth=2, limit=20, project_id="project-a")
+    repo.get_graph(root="1", depth=2, limit=20, project_id="project-a")
+    repo.get_shortest_path("1", "2", 4, "project-a")
+    repo.get_friend_circle_analysis("1", project_id="project-a")
+    repo.get_top_degree(project_id="project-a")
+    repo.get_db_stats("project-a")
+    repo.export_graph("project-a")
+    assert repo.delete_project("project-a")
+
+    assert driver.migration_applied
+    assert any("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
+    assert any("NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries)
+
+
+def test_neo4j_project_membership_migration_is_idempotent() -> None:
+    repo, driver = _repo()
+
+    repo.ensure_schema()
+    first_migration_query_count = sum("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
+    repo.ensure_schema()
+
+    assert first_migration_query_count == 1
+    assert sum("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries) == 1
