@@ -672,6 +672,152 @@ def test_settings_patch_swaps_repo_only_after_candidate_is_ready() -> None:
     assert candidate_repo.close_count == 0
 
 
+def test_runtime_switch_keeps_ready_database_when_old_cleanup_fails() -> None:
+    class CleanupFailingRepo(TrackingRepo):
+        def close(self) -> None:
+            self.close_count += 1
+            raise RuntimeError("cleanup exposed-old-password")
+
+    old_settings = Settings(
+        graph_db_engine="neo4j",
+        neo4j_uri="bolt://old-host:7687",
+        neo4j_password="exposed-old-password",
+    )
+    new_settings = old_settings.model_copy(
+        update={"neo4j_uri": "bolt://new-host:7687"}
+    )
+    old_repo = CleanupFailingRepo()
+    candidate_repo = TrackingRepo()
+
+    with (
+        patch(
+            "steam_friend_relationship_map.app.get_repository",
+            side_effect=[old_repo, candidate_repo],
+        ),
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch("steam_friend_relationship_map.app.set_key"),
+    ):
+        app = create_app(
+            settings=old_settings,
+            steam=FakeSteam(),
+            secret_store=FakeSecretStore(),
+        )  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.patch(
+            "/api/settings",
+            json={"neo4j_uri": "bolt://new-host:7687"},
+        )
+
+    assert response.status_code == 200
+    assert app.state.repo is candidate_repo
+    assert old_repo.close_count == 1
+    assert candidate_repo.close_count == 0
+    logs = client.get("/api/logs").json()
+    cleanup_log = next(
+        row for row in logs if "Previous graph database cleanup failed" in row["message"]
+    )
+    assert "exposed-old-password" not in cleanup_log["message"]
+    assert "[REDACTED]" in cleanup_log["message"]
+
+
+def test_runtime_switch_closes_database_candidate_when_steam_creation_fails() -> None:
+    old_settings = Settings(
+        kuzu_db_path="data/current",
+        steam_api_key="old-key",
+    )
+    new_settings = old_settings.model_copy(
+        update={
+            "kuzu_db_path": "data/new",
+            "steam_api_key": "new-key",
+        }
+    )
+    old_repo = TrackingRepo()
+    candidate_repo = TrackingRepo()
+    old_steam = MagicMock()
+    old_steam.aclose = AsyncMock()
+    store = FakeSecretStore()
+    store.values["steam_api_key"] = "old-key"
+
+    with (
+        patch(
+            "steam_friend_relationship_map.app.get_repository",
+            side_effect=[old_repo, candidate_repo],
+        ),
+        patch(
+            "steam_friend_relationship_map.app.get_settings",
+            side_effect=[new_settings, old_settings],
+        ),
+        patch("steam_friend_relationship_map.app.set_key"),
+        patch(
+            "steam_friend_relationship_map.app.SteamClient",
+            side_effect=[old_steam, RuntimeError("Steam client creation failed")],
+        ),
+    ):
+        app = create_app(
+            settings=old_settings,
+            secret_store=store,
+        )  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.put(
+            "/api/settings",
+            json={"kuzu_db_path": "data/new", "steam_api_key": "new-key"},
+        )
+
+    assert response.status_code == 400
+    assert "Steam client creation failed" in response.json()["detail"]
+    assert app.state.repo is old_repo
+    assert app.state.steam is old_steam
+    assert old_repo.close_count == 0
+    assert candidate_repo.close_count == 1
+    old_steam.aclose.assert_not_awaited()
+    assert store.values["steam_api_key"] == "old-key"
+
+
+def test_runtime_switch_keeps_ready_steam_client_when_old_cleanup_fails() -> None:
+    old_settings = Settings(steam_api_key="old-steam-secret")
+    new_settings = old_settings.model_copy(
+        update={"steam_api_key": "new-steam-secret"}
+    )
+    old_steam = MagicMock()
+    old_steam.aclose = AsyncMock(
+        side_effect=RuntimeError("cleanup old-steam-secret")
+    )
+    new_steam = MagicMock()
+    new_steam.aclose = AsyncMock()
+    store = FakeSecretStore()
+    store.values["steam_api_key"] = "old-steam-secret"
+
+    with (
+        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.SteamClient",
+            side_effect=[old_steam, new_steam],
+        ),
+    ):
+        app = create_app(
+            settings=old_settings,
+            repo=FakeRepo(),
+            secret_store=store,
+        )  # type: ignore[arg-type]
+        client = TestClient(app)
+        response = client.post(
+            "/api/settings/secrets",
+            json={"name": "steam_api_key", "value": "new-steam-secret"},
+        )
+
+    assert response.status_code == 200
+    assert app.state.steam is new_steam
+    old_steam.aclose.assert_awaited_once()
+    new_steam.aclose.assert_not_awaited()
+    assert store.values["steam_api_key"] == "new-steam-secret"
+    logs = client.get("/api/logs").json()
+    cleanup_log = next(
+        row for row in logs if "Previous Steam client cleanup failed" in row["message"]
+    )
+    assert "old-steam-secret" not in cleanup_log["message"]
+    assert "[REDACTED]" in cleanup_log["message"]
+
+
 def test_secret_update_restores_previous_value_when_database_reconnect_fails() -> None:
     old_settings = Settings().model_copy(
         update={"graph_db_engine": "neo4j", "neo4j_password": "old-secret"}

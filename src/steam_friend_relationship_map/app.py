@@ -535,62 +535,121 @@ def create_app(
             clear_settings_cache()
             return get_settings()
 
-        settings = await asyncio.to_thread(load_settings)
-        log_buffer.set_secret_values(sensitive_setting_values(settings))
+        new_settings = await asyncio.to_thread(load_settings)
+        log_buffer.set_secret_values(
+            sensitive_setting_values(old_settings) + sensitive_setting_values(new_settings)
+        )
         should_replace_repo = (
             provided_repo is None
-            and repository_settings_changed(old_settings, settings)
+            and repository_settings_changed(old_settings, new_settings)
         )
-        if should_replace_repo:
-            candidate_repo: IGraphRepository | None = None
-            closed_old_repo = False
-            try:
-                if uses_same_kuzu_database(old_settings, settings) and not isinstance(old_repo, UnavailableRepository):
-                    await asyncio.to_thread(old_repo.close)
-                    closed_old_repo = True
-                candidate_repo = await asyncio.to_thread(get_repository, settings)
-                await asyncio.to_thread(candidate_repo.ensure_schema)
-            except Exception as exc:
-                if candidate_repo is not None:
-                    await asyncio.to_thread(candidate_repo.close)
-                if closed_old_repo:
-                    try:
-                        repo = await asyncio.to_thread(get_repository, old_settings)
-                        await asyncio.to_thread(repo.ensure_schema)
-                    except Exception as restore_exc:
-                        log_buffer.append("error", "database", f"Previous graph database restore failed: {restore_exc}")
-                        repo = UnavailableRepository(restore_exc)
-                else:
-                    repo = old_repo
-                settings = old_settings
-                log_buffer.set_secret_values(sensitive_setting_values(settings))
-                manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
-                app.state.repo = repo
-                app.state.manager = manager
-                log_buffer.append("error", "database", f"Graph database configuration rejected: {exc}")
-                raise RuntimeError(f"Graph database configuration was not applied: {exc}") from exc
-            if not closed_old_repo:
-                await asyncio.to_thread(old_repo.close)
-            repo = candidate_repo
-        else:
-            repo = old_repo
+        should_replace_steam = (
+            provided_steam is None
+            and (
+                old_settings.steam_api_key != new_settings.steam_api_key
+                or old_settings.steam_proxy_url != new_settings.steam_proxy_url
+            )
+        )
+
+        candidate_repo: IGraphRepository | None = None
+        candidate_steam: SteamClient | None = None
+        old_repo_closed = False
         try:
-            await asyncio.to_thread(repo.ensure_schema)
+            if should_replace_repo:
+                if uses_same_kuzu_database(old_settings, new_settings) and not isinstance(
+                    old_repo, UnavailableRepository
+                ):
+                    old_repo_closed = True
+                    await asyncio.to_thread(old_repo.close)
+                candidate_repo = await asyncio.to_thread(get_repository, new_settings)
+                await asyncio.to_thread(candidate_repo.ensure_schema)
+            if should_replace_steam:
+                candidate_steam = SteamClient(
+                    new_settings.steam_api_key,
+                    proxy_url=new_settings.steam_proxy_url,
+                )
+            next_repo = candidate_repo if candidate_repo is not None else old_repo
+            next_steam = candidate_steam if candidate_steam is not None else old_steam
+            next_manager = CrawlManager(
+                next_repo,
+                next_steam,
+                log_buffer,
+                project_id=new_settings.active_project,
+            )
         except Exception as exc:
-            log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
-        steam_settings_changed = (
-            old_settings.steam_api_key != settings.steam_api_key
-            or old_settings.steam_proxy_url != settings.steam_proxy_url
-        )
-        if provided_steam is None and steam_settings_changed:
-            await old_steam.aclose()
-            steam = SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
-        else:
+            detail = log_buffer.redact(str(exc))
+            cleanup_errors = []
+            if candidate_steam is not None:
+                try:
+                    await candidate_steam.aclose()
+                except Exception as cleanup_exc:
+                    cleanup_errors.append(f"Steam candidate: {cleanup_exc}")
+            if candidate_repo is not None:
+                try:
+                    await asyncio.to_thread(candidate_repo.close)
+                except Exception as cleanup_exc:
+                    cleanup_errors.append(f"database candidate: {cleanup_exc}")
+
+            restored_repo = old_repo
+            if old_repo_closed:
+                try:
+                    restored_repo = await asyncio.to_thread(get_repository, old_settings)
+                    await asyncio.to_thread(restored_repo.ensure_schema)
+                except Exception as restore_exc:
+                    restore_detail = log_buffer.redact(str(restore_exc))
+                    cleanup_errors.append(f"previous database: {restore_detail}")
+                    restored_repo = UnavailableRepository(restore_exc)
+
+            settings = old_settings
+            repo = restored_repo
             steam = old_steam
-        manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
+            manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
+            app.state.repo = repo
+            app.state.steam = steam
+            app.state.manager = manager
+            log_buffer.append("error", "runtime", f"Runtime configuration rejected: {detail}")
+            if cleanup_errors:
+                log_buffer.append(
+                    "error",
+                    "runtime",
+                    f"Runtime rollback was incomplete: {'; '.join(cleanup_errors)}",
+                )
+            log_buffer.set_secret_values(sensitive_setting_values(settings))
+            raise RuntimeError(f"Runtime configuration was not applied: {detail}") from exc
+
+        settings = new_settings
+        repo = next_repo
+        steam = next_steam
+        manager = next_manager
         app.state.repo = repo
         app.state.steam = steam
         app.state.manager = manager
+
+        if not should_replace_repo:
+            try:
+                await asyncio.to_thread(repo.ensure_schema)
+            except Exception as exc:
+                log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
+        elif not old_repo_closed:
+            try:
+                await asyncio.to_thread(old_repo.close)
+            except Exception as exc:
+                log_buffer.append(
+                    "warn",
+                    "database",
+                    f"Previous graph database cleanup failed after switch: {exc}",
+                )
+
+        if should_replace_steam:
+            try:
+                await old_steam.aclose()
+            except Exception as exc:
+                log_buffer.append(
+                    "warn",
+                    "steam",
+                    f"Previous Steam client cleanup failed after switch: {exc}",
+                )
+        log_buffer.set_secret_values(sensitive_setting_values(settings))
 
     async def public_settings(message: str = "") -> PublicSettings:
         current_settings = settings
