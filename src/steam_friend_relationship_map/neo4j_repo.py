@@ -203,32 +203,36 @@ class Neo4jRepositoryImpl(IGraphRepository):
     def delete_project(self, project_id: str) -> bool:
         if project_id == "default":
             return False
-        with self.driver.session() as session:
-            result = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=project_id).single()
+
+        def delete_in_transaction(tx: Any) -> bool:
+            result = tx.run(
+                "MATCH (p:Project {id: $pid}) RETURN p",
+                pid=project_id,
+            ).single()
             if result is None:
                 return False
-            session.run(
+            tx.run(
                 """
                 MATCH ()-[r:STEAM_FRIEND {project_id: $pid}]-()
                 DELETE r
                 """,
                 pid=project_id,
             ).consume()
-            session.run(
+            tx.run(
                 """
                 MATCH (r:CrawlRun {project_id: $pid})
                 DETACH DELETE r
                 """,
                 pid=project_id,
             ).consume()
-            session.run(
+            tx.run(
                 """
                 MATCH (p:Project {id: $pid})
                 DETACH DELETE p
                 """,
                 pid=project_id,
             ).consume()
-            session.run(
+            tx.run(
                 """
                 MATCH (u:SteamUser)
                 WHERE NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }
@@ -236,7 +240,10 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 DETACH DELETE u
                 """
             ).consume()
-        return True
+            return True
+
+        with self.driver.session() as session:
+            return session.execute_write(delete_in_transaction)
 
     def project_exists(self, project_id: str) -> bool:
         with self.driver.session() as session:

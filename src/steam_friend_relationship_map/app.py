@@ -468,6 +468,18 @@ def create_app(
         clear_settings_cache()
         return errors
 
+    async def apply_active_project(project_id: str) -> None:
+        """Persist and apply the active project while the runtime mutation lock is held."""
+        ENV_PATH.touch(exist_ok=True)
+        await asyncio.to_thread(
+            set_key,
+            str(ENV_PATH),
+            "ACTIVE_PROJECT",
+            sanitize_env_value(project_id),
+            quote_mode="never",
+        )
+        await rebuild_runtime()
+
     async def rebuild_runtime() -> None:
         nonlocal settings, repo, steam, manager
         old_settings = settings
@@ -846,14 +858,52 @@ def create_app(
         async with runtime_mutation_guard():
             if project_id == "default":
                 raise HTTPException(status_code=400, detail="无法删除默认项目")
-            ok = await asyncio.to_thread(repo.delete_project, project_id)
-            if not ok:
-                raise HTTPException(status_code=404, detail="项目不存在")
+            was_active = settings.active_project == project_id
+            if was_active:
+                try:
+                    await apply_active_project("default")
+                except Exception as exc:
+                    rollback_errors = []
+                    try:
+                        await apply_active_project(project_id)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(str(rollback_exc))
+                    log_buffer.append(
+                        "error",
+                        "project",
+                        f"Active project switch before deletion failed: {exc}",
+                    )
+                    if rollback_errors:
+                        log_buffer.append(
+                            "error",
+                            "project",
+                            "Active project rollback was incomplete: "
+                            + "; ".join(rollback_errors),
+                        )
+                    raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            try:
+                ok = await asyncio.to_thread(repo.delete_project, project_id)
+                if not ok:
+                    raise HTTPException(status_code=404, detail="项目不存在")
+            except Exception as exc:
+                rollback_errors = []
+                if was_active:
+                    try:
+                        await apply_active_project(project_id)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(str(rollback_exc))
+                log_buffer.append("error", "project", f"Project deletion failed: {exc}")
+                if rollback_errors:
+                    log_buffer.append(
+                        "error",
+                        "project",
+                        "Project deletion rollback was incomplete: "
+                        + "; ".join(rollback_errors),
+                    )
+                if isinstance(exc, HTTPException):
+                    raise
+                raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
             log_buffer.append("warn", "project", f"项目已删除: {project_id}")
-            # 如果删除的是当前活动项目，切回 default
-            if settings.active_project == project_id:
-                set_key(str(ENV_PATH), "ACTIVE_PROJECT", "default", quote_mode="never")
-                await rebuild_runtime()
             return {"ok": True}
 
     @app.post("/api/projects/switch")

@@ -1242,6 +1242,149 @@ def test_project_switch_rolls_back_auto_created_project_on_reload_failure(
     assert "ACTIVE_PROJECT=default" in env_path.read_text(encoding="utf-8")
 
 
+def test_active_project_delete_does_not_start_when_default_switch_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    class DeleteTrackingRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete_project(self, project_id: str) -> bool:
+            self.deleted.append(project_id)
+            return True
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("ACTIVE_PROJECT=project-a\n", encoding="utf-8")
+    events: list[str] = []
+
+    def write_active_project(
+        _path: str, _key: str, value: str, *, quote_mode: str
+    ) -> None:
+        assert quote_mode == "never"
+        events.append(f"set:{value}")
+        if value == "default":
+            raise OSError("env write failed")
+        env_path.write_text(f"ACTIVE_PROJECT={value}\n", encoding="utf-8")
+
+    def load_settings() -> Settings:
+        active = env_path.read_text(encoding="utf-8").strip().split("=", 1)[1]
+        return Settings(active_project=active)
+
+    repo = DeleteTrackingRepo()
+    monkeypatch.setattr(app_module, "ENV_PATH", env_path)
+    monkeypatch.setattr(app_module, "set_key", write_active_project)
+    monkeypatch.setattr(app_module, "get_settings", load_settings)
+    app = create_app(
+        settings=Settings(active_project="project-a"),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.delete("/api/projects/project-a")
+
+    assert response.status_code == 400
+    assert repo.deleted == []
+    assert events == ["set:default", "set:project-a"]
+    assert "ACTIVE_PROJECT=project-a" in env_path.read_text(encoding="utf-8")
+    assert client.get("/api/health").json()["project_id"] == "project-a"
+
+
+def test_active_project_delete_failure_restores_previous_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("ACTIVE_PROJECT=project-a\n", encoding="utf-8")
+    events: list[str] = []
+
+    class FailingDeleteRepo(FakeRepo):
+        def delete_project(self, project_id: str) -> bool:
+            events.append(f"delete:{project_id}")
+            raise RuntimeError("transaction rolled back")
+
+    def write_active_project(
+        _path: str, _key: str, value: str, *, quote_mode: str
+    ) -> None:
+        assert quote_mode == "never"
+        events.append(f"set:{value}")
+        env_path.write_text(f"ACTIVE_PROJECT={value}\n", encoding="utf-8")
+
+    def load_settings() -> Settings:
+        active = env_path.read_text(encoding="utf-8").strip().split("=", 1)[1]
+        return Settings(active_project=active)
+
+    monkeypatch.setattr(app_module, "ENV_PATH", env_path)
+    monkeypatch.setattr(app_module, "set_key", write_active_project)
+    monkeypatch.setattr(app_module, "get_settings", load_settings)
+    app = create_app(
+        settings=Settings(active_project="project-a"),
+        repo=FailingDeleteRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.delete("/api/projects/project-a")
+
+    assert response.status_code == 500
+    assert "transaction rolled back" in response.json()["detail"]
+    assert events == ["set:default", "delete:project-a", "set:project-a"]
+    assert "ACTIVE_PROJECT=project-a" in env_path.read_text(encoding="utf-8")
+    assert client.get("/api/health").json()["project_id"] == "project-a"
+
+
+def test_active_project_delete_switches_to_default_before_removing_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("ACTIVE_PROJECT=project-a\n", encoding="utf-8")
+    events: list[str] = []
+
+    class SuccessfulDeleteRepo(FakeRepo):
+        def delete_project(self, project_id: str) -> bool:
+            events.append(f"delete:{project_id}")
+            return True
+
+    def write_active_project(
+        _path: str, _key: str, value: str, *, quote_mode: str
+    ) -> None:
+        assert quote_mode == "never"
+        events.append(f"set:{value}")
+        env_path.write_text(f"ACTIVE_PROJECT={value}\n", encoding="utf-8")
+
+    def load_settings() -> Settings:
+        active = env_path.read_text(encoding="utf-8").strip().split("=", 1)[1]
+        return Settings(active_project=active)
+
+    monkeypatch.setattr(app_module, "ENV_PATH", env_path)
+    monkeypatch.setattr(app_module, "set_key", write_active_project)
+    monkeypatch.setattr(app_module, "get_settings", load_settings)
+    app = create_app(
+        settings=Settings(active_project="project-a"),
+        repo=SuccessfulDeleteRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.delete("/api/projects/project-a")
+
+    assert response.status_code == 200
+    assert events == ["set:default", "delete:project-a"]
+    assert "ACTIVE_PROJECT=default" in env_path.read_text(encoding="utf-8")
+    assert client.get("/api/health").json()["project_id"] == "default"
+
+
 def test_app_crawls_reject_out_of_range_request_concurrency() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)

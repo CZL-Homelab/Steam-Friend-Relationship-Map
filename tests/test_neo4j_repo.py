@@ -49,6 +49,7 @@ class _FakeResult:
 class _FakeSession:
     def __init__(self, driver: "_FakeDriver") -> None:
         self.driver = driver
+        self.in_write_transaction = False
 
     def __enter__(self) -> "_FakeSession":
         return self
@@ -61,9 +62,19 @@ class _FakeSession:
         assert placeholders <= set(params), f"Missing Cypher params {placeholders - set(params)} for query: {query}"
         self.driver.queries.append(query)
         self.driver.query_params.append(params)
+        if self.in_write_transaction:
+            self.driver.transaction_queries.append(query)
         if "MERGE (m:SchemaMigration" in query:
             self.driver.migrations.add(str(params["id"]))
         return _FakeResult(query, params, self.driver)
+
+    def execute_write(self, work):  # type: ignore[no-untyped-def]
+        self.driver.execute_write_calls += 1
+        self.in_write_transaction = True
+        try:
+            return work(self)
+        finally:
+            self.in_write_transaction = False
 
 
 class _FakeDriver:
@@ -77,6 +88,8 @@ class _FakeDriver:
         self.project_crawl_counts: list[dict[str, Any]] = []
         self.recovery_count = 0
         self.migrations: set[str] = set()
+        self.execute_write_calls = 0
+        self.transaction_queries: list[str] = []
 
     def session(self) -> _FakeSession:
         return _FakeSession(self)
@@ -128,6 +141,12 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
     assert any("membership.note" in query for query in driver.queries)
     assert any("coalesce(membership.category" in query for query in driver.queries)
     assert any("NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries)
+    assert driver.execute_write_calls == 1
+    assert len(driver.transaction_queries) == 5
+    assert all(
+        "Project" in query or "CrawlRun" in query or "STEAM_FRIEND" in query
+        for query in driver.transaction_queries
+    )
 
 
 def test_neo4j_project_membership_migration_is_idempotent() -> None:
