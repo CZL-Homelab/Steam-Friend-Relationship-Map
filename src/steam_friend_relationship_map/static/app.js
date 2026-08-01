@@ -31,11 +31,11 @@ let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let currentNetworkAnalysis = null;
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
-let activeRenderId = 0;
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
 const requestCoordinator = new window.LatestRequestCoordinator();
+const graphLifecycle = new window.GraphLifecycleCoordinator();
 const PROJECT_SCOPED_REQUEST_KEYS = [
   "graph",
   "db-stats",
@@ -548,8 +548,7 @@ function buildRootFriendCircleScale(nodes) {
 }
 
 function renderGraph(data) {
-  activeRenderId++;
-  const renderId = activeRenderId;
+  const renderId = graphLifecycle.beginRender();
 
   currentGraph = data;
   const sizeBy = $("graphSizeBy").value || "root_friend_circle";
@@ -600,7 +599,7 @@ function renderGraph(data) {
   let index = 0;
 
   function addNextChunk() {
-    if (renderId !== activeRenderId) return;
+    if (!graphLifecycle.isCurrent(renderId)) return;
 
     if (index >= elements.length) {
       runLayout();
@@ -617,7 +616,7 @@ function renderGraph(data) {
     cy.add(chunk);
     index += chunkSize;
 
-    setTimeout(addNextChunk, 10);
+    graphLifecycle.scheduleChunk(renderId, addNextChunk, 10);
   }
 
   addNextChunk();
@@ -638,7 +637,7 @@ function runLayout() {
   const shouldAnimate = nodeCount < 300;
 
   if (bias === "root_friend_circle" || bias === "closeness") {
-    cy.layout({
+    graphLifecycle.startLayout(cy.layout({
       name: "concentric",
       animate: shouldAnimate ? "end" : false,
       animationDuration: 320,
@@ -647,10 +646,10 @@ function runLayout() {
         ? (node.data("rootFriendCircleRank") || node.data("closeness") || node.data("degree") || 1)
         : (node.data("closeness") || node.data("degree") || 1),
       levelWidth: () => bias === "root_friend_circle" ? 1 : 12,
-    }).run();
+    }));
     return;
   }
-  cy.layout({
+  graphLifecycle.startLayout(cy.layout({
     name: "cose",
     animate: shouldAnimate ? "end" : false,
     animationDuration: 320,
@@ -658,7 +657,7 @@ function runLayout() {
     nodeRepulsion: 9000,
     idealEdgeLength: 90,
     numIter: nodeCount > 500 ? 500 : 1000, // 大图下减少 cose 迭代次数以缩短运算耗时
-  }).run();
+  }));
 }
 
 function fillProfile(node) {
@@ -1390,7 +1389,7 @@ function invalidateNetworkAnalysis(rerender = true) {
 
 function resetProjectScopedViews() {
   cancelProjectScopedRequests();
-  activeRenderId++;
+  graphLifecycle.cancel();
   currentGraph = { nodes: [], edges: [], limited: false };
   currentNetworkAnalysis = null;
   selectedNode = null;
