@@ -1,13 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from steam_friend_relationship_map.app import create_app
 from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
-from steam_friend_relationship_map.models import DbStats, ExportResponse, FriendCircleAnalysisResponse, FriendCircleCandidate, GraphEdge, GraphNode, GraphResponse
+from steam_friend_relationship_map.models import (
+    CrawlRun,
+    CrawlStatus,
+    DbStats,
+    ExportResponse,
+    FriendCircleAnalysisResponse,
+    FriendCircleCandidate,
+    GraphEdge,
+    GraphNode,
+    GraphResponse,
+)
 from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.steam import SteamApiError, SteamClient
 
@@ -316,6 +329,49 @@ def test_settings_patch_strips_crlf_before_env_write() -> None:
     args, _ = mock_set_key.call_args
     assert args[1] == "NEO4J_USER"
     assert args[2] == "neo4jINJECTED=1"
+
+
+def test_settings_patch_rolls_back_partial_env_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    writes: list[tuple[str, str]] = []
+
+    def flaky_set_key(
+        _path: str,
+        key: str,
+        value: str,
+        **_: object,
+    ) -> None:
+        writes.append((key, value))
+        if key == "DEFAULT_MAX_NODES" and value == "3000":
+            raise OSError("disk write failed")
+
+    monkeypatch.setattr(app_module, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "set_key", flaky_set_key)
+    app = create_app(
+        settings=Settings(default_max_depth=2, default_max_nodes=2000),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.patch(
+        "/api/settings",
+        json={"default_max_depth": 3, "default_max_nodes": 3000},
+    )
+
+    assert response.status_code == 500
+    assert "disk write failed" in response.json()["detail"]
+    assert writes == [
+        ("DEFAULT_MAX_DEPTH", "3"),
+        ("DEFAULT_MAX_NODES", "3000"),
+        ("DEFAULT_MAX_DEPTH", "2"),
+        ("DEFAULT_MAX_NODES", "2000"),
+    ]
 
 
 def test_settings_patch_keeps_current_repo_when_new_database_fails() -> None:
@@ -660,6 +716,105 @@ def test_app_crawls_conflict_returns_409() -> None:
     resp = client.post("/api/crawls", json={"root_url": "root", "max_depth": 2})
     assert resp.status_code == 409
     assert "已有活跃的抓取任务在运行中" in resp.json()["detail"]
+
+
+async def test_runtime_mutation_waits_for_crawl_creation() -> None:
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    crawl_started = asyncio.Event()
+    allow_crawl_creation = asyncio.Event()
+
+    async def delayed_create_crawl(payload: object) -> CrawlRun:
+        crawl_started.set()
+        await allow_crawl_creation.wait()
+        app.state.manager.has_active_crawl = MagicMock(return_value=True)
+        return CrawlRun(
+            id="run-locked",
+            root_steam_id="root",
+            max_depth=2,
+            max_nodes=100,
+            status=CrawlStatus.pending,
+        )
+
+    app.state.manager.create_crawl = delayed_create_crawl
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        crawl_request = asyncio.create_task(
+            client.post(
+                "/api/crawls",
+                json={"root_url": "root", "max_depth": 2, "max_nodes": 100},
+            )
+        )
+        await crawl_started.wait()
+        settings_request = asyncio.create_task(
+            client.patch("/api/settings", json={"default_max_depth": 3})
+        )
+        await asyncio.sleep(0)
+        assert not settings_request.done()
+
+        allow_crawl_creation.set()
+        crawl_response, settings_response = await asyncio.gather(
+            crawl_request, settings_request
+        )
+
+    assert crawl_response.status_code == 200
+    assert settings_response.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in settings_response.json()["detail"]
+
+
+def test_project_switch_rolls_back_auto_created_project_on_reload_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    class ProjectTrackingRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.created: list[str] = []
+            self.deleted: list[str] = []
+
+        def project_exists(self, project_id: str) -> bool:
+            return project_id == "default"
+
+        def create_project(self, payload: object, project_id: str | None = None) -> str:
+            assert project_id is not None
+            self.created.append(project_id)
+            return project_id
+
+        def delete_project(self, project_id: str) -> bool:
+            self.deleted.append(project_id)
+            return True
+
+    repo = ProjectTrackingRepo()
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(app_module, "ENV_PATH", env_path)
+    monkeypatch.setattr(
+        app_module,
+        "get_settings",
+        MagicMock(side_effect=RuntimeError("settings reload failed")),
+    )
+    app = create_app(
+        settings=Settings(active_project="default"),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/projects/switch",
+        json={"project_id": "project-new"},
+    )
+
+    assert response.status_code == 400
+    assert "settings reload failed" in response.json()["detail"]
+    assert repo.created == ["project-new"]
+    assert repo.deleted == ["project-new"]
+    assert "ACTIVE_PROJECT=default" in env_path.read_text(encoding="utf-8")
 
 
 def test_app_crawls_reject_out_of_range_request_concurrency() -> None:

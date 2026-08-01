@@ -4,7 +4,7 @@ import asyncio
 import csv
 import io
 import re
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -35,6 +35,7 @@ from .models import (
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
+    ProjectSwitch,
     PublicSettings,
     SecretUpdate,
     SettingsPatch,
@@ -261,6 +262,32 @@ def create_app(
         log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
     steam = steam or SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
+    runtime_mutation_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def runtime_mutation_guard() -> AsyncIterator[None]:
+        async with runtime_mutation_lock:
+            if manager.has_active_crawl():
+                raise HTTPException(
+                    status_code=400,
+                    detail="当前有活跃的抓取任务在运行，请先停止任务后再修改运行时状态。",
+                )
+            yield
+
+    def restore_env_settings(values: dict[str, Any]) -> list[str]:
+        errors = []
+        for field, value in values.items():
+            try:
+                set_key(
+                    str(ENV_PATH),
+                    ENV_KEYS[field],
+                    sanitize_env_value(value),
+                    quote_mode="never",
+                )
+            except Exception as exc:
+                errors.append(f"{field}: {exc}")
+        clear_settings_cache()
+        return errors
 
     async def rebuild_runtime() -> None:
         nonlocal settings, repo, steam, manager
@@ -367,7 +394,8 @@ def create_app(
             yield
         finally:
             try:
-                await manager.shutdown()
+                async with runtime_mutation_lock:
+                    await manager.shutdown()
             finally:
                 try:
                     await steam.aclose()
@@ -378,6 +406,7 @@ def create_app(
     app.state.repo = repo
     app.state.steam = steam
     app.state.manager = manager
+    app.state.runtime_mutation_lock = runtime_mutation_lock
     app.state.logs = log_buffer
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
@@ -478,75 +507,94 @@ def create_app(
 
     @app.patch("/api/settings", response_model=PublicSettings)
     async def patch_settings(payload: SettingsPatch) -> PublicSettings:
-        if manager.has_active_crawl():
-            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
-        ENV_PATH.touch(exist_ok=True)
-        data = payload.model_dump(exclude_none=True)
-        previous_values = {field: getattr(settings, field) for field in data}
-        for field, value in data.items():
-            key = ENV_KEYS[field]
-            # 安全：移除换行符防止 .env 注入
-            safe_value = sanitize_env_value(value)
-            set_key(str(ENV_PATH), key, safe_value, quote_mode="never")
-        try:
-            await rebuild_runtime()
-        except RuntimeError as exc:
-            for field, value in previous_values.items():
-                set_key(
-                    str(ENV_PATH),
-                    ENV_KEYS[field],
-                    sanitize_env_value(value),
-                    quote_mode="never",
-                )
-            clear_settings_cache()
-            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        message = "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
-        log_buffer.append("info", "settings", "非敏感配置已保存")
-        return public_settings(message)
+        async with runtime_mutation_guard():
+            ENV_PATH.touch(exist_ok=True)
+            data = payload.model_dump(exclude_none=True)
+            previous_values = {field: getattr(settings, field) for field in data}
+            try:
+                for field, value in data.items():
+                    key = ENV_KEYS[field]
+                    # 安全：移除换行符防止 .env 注入
+                    safe_value = sanitize_env_value(value)
+                    set_key(str(ENV_PATH), key, safe_value, quote_mode="never")
+            except Exception as exc:
+                rollback_errors = restore_env_settings(previous_values)
+                log_buffer.append("error", "settings", f"配置文件写入失败: {exc}")
+                if rollback_errors:
+                    log_buffer.append(
+                        "error",
+                        "settings",
+                        f"配置文件回滚不完整: {'; '.join(rollback_errors)}",
+                    )
+                raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+            try:
+                await rebuild_runtime()
+            except RuntimeError as exc:
+                rollback_errors = restore_env_settings(previous_values)
+                if rollback_errors:
+                    log_buffer.append(
+                        "error",
+                        "settings",
+                        f"配置文件回滚不完整: {'; '.join(rollback_errors)}",
+                    )
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            message = "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
+            log_buffer.append("info", "settings", "非敏感配置已保存")
+            return public_settings(message)
 
     @app.post("/api/settings/secrets", response_model=PublicSettings)
     async def set_secret(payload: SecretUpdate) -> PublicSettings:
-        if manager.has_active_crawl():
-            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
-        try:
-            previous_secret = secret_store.get(payload.name)
-            secret_store.set(payload.name, payload.value)
-        except SecretStorageError as exc:
-            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        try:
-            await rebuild_runtime()
-        except RuntimeError as exc:
+        async with runtime_mutation_guard():
             try:
-                if previous_secret:
-                    secret_store.set(payload.name, previous_secret)
-                else:
-                    secret_store.delete(payload.name)
-            finally:
-                clear_settings_cache()
-            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        log_buffer.append("info", "settings", f"敏感配置已保存: {payload.name}")
-        return public_settings("敏感配置已保存到系统凭据库。")
+                previous_secret = secret_store.get(payload.name)
+                secret_store.set(payload.name, payload.value)
+            except SecretStorageError as exc:
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            try:
+                await rebuild_runtime()
+            except RuntimeError as exc:
+                try:
+                    if previous_secret:
+                        secret_store.set(payload.name, previous_secret)
+                    else:
+                        secret_store.delete(payload.name)
+                except SecretStorageError as rollback_exc:
+                    log_buffer.append(
+                        "error",
+                        "settings",
+                        f"敏感配置回滚失败: {rollback_exc}",
+                    )
+                finally:
+                    clear_settings_cache()
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            log_buffer.append("info", "settings", f"敏感配置已保存: {payload.name}")
+            return public_settings("敏感配置已保存到系统凭据库。")
 
     @app.delete("/api/settings/secrets/{name}", response_model=PublicSettings)
     async def delete_secret(name: str) -> PublicSettings:
-        if manager.has_active_crawl():
-            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再修改配置。")
-        try:
-            previous_secret = secret_store.get(name)
-            secret_store.delete(name)
-        except SecretStorageError as exc:
-            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        try:
-            await rebuild_runtime()
-        except RuntimeError as exc:
+        async with runtime_mutation_guard():
             try:
-                if previous_secret:
-                    secret_store.set(name, previous_secret)
-            finally:
-                clear_settings_cache()
-            raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
-        log_buffer.append("warn", "settings", f"敏感配置已删除: {name}")
-        return public_settings("敏感配置已删除。")
+                previous_secret = secret_store.get(name)
+                secret_store.delete(name)
+            except SecretStorageError as exc:
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            try:
+                await rebuild_runtime()
+            except RuntimeError as exc:
+                try:
+                    if previous_secret:
+                        secret_store.set(name, previous_secret)
+                except SecretStorageError as rollback_exc:
+                    log_buffer.append(
+                        "error",
+                        "settings",
+                        f"敏感配置回滚失败: {rollback_exc}",
+                    )
+                finally:
+                    clear_settings_cache()
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            log_buffer.append("warn", "settings", f"敏感配置已删除: {name}")
+            return public_settings("敏感配置已删除。")
 
     @app.post("/api/settings/test", response_model=SettingsTestResult)
     async def test_settings() -> SettingsTestResult:
@@ -608,50 +656,73 @@ def create_app(
 
     @app.delete("/api/projects/{project_id}")
     async def delete_project(project_id: str) -> dict[str, bool]:
-        if manager.has_active_crawl():
-            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再删除项目。")
-        if project_id == "default":
-            raise HTTPException(status_code=400, detail="无法删除默认项目")
-        ok = repo.delete_project(project_id)
-        if not ok:
-            raise HTTPException(status_code=404, detail="项目不存在")
-        log_buffer.append("warn", "project", f"项目已删除: {project_id}")
-        # 如果删除的是当前活动项目，切回 default
-        if settings.active_project == project_id:
-            set_key(str(ENV_PATH), "ACTIVE_PROJECT", "default", quote_mode="never")
-            await rebuild_runtime()
-        return {"ok": True}
+        async with runtime_mutation_guard():
+            if project_id == "default":
+                raise HTTPException(status_code=400, detail="无法删除默认项目")
+            ok = repo.delete_project(project_id)
+            if not ok:
+                raise HTTPException(status_code=404, detail="项目不存在")
+            log_buffer.append("warn", "project", f"项目已删除: {project_id}")
+            # 如果删除的是当前活动项目，切回 default
+            if settings.active_project == project_id:
+                set_key(str(ENV_PATH), "ACTIVE_PROJECT", "default", quote_mode="never")
+                await rebuild_runtime()
+            return {"ok": True}
 
     @app.post("/api/projects/switch")
-    async def switch_project(payload: ProjectCreate) -> ProjectListResponse:
-        if manager.has_active_crawl():
-            raise HTTPException(status_code=400, detail="当前有活跃的抓取任务在运行，请先停止任务后再切换项目。")
-        """Switch active project. payload.name = project_id"""
-        pid = sanitize_env_value(payload.name).strip()
-        if not pid:
-            raise HTTPException(status_code=400, detail="项目 ID 不能为空")
-        # Ensure the project exists
-        if not repo.project_exists(pid):
-            # Auto-create if not exists
-            repo.create_project(ProjectCreate(name=pid), project_id=pid)
-            log_buffer.append("info", "project", f"项目已自动创建: {pid}")
-        ENV_PATH.touch(exist_ok=True)
-        set_key(str(ENV_PATH), "ACTIVE_PROJECT", sanitize_env_value(pid), quote_mode="never")
-        await rebuild_runtime()
-        log_buffer.append("info", "project", f"已切换到项目: {pid}")
-        try:
-            result = repo.list_projects()
-            result.active_project_id = pid
-            return result
-        except Exception as exc:
-            log_buffer.append("error", "project", f"Project list read failed: {exc}")
-            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+    async def switch_project(payload: ProjectSwitch) -> ProjectListResponse:
+        async with runtime_mutation_guard():
+            pid = sanitize_env_value(payload.project_id).strip()
+            previous_project_id = settings.active_project
+            created_project = False
+            if not repo.project_exists(pid):
+                repo.create_project(ProjectCreate(name=pid), project_id=pid)
+                created_project = True
+                log_buffer.append("info", "project", f"项目已自动创建: {pid}")
+            ENV_PATH.touch(exist_ok=True)
+            try:
+                set_key(str(ENV_PATH), "ACTIVE_PROJECT", pid, quote_mode="never")
+                await rebuild_runtime()
+            except Exception as exc:
+                rollback_errors = []
+                try:
+                    set_key(
+                        str(ENV_PATH),
+                        "ACTIVE_PROJECT",
+                        sanitize_env_value(previous_project_id),
+                        quote_mode="never",
+                    )
+                except Exception as rollback_exc:
+                    rollback_errors.append(str(rollback_exc))
+                if created_project:
+                    try:
+                        repo.delete_project(pid)
+                    except Exception as rollback_exc:
+                        rollback_errors.append(str(rollback_exc))
+                clear_settings_cache()
+                log_buffer.append("error", "project", f"Project switch rolled back: {exc}")
+                if rollback_errors:
+                    log_buffer.append(
+                        "error",
+                        "project",
+                        f"Project switch rollback was incomplete: {'; '.join(rollback_errors)}",
+                    )
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+            log_buffer.append("info", "project", f"已切换到项目: {pid}")
+            try:
+                result = repo.list_projects()
+                result.active_project_id = pid
+                return result
+            except Exception as exc:
+                log_buffer.append("error", "project", f"Project list read failed: {exc}")
+                raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/crawls", response_model=CrawlRun)
     async def create_crawl(payload: CrawlCreate) -> CrawlRun:
         try:
-            log_buffer.append("info", "crawl", "正在创建抓取任务")
-            return await manager.create_crawl(payload)
+            async with runtime_mutation_lock:
+                log_buffer.append("info", "crawl", "正在创建抓取任务")
+                return await manager.create_crawl(payload)
         except RuntimeError as exc:
             log_buffer.append("warn", "crawl", f"抓取任务创建冲突: {exc}")
             raise HTTPException(status_code=409, detail=safe_detail(exc)) from exc

@@ -1251,7 +1251,7 @@ function renderProjectList(data) {
       const pid = item.dataset.projectId;
       if (pid === data.active_project_id) return;
       await withButtonState(item, async () => {
-        await api("/api/projects/switch", { method: "POST", body: JSON.stringify({ name: pid }) });
+        await api("/api/projects/switch", { method: "POST", body: JSON.stringify({ project_id: pid }) });
         invalidateNetworkAnalysis(false);
         await loadSettings();
         await loadDbStats().catch(() => {});

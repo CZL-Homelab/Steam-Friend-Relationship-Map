@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 from .proxy import normalize_proxy_url
 
@@ -306,6 +306,22 @@ class ProjectCreate(BaseModel):
         cleaned = value.replace("\n", "").replace("\r", "").strip()
         if not cleaned:
             raise ValueError("project name cannot be empty")
+        return cleaned
+
+
+class ProjectSwitch(BaseModel):
+    project_id: str = Field(
+        min_length=1,
+        max_length=80,
+        validation_alias=AliasChoices("project_id", "name"),
+    )
+
+    @field_validator("project_id")
+    @classmethod
+    def normalize_project_id(cls, value: str) -> str:
+        cleaned = value.replace("\n", "").replace("\r", "").strip()
+        if not cleaned:
+            raise ValueError("project id cannot be empty")
         return cleaned
 
 
