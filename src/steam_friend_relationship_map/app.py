@@ -453,11 +453,12 @@ def create_app(
 
         return decorator
 
-    def restore_env_settings(values: dict[str, Any]) -> list[str]:
+    async def restore_env_settings(values: dict[str, Any]) -> list[str]:
         errors = []
         for field, value in values.items():
             try:
-                set_key(
+                await asyncio.to_thread(
+                    set_key,
                     str(ENV_PATH),
                     ENV_KEYS[field],
                     sanitize_env_value(value),
@@ -470,7 +471,7 @@ def create_app(
 
     async def apply_active_project(project_id: str) -> None:
         """Persist and apply the active project while the runtime mutation lock is held."""
-        ENV_PATH.touch(exist_ok=True)
+        await asyncio.to_thread(ENV_PATH.touch, exist_ok=True)
         await asyncio.to_thread(
             set_key,
             str(ENV_PATH),
@@ -485,8 +486,12 @@ def create_app(
         old_settings = settings
         old_repo = repo
         old_steam = steam
-        clear_settings_cache()
-        settings = get_settings()
+
+        def load_settings() -> Settings:
+            clear_settings_cache()
+            return get_settings()
+
+        settings = await asyncio.to_thread(load_settings)
         log_buffer.set_secret_values(sensitive_setting_values(settings))
         should_replace_repo = (
             provided_repo is None
@@ -497,17 +502,17 @@ def create_app(
             closed_old_repo = False
             try:
                 if uses_same_kuzu_database(old_settings, settings) and not isinstance(old_repo, UnavailableRepository):
-                    old_repo.close()
+                    await asyncio.to_thread(old_repo.close)
                     closed_old_repo = True
-                candidate_repo = get_repository(settings)
-                candidate_repo.ensure_schema()
+                candidate_repo = await asyncio.to_thread(get_repository, settings)
+                await asyncio.to_thread(candidate_repo.ensure_schema)
             except Exception as exc:
                 if candidate_repo is not None:
-                    candidate_repo.close()
+                    await asyncio.to_thread(candidate_repo.close)
                 if closed_old_repo:
                     try:
-                        repo = get_repository(old_settings)
-                        repo.ensure_schema()
+                        repo = await asyncio.to_thread(get_repository, old_settings)
+                        await asyncio.to_thread(repo.ensure_schema)
                     except Exception as restore_exc:
                         log_buffer.append("error", "database", f"Previous graph database restore failed: {restore_exc}")
                         repo = UnavailableRepository(restore_exc)
@@ -521,12 +526,12 @@ def create_app(
                 log_buffer.append("error", "database", f"Graph database configuration rejected: {exc}")
                 raise RuntimeError(f"Graph database configuration was not applied: {exc}") from exc
             if not closed_old_repo:
-                old_repo.close()
+                await asyncio.to_thread(old_repo.close)
             repo = candidate_repo
         else:
             repo = old_repo
         try:
-            repo.ensure_schema()
+            await asyncio.to_thread(repo.ensure_schema)
         except Exception as exc:
             log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
         steam_settings_changed = (
@@ -543,12 +548,19 @@ def create_app(
         app.state.steam = steam
         app.state.manager = manager
 
-    def public_settings(message: str = "") -> PublicSettings:
-        non_secret_settings = settings if provided_settings else Settings()
+    async def public_settings(message: str = "") -> PublicSettings:
+        current_settings = settings
+        non_secret_settings = current_settings if provided_settings else await asyncio.to_thread(Settings)
+
+        def load_secrets() -> tuple[str, str, str]:
+            return (
+                secret_store.get("steam_api_key"),
+                secret_store.get("steam_proxy_url"),
+                secret_store.get("neo4j_password"),
+            )
+
         try:
-            steam_secret = secret_store.get("steam_api_key")
-            proxy_secret = secret_store.get("steam_proxy_url")
-            neo4j_secret = secret_store.get("neo4j_password")
+            steam_secret, proxy_secret, neo4j_secret = await asyncio.to_thread(load_secrets)
             secure_store_available = True
         except SecretStorageError as exc:
             steam_secret = ""
@@ -557,18 +569,18 @@ def create_app(
             secure_store_available = False
             message = message or str(exc)
         return PublicSettings(
-            graph_db_engine=settings.graph_db_engine,
-            kuzu_db_path=settings.kuzu_db_path,
-            kuzu_buffer_pool_size_gb=settings.kuzu_buffer_pool_size_gb,
-            neo4j_uri=settings.neo4j_uri,
-            neo4j_user=settings.neo4j_user,
-            app_host=settings.app_host,
-            app_port=settings.app_port,
-            default_max_depth=settings.default_max_depth,
-            default_max_nodes=settings.default_max_nodes,
-            default_delay_ms=settings.default_delay_ms,
-            default_cache_valid_days=settings.default_cache_valid_days,
-            active_project=settings.active_project,
+            graph_db_engine=current_settings.graph_db_engine,
+            kuzu_db_path=current_settings.kuzu_db_path,
+            kuzu_buffer_pool_size_gb=current_settings.kuzu_buffer_pool_size_gb,
+            neo4j_uri=current_settings.neo4j_uri,
+            neo4j_user=current_settings.neo4j_user,
+            app_host=current_settings.app_host,
+            app_port=current_settings.app_port,
+            default_max_depth=current_settings.default_max_depth,
+            default_max_nodes=current_settings.default_max_nodes,
+            default_delay_ms=current_settings.default_delay_ms,
+            default_cache_valid_days=current_settings.default_cache_valid_days,
+            active_project=current_settings.active_project,
             steam_api_key_configured=bool(steam_secret or non_secret_settings.steam_api_key),
             steam_proxy_configured=bool(proxy_secret or non_secret_settings.steam_proxy_url),
             neo4j_password_configured=bool(neo4j_secret or non_secret_settings.neo4j_password),
@@ -591,7 +603,7 @@ def create_app(
                 try:
                     await steam.aclose()
                 finally:
-                    repo.close()
+                    await asyncio.to_thread(repo.close)
 
     app = FastAPI(title="Steam Friend Relationship Map", lifespan=lifespan)
     app.state.repo = repo
@@ -690,7 +702,8 @@ def create_app(
 
     @app.get("/api/settings", response_model=PublicSettings)
     async def get_public_settings() -> PublicSettings:
-        return public_settings()
+        async with runtime_mutation_lock:
+            return await public_settings()
 
     @app.get("/api/logs", response_model=list[AppLog])
     async def get_logs(after: Annotated[int, Query(ge=0)] = 0, level: str | None = None) -> list[AppLog]:
@@ -700,7 +713,7 @@ def create_app(
     @finish_runtime_mutation("settings")
     async def patch_settings(payload: SettingsPatch) -> PublicSettings:
         async with runtime_mutation_guard():
-            ENV_PATH.touch(exist_ok=True)
+            await asyncio.to_thread(ENV_PATH.touch, exist_ok=True)
             data = payload.model_dump(exclude_none=True)
             previous_values = {field: getattr(settings, field) for field in data}
             try:
@@ -708,9 +721,15 @@ def create_app(
                     key = ENV_KEYS[field]
                     # 安全：移除换行符防止 .env 注入
                     safe_value = sanitize_env_value(value)
-                    set_key(str(ENV_PATH), key, safe_value, quote_mode="never")
+                    await asyncio.to_thread(
+                        set_key,
+                        str(ENV_PATH),
+                        key,
+                        safe_value,
+                        quote_mode="never",
+                    )
             except Exception as exc:
-                rollback_errors = restore_env_settings(previous_values)
+                rollback_errors = await restore_env_settings(previous_values)
                 log_buffer.append("error", "settings", f"配置文件写入失败: {exc}")
                 if rollback_errors:
                     log_buffer.append(
@@ -722,7 +741,7 @@ def create_app(
             try:
                 await rebuild_runtime()
             except RuntimeError as exc:
-                rollback_errors = restore_env_settings(previous_values)
+                rollback_errors = await restore_env_settings(previous_values)
                 if rollback_errors:
                     log_buffer.append(
                         "error",
@@ -732,15 +751,15 @@ def create_app(
                 raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             message = "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
             log_buffer.append("info", "settings", "非敏感配置已保存")
-            return public_settings(message)
+            return await public_settings(message)
 
     @app.post("/api/settings/secrets", response_model=PublicSettings)
     @finish_runtime_mutation("settings")
     async def set_secret(payload: SecretUpdate) -> PublicSettings:
         async with runtime_mutation_guard():
             try:
-                previous_secret = secret_store.get(payload.name)
-                secret_store.set(payload.name, payload.value)
+                previous_secret = await asyncio.to_thread(secret_store.get, payload.name)
+                await asyncio.to_thread(secret_store.set, payload.name, payload.value)
             except SecretStorageError as exc:
                 raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             try:
@@ -748,9 +767,9 @@ def create_app(
             except RuntimeError as exc:
                 try:
                     if previous_secret:
-                        secret_store.set(payload.name, previous_secret)
+                        await asyncio.to_thread(secret_store.set, payload.name, previous_secret)
                     else:
-                        secret_store.delete(payload.name)
+                        await asyncio.to_thread(secret_store.delete, payload.name)
                 except SecretStorageError as rollback_exc:
                     log_buffer.append(
                         "error",
@@ -761,15 +780,15 @@ def create_app(
                     clear_settings_cache()
                 raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             log_buffer.append("info", "settings", f"敏感配置已保存: {payload.name}")
-            return public_settings("敏感配置已保存到系统凭据库。")
+            return await public_settings("敏感配置已保存到系统凭据库。")
 
     @app.delete("/api/settings/secrets/{name}", response_model=PublicSettings)
     @finish_runtime_mutation("settings")
     async def delete_secret(name: str) -> PublicSettings:
         async with runtime_mutation_guard():
             try:
-                previous_secret = secret_store.get(name)
-                secret_store.delete(name)
+                previous_secret = await asyncio.to_thread(secret_store.get, name)
+                await asyncio.to_thread(secret_store.delete, name)
             except SecretStorageError as exc:
                 raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             try:
@@ -777,7 +796,7 @@ def create_app(
             except RuntimeError as exc:
                 try:
                     if previous_secret:
-                        secret_store.set(name, previous_secret)
+                        await asyncio.to_thread(secret_store.set, name, previous_secret)
                 except SecretStorageError as rollback_exc:
                     log_buffer.append(
                         "error",
@@ -788,7 +807,7 @@ def create_app(
                     clear_settings_cache()
                 raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             log_buffer.append("warn", "settings", f"敏感配置已删除: {name}")
-            return public_settings("敏感配置已删除。")
+            return await public_settings("敏感配置已删除。")
 
     @app.post("/api/settings/test", response_model=SettingsTestResult)
     async def test_settings() -> SettingsTestResult:
@@ -921,19 +940,12 @@ def create_app(
                 )
                 created_project = True
                 log_buffer.append("info", "project", f"项目已自动创建: {pid}")
-            ENV_PATH.touch(exist_ok=True)
             try:
-                set_key(str(ENV_PATH), "ACTIVE_PROJECT", pid, quote_mode="never")
-                await rebuild_runtime()
+                await apply_active_project(pid)
             except Exception as exc:
                 rollback_errors = []
                 try:
-                    set_key(
-                        str(ENV_PATH),
-                        "ACTIVE_PROJECT",
-                        sanitize_env_value(previous_project_id),
-                        quote_mode="never",
-                    )
+                    await apply_active_project(previous_project_id)
                 except Exception as rollback_exc:
                     rollback_errors.append(str(rollback_exc))
                 if created_project:
@@ -941,7 +953,6 @@ def create_app(
                         await asyncio.to_thread(repo.delete_project, pid)
                     except Exception as rollback_exc:
                         rollback_errors.append(str(rollback_exc))
-                clear_settings_cache()
                 log_buffer.append("error", "project", f"Project switch rolled back: {exc}")
                 if rollback_errors:
                     log_buffer.append(

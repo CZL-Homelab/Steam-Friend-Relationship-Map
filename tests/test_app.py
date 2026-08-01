@@ -988,6 +988,124 @@ async def test_heavy_repository_query_runs_off_loop_and_guards_runtime_access() 
     assert repo.query_thread_id != event_loop_thread_id
 
 
+async def test_runtime_settings_rebuild_runs_blocking_work_off_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    class BlockingSchemaRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.block_schema = False
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.schema_thread_id: int | None = None
+
+        def ensure_schema(self) -> None:
+            if not self.block_schema:
+                return
+            self.schema_thread_id = threading.get_ident()
+            self.started.set()
+            self.release.wait(timeout=2)
+
+    write_thread_ids: list[int] = []
+
+    def record_set_key(*_: object, **__: object) -> None:
+        write_thread_ids.append(threading.get_ident())
+
+    repo = BlockingSchemaRepo()
+    monkeypatch.setattr(app_module, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "set_key", record_set_key)
+    monkeypatch.setattr(
+        app_module,
+        "get_settings",
+        lambda: Settings(default_max_depth=3),
+    )
+    app = create_app(
+        settings=Settings(default_max_depth=2),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    repo.block_schema = True
+    transport = ASGITransport(app=app)
+    event_loop_thread_id = threading.get_ident()
+    safety_release = threading.Timer(1, repo.release.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            settings_request = asyncio.create_task(
+                client.patch("/api/settings", json={"default_max_depth": 3})
+            )
+            deadline = time.monotonic() + 0.5
+            while not repo.started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert repo.started.is_set()
+            assert not settings_request.done()
+
+            logs_response = await asyncio.wait_for(client.get("/api/logs"), timeout=0.25)
+            assert logs_response.status_code == 200
+
+            repo.release.set()
+            settings_response = await settings_request
+    finally:
+        repo.release.set()
+        safety_release.cancel()
+
+    assert settings_response.status_code == 200
+    assert write_thread_ids
+    assert all(thread_id != event_loop_thread_id for thread_id in write_thread_ids)
+    assert repo.schema_thread_id != event_loop_thread_id
+
+
+async def test_public_settings_reads_secure_store_off_loop() -> None:
+    class BlockingSecretStore(FakeSecretStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.read_thread_id: int | None = None
+
+        def get(self, name: str) -> str:
+            self.read_thread_id = threading.get_ident()
+            self.started.set()
+            self.release.wait(timeout=2)
+            return super().get(name)
+
+    store = BlockingSecretStore()
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=store,
+    )  # type: ignore[arg-type]
+    transport = ASGITransport(app=app)
+    event_loop_thread_id = threading.get_ident()
+    safety_release = threading.Timer(1, store.release.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            settings_request = asyncio.create_task(client.get("/api/settings"))
+            deadline = time.monotonic() + 0.5
+            while not store.started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert store.started.is_set()
+
+            logs_response = await asyncio.wait_for(client.get("/api/logs"), timeout=0.25)
+            assert logs_response.status_code == 200
+
+            store.release.set()
+            settings_response = await settings_request
+    finally:
+        store.release.set()
+        safety_release.cancel()
+
+    assert settings_response.status_code == 200
+    assert store.read_thread_id != event_loop_thread_id
+
+
 async def test_cancelled_repository_request_holds_lock_until_worker_finishes() -> None:
     class BlockingGraphRepo(FakeRepo):
         def __init__(self) -> None:
