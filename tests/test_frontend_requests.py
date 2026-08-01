@@ -179,3 +179,75 @@ def test_application_reports_missing_frontend_dependencies_before_initializing_g
 
     assert dependency_check < failure_display < graph_init
     assert "button.disabled = true" in source
+    db_poll_start = source.index("function scheduleDbStatsPoll()")
+    db_poll_end = source.index("function startDbStatsPolling()", db_poll_start)
+    assert "setInterval" not in source[db_poll_start:db_poll_end]
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      (async () => {{
+      let nextTimer = 0;
+      const timers = new Map();
+      const delays = [];
+      const windowEvents = new Map();
+      let fetchImpl;
+      const systemLogLevel = {{ value: "" }};
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        setTimeout(callback, delay) {{
+          const id = ++nextTimer;
+          timers.set(id, callback);
+          delays.push(delay);
+          return id;
+        }},
+        clearTimeout(id) {{ timers.delete(id); }},
+        setInterval() {{ return 999; }},
+        clearInterval() {{}},
+        URLSearchParams,
+        fetch(...args) {{ return fetchImpl(...args); }},
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{
+          addEventListener(event, callback) {{ windowEvents.set(event, callback); }},
+        }},
+        document: {{
+          hidden: false,
+          addEventListener() {{}},
+          getElementById(id) {{ return id === "systemLogLevel" ? systemLogLevel : null; }},
+        }},
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+
+      fetchImpl = async () => ({{
+        ok: false,
+        statusText: "temporary failure",
+        json: async () => ({{ detail: "temporary failure" }}),
+      }});
+      await vm.runInContext('currentRunId = "run-1"; pollRun()', context);
+      if (delays.at(-1) !== 2400 || timers.size !== 1) process.exit(1);
+
+      timers.clear();
+      delays.length = 0;
+      let resolveFetch;
+      fetchImpl = () => new Promise((resolve) => {{ resolveFetch = resolve; }});
+      vm.runInContext("startSystemLogPolling()", context);
+      const [firstTimerId, firstTimer] = [...timers.entries()][0];
+      timers.delete(firstTimerId);
+      const pendingPoll = firstTimer();
+      if (timers.size !== 0) process.exit(2);
+      resolveFetch({{ ok: true, json: async () => [] }});
+      await pendingPoll;
+      if (timers.size !== 1 || delays.at(-1) !== 2500) process.exit(3);
+
+      windowEvents.get("pagehide")();
+      if (timers.size !== 0) process.exit(4);
+      }})().catch((error) => {{ console.error(error); process.exit(5); }});
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())

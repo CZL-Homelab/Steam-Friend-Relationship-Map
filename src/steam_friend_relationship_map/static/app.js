@@ -11,6 +11,8 @@ const FALLBACK_ZH = {
   "startup.failedTitle": "界面启动失败",
   "startup.missingDependencies": "必要静态资源加载失败：{dependencies}。请强制刷新页面；若仍然失败，请检查 /static 资源是否完整。",
   "log.empty": "暂无日志",
+  "log.crawlPollFailed": "抓取状态刷新失败，{seconds} 秒后自动重试：{message}",
+  "log.crawlPollRecovered": "抓取状态刷新已恢复",
   "path.empty": "未选择路径",
   "path.noPath": "没有路径",
   "profile.empty": "选择一个节点",
@@ -29,6 +31,8 @@ let systemLogTimer = null;
 let timerInterval = null;
 let crawlStartTime = null;
 let dbStatsTimer = null;
+let crawlPollFailures = 0;
+let pageActive = true;
 let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let currentNetworkAnalysis = null;
@@ -816,18 +820,23 @@ async function loadDbStats() {
   }
 }
 
-function startDbStatsPolling() {
-  stopDbStatsPolling();
+function scheduleDbStatsPoll() {
   const ms = parseInt($("dbStatsInterval").value) || 0;
-  if (ms < 500) return;
-  dbStatsTimer = setInterval(() => {
-    loadDbStats().catch(() => {});
-    loadProjects().catch(() => {});
+  if (!pageActive || ms < 500) return;
+  dbStatsTimer = setTimeout(async () => {
+    dbStatsTimer = null;
+    await Promise.allSettled([loadDbStats(), loadProjects()]);
+    scheduleDbStatsPoll();
   }, ms);
 }
 
+function startDbStatsPolling() {
+  stopDbStatsPolling();
+  scheduleDbStatsPoll();
+}
+
 function stopDbStatsPolling() {
-  clearInterval(dbStatsTimer);
+  clearTimeout(dbStatsTimer);
   dbStatsTimer = null;
 }
 
@@ -1181,6 +1190,7 @@ async function startCrawl() {
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
   invalidateNetworkAnalysis(false);
   currentRunId = run.id;
+  crawlPollFailures = 0;
   saveRecentRoot(payload.root_url, run.root_steam_id, "", run.root_steam_id);
   startDbStatsPolling();
   lastEventSeq = 0;
@@ -1194,38 +1204,70 @@ async function startCrawl() {
   pollRun();
 }
 
+function scheduleRunPoll(delay = 1200) {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  if (!pageActive || !currentRunId) return;
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    pollRun();
+  }, delay);
+}
+
 async function pollRun() {
   if (!currentRunId) return;
   clearTimeout(pollTimer);
-  const run = await api(`/api/crawls/${currentRunId}`);
-  setStatus("crawlStatus", run.status);
-  updateCrawlButtons(run.status);
-  $("nodeCount").textContent = run.nodes_discovered;
-  $("edgeCount").textContent = run.edges_discovered;
-  $("privateCount").textContent = run.private_count;
-  $("filteredCount").textContent = run.filtered_count || 0;
-  setProgress(run.progress_percent);
-  if (run.last_event) $("lastEvent").textContent = run.last_event;
-  await loadEvents().catch(() => {});
-  if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
-    stopTimer();
-    stopDbStatsPolling();
-    updateCrawlButtons(run.status);
-    toast(run.message || statusText(run.status));
-    appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
-    invalidateNetworkAnalysis(false);
-    await loadGraph().catch(() => {});
-    await loadDbStats().catch(() => {});
-    // 更新最近扫描的 Root 头像和昵称
-    if (currentGraph.nodes.length) {
-      const rootNode = currentGraph.nodes.find(n => n.id === run.root_steam_id);
-      if (rootNode) {
-        saveRecentRoot($("rootUrl").value || rootNode.profile_url, rootNode.label, rootNode.avatar, rootNode.id);
-      }
+  pollTimer = null;
+  const runId = currentRunId;
+  try {
+    const run = await api(`/api/crawls/${runId}`);
+    if (runId !== currentRunId || !pageActive) return;
+    if (crawlPollFailures > 0) {
+      appendSystemLog("info", "crawl", t("log.crawlPollRecovered"));
+      crawlPollFailures = 0;
     }
-    return;
+    setStatus("crawlStatus", run.status);
+    updateCrawlButtons(run.status);
+    $("nodeCount").textContent = run.nodes_discovered;
+    $("edgeCount").textContent = run.edges_discovered;
+    $("privateCount").textContent = run.private_count;
+    $("filteredCount").textContent = run.filtered_count || 0;
+    setProgress(run.progress_percent);
+    if (run.last_event) $("lastEvent").textContent = run.last_event;
+    await loadEvents().catch(() => {});
+    if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
+      currentRunId = null;
+      crawlPollFailures = 0;
+      stopTimer();
+      stopDbStatsPolling();
+      updateCrawlButtons(run.status);
+      toast(run.message || statusText(run.status));
+      appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
+      invalidateNetworkAnalysis(false);
+      await loadGraph().catch(() => {});
+      await loadDbStats().catch(() => {});
+      // 更新最近扫描的 Root 头像和昵称
+      if (currentGraph.nodes.length) {
+        const rootNode = currentGraph.nodes.find(n => n.id === run.root_steam_id);
+        if (rootNode) {
+          saveRecentRoot($("rootUrl").value || rootNode.profile_url, rootNode.label, rootNode.avatar, rootNode.id);
+        }
+      }
+      return;
+    }
+    scheduleRunPoll();
+  } catch (error) {
+    if (runId !== currentRunId || !pageActive) return;
+    crawlPollFailures += 1;
+    const retryDelay = Math.min(10000, 1200 * (2 ** Math.min(crawlPollFailures, 3)));
+    if (crawlPollFailures === 1 || crawlPollFailures % 5 === 0) {
+      appendSystemLog("warn", "crawl", t("log.crawlPollFailed", {
+        message: error.message,
+        seconds: Math.ceil(retryDelay / 1000),
+      }));
+    }
+    scheduleRunPoll(retryDelay);
   }
-  pollTimer = setTimeout(pollRun, 1200);
 }
 
 async function loadEvents() {
@@ -1253,9 +1295,29 @@ async function loadSystemLogs(reset = false) {
   }
 }
 
+function scheduleSystemLogPoll() {
+  clearTimeout(systemLogTimer);
+  systemLogTimer = null;
+  if (!pageActive || document.hidden) return;
+  systemLogTimer = setTimeout(async () => {
+    systemLogTimer = null;
+    try {
+      await loadSystemLogs();
+    } catch {
+      // The next poll remains scheduled so a transient API error self-recovers.
+    } finally {
+      scheduleSystemLogPoll();
+    }
+  }, 2500);
+}
+
 function startSystemLogPolling() {
-  clearInterval(systemLogTimer);
-  systemLogTimer = setInterval(() => loadSystemLogs().catch(() => {}), 2500);
+  scheduleSystemLogPoll();
+}
+
+function stopSystemLogPolling() {
+  clearTimeout(systemLogTimer);
+  systemLogTimer = null;
 }
 
 async function cancelCrawl() {
@@ -1984,6 +2046,36 @@ function initConsole() {
     document.addEventListener("mouseup", onUp);
   });
 }
+
+function suspendBackgroundWork() {
+  pageActive = false;
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  stopSystemLogPolling();
+  stopDbStatsPolling();
+  requestCoordinator?.cancelMany(PROJECT_SCOPED_REQUEST_KEYS);
+  graphLifecycle?.cancel();
+}
+
+function resumeBackgroundWork() {
+  pageActive = true;
+  startSystemLogPolling();
+  if (!currentRunId) return;
+  pollRun();
+  if (["running", "paused"].includes($("crawlStatus")?.dataset.status || "")) {
+    startDbStatsPolling();
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopSystemLogPolling();
+  else if (pageActive) startSystemLogPolling();
+});
+
+window.addEventListener("pagehide", suspendBackgroundWork);
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) resumeBackgroundWork();
+});
 
 window.addEventListener("error", (event) => {
   appendSystemLog("error", "frontend", event.message);
