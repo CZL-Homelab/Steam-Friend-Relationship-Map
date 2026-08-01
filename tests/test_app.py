@@ -259,7 +259,45 @@ def test_application_entrypoint_and_static_assets_use_safe_cache_headers() -> No
         response.headers["x-content-type-options"] == "nosniff"
         for response in (entrypoint, static_entrypoint, versioned_asset, unversioned_asset)
     )
+    assert all(
+        response.headers["x-frame-options"] == "SAMEORIGIN"
+        for response in (entrypoint, static_entrypoint, versioned_asset, unversioned_asset)
+    )
+    assert "script-src 'self'" in entrypoint.headers["content-security-policy"]
+    assert "frame-ancestors 'self'" in entrypoint.headers["content-security-policy"]
+    assert "img-src 'self' https: data: blob:" in entrypoint.headers["content-security-policy"]
     assert client.get("/static/").status_code == 404
+
+
+def test_api_success_error_and_csrf_responses_are_not_cacheable() -> None:
+    app = create_app(
+        settings=Settings(app_host="127.0.0.1", app_port=8000),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app, base_url="http://localhost:8000")
+
+    responses = (
+        client.get("/api/health"),
+        client.get("/api/not-found"),
+        client.post(
+            "/api/settings/test",
+            json={},
+            headers={"Origin": "https://evil.example"},
+        ),
+    )
+
+    assert [response.status_code for response in responses] == [200, 404, 403]
+    for response in responses:
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "SAMEORIGIN"
+        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["permissions-policy"] == (
+            "camera=(), geolocation=(), microphone=()"
+        )
+        assert "default-src 'self'" in response.headers["content-security-policy"]
 
 
 def test_settings_remain_available_when_unrelated_env_value_is_invalid(

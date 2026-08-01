@@ -100,6 +100,27 @@ CSV_EXPORT_FIELDS = (
 )
 CSV_EXPORT_CHUNK_SIZE = 64 * 1024
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        "base-uri 'none'",
+        "connect-src 'self'",
+        "font-src 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'self'",
+        "img-src 'self' https: data: blob:",
+        "object-src 'none'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+    )
+)
+SECURITY_RESPONSE_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+}
 
 
 class AppStaticFiles(StaticFiles):
@@ -935,6 +956,16 @@ def create_app(
             log_buffer.append("error", "api", f"{request.method} {request.url.path} -> HTTP {response.status_code}")
         elif response.status_code >= 400:
             log_buffer.append("warn", "api", f"{request.method} {request.url.path} -> HTTP {response.status_code}")
+        return response
+
+    @app.middleware("http")
+    async def secure_responses(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """Protect local graph data and constrain the browser execution surface."""
+        response = await call_next(request)
+        for name, value in SECURITY_RESPONSE_HEADERS.items():
+            response.headers[name] = value
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/")
