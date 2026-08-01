@@ -235,6 +235,33 @@ def test_app_starts_when_repository_is_unavailable() -> None:
     assert "Graph database is unavailable" in projects_response.json()["detail"]
 
 
+def test_application_entrypoint_and_static_assets_use_safe_cache_headers() -> None:
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    entrypoint = client.get("/")
+    static_entrypoint = client.get("/static/index.html")
+    versioned_asset = client.get("/static/app.js?v=1.0.20")
+    unversioned_asset = client.get("/static/app.js")
+
+    assert entrypoint.headers["cache-control"] == "no-store"
+    assert static_entrypoint.headers["cache-control"] == "no-store"
+    assert versioned_asset.headers["cache-control"] == (
+        "public, max-age=31536000, immutable"
+    )
+    assert unversioned_asset.headers["cache-control"] == "no-cache"
+    assert all(
+        response.headers["x-content-type-options"] == "nosniff"
+        for response in (entrypoint, static_entrypoint, versioned_asset, unversioned_asset)
+    )
+    assert client.get("/static/").status_code == 404
+
+
 def test_settings_remain_available_when_unrelated_env_value_is_invalid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

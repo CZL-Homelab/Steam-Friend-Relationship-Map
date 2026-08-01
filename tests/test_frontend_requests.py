@@ -234,6 +234,9 @@ def test_request_coordinator_loads_before_application_script() -> None:
 
     assert index.index("/static/request-coordinator.js") < index.index("/static/app.js")
     assert index.index("/static/graph-lifecycle.js") < index.index("/static/app.js")
+    script_sources = re.findall(r'<script src="([^"]+)"', index)
+    assert script_sources
+    assert all("?v=" in source for source in script_sources)
 
 
 def test_required_interactive_elements_exist_in_application_page() -> None:

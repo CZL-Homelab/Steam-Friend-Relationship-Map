@@ -11,13 +11,14 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values, set_key
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from neo4j.exceptions import AuthError, ServiceUnavailable
+from starlette.types import Scope
 
 from .analytics import analyze_network
 from .crawler import CrawlManager
@@ -97,6 +98,22 @@ CSV_EXPORT_FIELDS = (
     "root_closeness_score",
 )
 CSV_EXPORT_CHUNK_SIZE = 64 * 1024
+
+
+class AppStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if response.status_code not in {200, 304}:
+            return response
+        if path == "index.html":
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable" if "v" in query else "no-cache"
+        )
+        return response
 
 
 def sanitize_env_value(value: object) -> str:
@@ -822,7 +839,7 @@ def create_app(
     app.state.network_analysis_tasks = network_analysis_tasks
     app.state.logs = log_buffer
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    app.mount("/static", AppStaticFiles(directory=STATIC_DIR), name="static")
 
     def safe_detail(exc: object) -> str:
         return log_buffer.redact(str(exc))
@@ -891,7 +908,13 @@ def create_app(
 
     @app.get("/")
     async def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(
+            STATIC_DIR / "index.html",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health(response: Response) -> HealthResponse:
