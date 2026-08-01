@@ -362,6 +362,7 @@ def create_app(
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
     runtime_mutation_lock = asyncio.Lock()
     network_analysis_lock = asyncio.Lock()
+    network_analysis_tasks: set[asyncio.Task[NetworkAnalysisResponse]] = set()
     started_runtime_mutations: set[asyncio.Task[Any]] = set()
 
     async def run_runtime_operation(operation, source: str) -> Any:  # type: ignore[no-untyped-def]
@@ -430,6 +431,8 @@ def create_app(
                 )
 
         task = asyncio.create_task(operation())
+        network_analysis_tasks.add(task)
+        task.add_done_callback(network_analysis_tasks.discard)
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -755,9 +758,17 @@ def create_app(
                         await manager.shutdown()
                 finally:
                     try:
-                        await steam.aclose()
+                        pending_analyses = tuple(network_analysis_tasks)
+                        if pending_analyses:
+                            await asyncio.gather(
+                                *pending_analyses,
+                                return_exceptions=True,
+                            )
                     finally:
-                        await asyncio.to_thread(repo.close)
+                        try:
+                            await steam.aclose()
+                        finally:
+                            await asyncio.to_thread(repo.close)
             finally:
                 release_log_handler(log_handler, log_buffer)
 
@@ -767,6 +778,7 @@ def create_app(
     app.state.manager = manager
     app.state.runtime_mutation_lock = runtime_mutation_lock
     app.state.network_analysis_lock = network_analysis_lock
+    app.state.network_analysis_tasks = network_analysis_tasks
     app.state.logs = log_buffer
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")

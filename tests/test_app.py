@@ -1037,6 +1037,70 @@ async def test_cancelled_network_analysis_finishes_before_next_worker_starts(
     assert len(calls) == 2
 
 
+async def test_lifespan_waits_for_detached_network_analysis_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    analysis_started = threading.Event()
+    release_analysis = threading.Event()
+
+    def failing_analysis(*_: object, **__: object) -> NetworkAnalysisResponse:
+        analysis_started.set()
+        release_analysis.wait(timeout=2)
+        raise RuntimeError("analysis worker failed")
+
+    class CloseTrackingRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(app_module, "analyze_network", failing_analysis)
+    repo = CloseTrackingRepo()
+    app = create_app(
+        settings=Settings(),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    lifespan = app.router.lifespan_context(app)
+    await lifespan.__aenter__()
+    transport = ASGITransport(app=app)
+    safety_release = threading.Timer(1, release_analysis.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request = asyncio.create_task(client.get("/api/analysis/network"))
+            deadline = time.monotonic() + 0.5
+            while not analysis_started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert analysis_started.is_set()
+            request.cancel()
+            result = await asyncio.gather(request, return_exceptions=True)
+            assert isinstance(result[0], asyncio.CancelledError)
+
+        shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
+        await asyncio.sleep(0.05)
+        assert not shutdown.done()
+        assert repo.closed is False
+
+        release_analysis.set()
+        await asyncio.wait_for(shutdown, timeout=1)
+    finally:
+        release_analysis.set()
+        safety_release.cancel()
+
+    assert repo.closed is True
+    assert app.state.network_analysis_tasks == set()
+    assert any(
+        row.source == "analysis" and "analysis worker failed" in row.message
+        for row in app.state.logs.list()
+    )
+
+
 def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
     class ExportRepo(FakeRepo):
         def export_graph(self, project_id: str = "default") -> ExportResponse:
