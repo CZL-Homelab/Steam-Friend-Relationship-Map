@@ -71,6 +71,25 @@ ENV_KEYS = {
     "default_cache_valid_days": "DEFAULT_CACHE_VALID_DAYS",
     "active_project": "ACTIVE_PROJECT",
 }
+CSV_EXPORT_FIELDS = (
+    "type",
+    "project_id",
+    "id",
+    "label",
+    "source",
+    "target",
+    "profile_url",
+    "avatar",
+    "note",
+    "tags",
+    "category",
+    "depth",
+    "friend_count",
+    "friend_list_status",
+    "prior_pool_link_count",
+    "root_closeness_score",
+)
+CSV_EXPORT_CHUNK_SIZE = 64 * 1024
 
 
 def sanitize_env_value(value: object) -> str:
@@ -82,6 +101,61 @@ def csv_safe_cell(value: object) -> str:
     if text.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{text}"
     return text
+
+
+def iter_export_csv(
+    data: ExportResponse,
+    project_id: str,
+    chunk_size: int = CSV_EXPORT_CHUNK_SIZE,
+) -> Iterable[str]:
+    """Yield bounded CSV chunks without materializing a second full export copy."""
+    buffer = io.StringIO(newline="")
+    buffer.write("\ufeff")
+    writer = csv.DictWriter(buffer, fieldnames=CSV_EXPORT_FIELDS)
+    writer.writeheader()
+
+    def flush() -> str:
+        chunk = buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        return chunk
+
+    for node in data.nodes:
+        row = {
+            "type": "node",
+            "project_id": node.get("project_id", project_id),
+            "id": node.get("steam_id", ""),
+            "label": node.get("persona_name", ""),
+            "source": "",
+            "target": "",
+            "profile_url": node.get("profile_url", ""),
+            "avatar": node.get("avatar_full") or node.get("avatar_medium") or node.get("avatar", ""),
+            "note": node.get("note", ""),
+            "tags": json.dumps(node.get("tags") or [], ensure_ascii=False),
+            "category": node.get("category", ""),
+            "depth": node.get("depth_min"),
+            "friend_count": node.get("friend_count"),
+            "friend_list_status": node.get("friend_list_status", "unknown"),
+            "prior_pool_link_count": node.get("prior_pool_link_count", 0),
+            "root_closeness_score": node.get("root_closeness_score", 0),
+        }
+        writer.writerow({key: csv_safe_cell(row.get(key)) for key in CSV_EXPORT_FIELDS})
+        if buffer.tell() >= chunk_size:
+            yield flush()
+
+    for edge in data.edges:
+        row = {
+            "type": "edge",
+            "project_id": project_id,
+            "source": edge["source"],
+            "target": edge["target"],
+        }
+        writer.writerow({key: csv_safe_cell(row.get(key)) for key in CSV_EXPORT_FIELDS})
+        if buffer.tell() >= chunk_size:
+            yield flush()
+
+    if buffer.tell():
+        yield flush()
 
 
 def sensitive_setting_values(settings: Settings) -> list[str]:
@@ -1010,58 +1084,12 @@ def create_app(
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
         if export_format == "json":
             return data
-        fieldnames = [
-            "type",
-            "project_id",
-            "id",
-            "label",
-            "source",
-            "target",
-            "profile_url",
-            "avatar",
-            "note",
-            "tags",
-            "category",
-            "depth",
-            "friend_count",
-            "friend_list_status",
-            "prior_pool_link_count",
-            "root_closeness_score",
-        ]
-        buffer = io.StringIO(newline="")
-        buffer.write("\ufeff")
-        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-        writer.writeheader()
-        for node in data.nodes:
-            row = {
-                "type": "node",
-                "project_id": node.get("project_id", settings.active_project),
-                "id": node.get("steam_id", ""),
-                "label": node.get("persona_name", ""),
-                "source": "",
-                "target": "",
-                "profile_url": node.get("profile_url", ""),
-                "avatar": node.get("avatar_full") or node.get("avatar_medium") or node.get("avatar", ""),
-                "note": node.get("note", ""),
-                "tags": json.dumps(node.get("tags") or [], ensure_ascii=False),
-                "category": node.get("category", ""),
-                "depth": node.get("depth_min"),
-                "friend_count": node.get("friend_count"),
-                "friend_list_status": node.get("friend_list_status", "unknown"),
-                "prior_pool_link_count": node.get("prior_pool_link_count", 0),
-                "root_closeness_score": node.get("root_closeness_score", 0),
-            }
-            writer.writerow({key: csv_safe_cell(row.get(key)) for key in fieldnames})
-        for edge in data.edges:
-            row = {
-                "type": "edge",
-                "project_id": settings.active_project,
-                "source": edge["source"],
-                "target": edge["target"],
-            }
-            writer.writerow({key: csv_safe_cell(row.get(key)) for key in fieldnames})
+        export_project_id = next(
+            (str(node["project_id"]) for node in data.nodes if node.get("project_id")),
+            settings.active_project,
+        )
         return StreamingResponse(
-            iter([buffer.getvalue()]),
+            iter_export_csv(data, export_project_id),
             media_type="text/csv",
             headers={
                 "Content-Disposition": "attachment; filename=steam_graph.csv",

@@ -961,6 +961,59 @@ def test_kuzu_project_member_metadata_is_fully_isolated(
     assert exported_b["last_scored_crawl_id"] == "crawl-b"
 
 
+def test_kuzu_export_closes_consumed_query_results() -> None:
+    class ClosableResult:
+        def __init__(self, rows: list[list[object]]) -> None:
+            self.rows = rows
+            self.index = 0
+            self.closed = False
+
+        def has_next(self) -> bool:
+            return self.index < len(self.rows)
+
+        def get_next(self) -> list[object]:
+            row = self.rows[self.index]
+            self.index += 1
+            return row
+
+        def close(self) -> None:
+            self.closed = True
+
+    class ExportConnection:
+        def __init__(self) -> None:
+            self.results = [
+                ClosableResult(
+                    [[{"steam_id": "a", "persona_name": "A"}, {"depth_min": 1}]]
+                ),
+                ClosableResult([["a", "b"]]),
+            ]
+
+        def execute(self, _query: str, _parameters: object) -> ClosableResult:
+            return self.results.pop(0)
+
+    connection = ExportConnection()
+    node_result, edge_result = connection.results
+    repo = object.__new__(KuzuRepositoryImpl)
+    repo._get_conn = lambda: connection  # type: ignore[method-assign]
+
+    exported = repo.export_graph("project-a")
+
+    assert exported.nodes[0]["steam_id"] == "a"
+    assert exported.edges == [{"source": "a", "target": "b"}]
+    assert node_result.closed is True
+    assert edge_result.closed is True
+
+
+def test_kuzu_results_are_iterated_only_by_closing_consumer() -> None:
+    source = Path("src/steam_friend_relationship_map/kuzu_repo.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert source.count(".has_next()") == 1
+    assert "while result.has_next():" in source
+    assert "return list(_iter_rows(result))" in source
+
+
 def test_kuzu_project_member_metadata_migration_copies_legacy_primary_project(
     temp_kuzu_repo: KuzuRepositoryImpl,
 ) -> None:

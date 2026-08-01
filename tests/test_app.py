@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
-from steam_friend_relationship_map.app import create_app
+from steam_friend_relationship_map.app import create_app, iter_export_csv
 from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
 from steam_friend_relationship_map.models import (
     CrawlRun,
@@ -720,6 +720,31 @@ def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
     assert edge["type"] == "edge"
     assert edge["source"] == "'\tformula"
     assert edge["target"] == "'\rformula"
+
+
+def test_export_csv_iterator_emits_bounded_chunks() -> None:
+    data = ExportResponse(
+        nodes=[
+            {
+                "steam_id": str(index),
+                "persona_name": f"User {index}",
+                "note": "x" * 240,
+                "project_id": "project-a",
+            }
+            for index in range(40)
+        ],
+        edges=[{"source": str(index), "target": str(index + 1)} for index in range(39)],
+    )
+
+    chunks = list(iter_export_csv(data, "project-a", chunk_size=1024))
+
+    assert len(chunks) > 5
+    assert chunks[0].startswith("\ufeff")
+    assert max(map(len, chunks)) < 2048
+    rows = list(csv.DictReader(io.StringIO("".join(chunks).lstrip("\ufeff"))))
+    assert len(rows) == 79
+    assert rows[0]["project_id"] == "project-a"
+    assert rows[-1]["type"] == "edge"
 
 
 def test_export_accepts_json_body_and_legacy_query_format() -> None:
