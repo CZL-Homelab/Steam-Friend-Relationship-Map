@@ -66,8 +66,9 @@ GitHub Actions uses read-only permissions, concurrency cancellation, and full-SH
 - pip-audit against exported locked runtime requirements: no known vulnerabilities.
 - pytest: `210 passed`（完整测试 / full suite）。
 - Node syntax and i18n JSON parse: passed locally.
-- TruffleHog full-history result: recorded from the audit PR quality run before merge.
+- TruffleHog full-history scan: passed in audit PR `#27` at `830589b` with no blocking verified/unknown findings after the documented historical URI false-positive handling.
 - Application lifecycle smoke test with an isolated temporary Kuzu database: HTTP `200`; the existing `data/graph_kuzu` path was not opened or modified.
+- GitHub Actions: Ubuntu tests, Windows tests, static/dependency checks, and secret scan all passed in audit PR `#27` at `830589b`.
 
 ## Bandit 局部抑制 / Local Bandit Suppressions
 
@@ -108,4 +109,4 @@ node --check src/steam_friend_relationship_map/static/app.js
 node -e "JSON.parse(require('fs').readFileSync('src/steam_friend_relationship_map/static/i18n.json', 'utf8'))"
 ```
 
-最终结论 / Final assessment: all actionable high- and medium-risk findings identified in this audit must be closed and all permanent gates must pass before the audit PR is merged into `security-check-before-main`. Independent review is still required before any later merge to `main`.
+最终结论 / Final assessment: all actionable high- and medium-risk findings identified in this audit are closed, and the permanent audit PR gates pass. The branch is ready to merge into `security-check-before-main`; independent review is still required before any later merge to `main`.
