@@ -35,6 +35,15 @@ let activeRenderId = 0;
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
+const requestCoordinator = new window.LatestRequestCoordinator();
+const PROJECT_SCOPED_REQUEST_KEYS = [
+  "graph",
+  "db-stats",
+  "projects",
+  "settings",
+  "network-analysis",
+  "friend-circles",
+];
 
 const COMMUNITY_COLORS = [
   "#16a34a", "#dc2626", "#d97706", "#7c3aed", "#0891b2", "#c026d3",
@@ -285,9 +294,10 @@ function escapeHtml(value) {
 
 async function api(path, options = {}) {
   try {
+    const { headers = {}, ...fetchOptions } = options;
     const response = await fetch(path, {
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-      ...options,
+      ...fetchOptions,
+      headers: { "Content-Type": "application/json", ...headers },
     });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
@@ -295,9 +305,28 @@ async function api(path, options = {}) {
     }
     return response.json();
   } catch (error) {
-    appendSystemLog("error", "api", `${path.split("?")[0]}: ${error.message}`);
+    if (error.name !== "AbortError") {
+      appendSystemLog("error", "api", `${path.split("?")[0]}: ${error.message}`);
+    }
     throw error;
   }
+}
+
+async function latestApi(key, path, options = {}) {
+  const request = requestCoordinator.begin(key);
+  try {
+    const data = await api(path, { ...options, signal: request.signal });
+    return request.isCurrent() ? data : null;
+  } catch (error) {
+    if (error.name === "AbortError" || !request.isCurrent()) return null;
+    throw error;
+  } finally {
+    request.finish();
+  }
+}
+
+function cancelProjectScopedRequests() {
+  requestCoordinator.cancelMany(PROJECT_SCOPED_REQUEST_KEYS);
 }
 
 function formatLogTime(isoString) {
@@ -701,7 +730,8 @@ function validateGraphFilters() {
 async function loadGraph() {
   if (!validateGraphFilters()) throw new Error(t("validation.fixFields"));
   try {
-    const data = await api(`/api/graph?${graphParams().toString()}`);
+    const data = await latestApi("graph", `/api/graph?${graphParams().toString()}`);
+    if (!data) return;
     renderGraph(data);
     appendSystemLog("info", "graph", t("log.graphLoaded", { nodes: data.nodes.length, edges: data.edges.length }));
     if (data.depth_incomplete && data.root_found) {
@@ -721,7 +751,8 @@ async function loadGraph() {
 }
 
 async function loadDbStats() {
-  const stats = await api("/api/db/stats");
+  const stats = await latestApi("db-stats", "/api/db/stats");
+  if (!stats) return;
   $("dbSteamUsers").textContent = stats.steam_users;
   $("dbRelationships").textContent = stats.steam_friend_relationships;
   $("dbCrawlRuns").textContent = stats.crawl_runs;
@@ -789,7 +820,8 @@ function toggleEngineSettings(engine) {
 }
 
 async function loadSettings() {
-  const settings = await api("/api/settings");
+  const settings = await latestApi("settings", "/api/settings");
+  if (!settings) return;
   const engine = settings.graph_db_engine || "kuzu";
   $("settingsGraphDbEngine").value = engine;
   $("settingsKuzuDbPath").value = settings.kuzu_db_path || "";
@@ -1216,7 +1248,8 @@ function updateCrawlButtons(status) {
 
 async function loadProjects() {
   try {
-    const data = await api("/api/projects");
+    const data = await latestApi("projects", "/api/projects");
+    if (!data) return;
     const activeProjId = data.active_project_id || "default";
     $("activeProjectName").textContent = activeProjId === "default" ? t("project.defaultName") : activeProjId;
     renderProjectList(data);
@@ -1251,8 +1284,9 @@ function renderProjectList(data) {
       const pid = item.dataset.projectId;
       if (pid === data.active_project_id) return;
       await withButtonState(item, async () => {
+        cancelProjectScopedRequests();
         await api("/api/projects/switch", { method: "POST", body: JSON.stringify({ project_id: pid }) });
-        invalidateNetworkAnalysis(false);
+        resetProjectScopedViews();
         await loadSettings();
         await loadDbStats().catch(() => {});
         await loadGraph().catch(() => {});
@@ -1268,8 +1302,9 @@ function renderProjectList(data) {
       const pid = btn.dataset.projectId;
       if (!confirm(t("project.confirmDelete", { name: pid }))) return;
       await withButtonState(btn, async () => {
+        cancelProjectScopedRequests();
         await api(`/api/projects/${pid}`, { method: "DELETE" });
-        invalidateNetworkAnalysis(false);
+        if (pid === data.active_project_id) resetProjectScopedViews();
         await loadSettings();
         await loadProjects();
         await loadDbStats().catch(() => {});
@@ -1320,7 +1355,8 @@ async function findPath() {
     if (!to) setFieldError("pathTo", t("validation.required"));
     throw new Error(t("toast.fromToRequired"));
   }
-  const data = await api(`/api/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&max_depth=4`);
+  const data = await latestApi("graph", `/api/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&max_depth=4`);
+  if (!data) return;
   if (!data.nodes.length) {
     $("pathResult").dataset.state = "no-path";
     $("pathResult").textContent = t("path.noPath");
@@ -1352,6 +1388,39 @@ function invalidateNetworkAnalysis(rerender = true) {
   if (selectedNode) fillProfile(selectedNode);
 }
 
+function resetProjectScopedViews() {
+  cancelProjectScopedRequests();
+  activeRenderId++;
+  currentGraph = { nodes: [], edges: [], limited: false };
+  currentNetworkAnalysis = null;
+  selectedNode = null;
+
+  if (cy) cy.elements().remove();
+  updateGraphSummary();
+  $("graphRoot").value = "";
+  $("analysisRoot").value = "";
+  $("graphEmpty").classList.remove("hidden");
+  const emptyHint = $("graphEmpty").querySelector("p");
+  if (emptyHint) emptyHint.textContent = t("graph.emptyHint");
+  $("graphLoading")?.classList.add("hidden");
+
+  invalidateNetworkAnalysis(false);
+  $("friendCircleList").innerHTML = "";
+  $("pathResult").dataset.state = "empty";
+  $("pathResult").textContent = t("path.empty");
+  $("pathFrom").value = "";
+  $("pathTo").value = "";
+  fillProfile({
+    id: "",
+    label: t("profile.empty"),
+    avatar: "",
+    profile_url: "",
+    friend_list_status: "unknown",
+    tags: [],
+  });
+  selectedNode = null;
+}
+
 function renderNetworkAnalysisResults(data) {
   $("networkCommunityCount").textContent = data.community_count;
   $("networkModularity").textContent = Number(data.modularity || 0).toFixed(3);
@@ -1376,7 +1445,8 @@ function renderNetworkAnalysisResults(data) {
 }
 
 async function loadNetworkAnalysis(options = {}) {
-  const data = await api("/api/analysis/network?limit=12");
+  const data = await latestApi("network-analysis", "/api/analysis/network?limit=12");
+  if (!data) return;
   currentNetworkAnalysis = data;
   renderNetworkAnalysisResults(data);
   if (currentGraph.nodes.length) renderGraph(currentGraph);
@@ -1421,7 +1491,8 @@ async function loadFriendCircles() {
     min_mutual: $("analysisMinMutual").value || "2",
     limit: $("analysisLimit").value || "30",
   });
-  const data = await api(`/api/analysis/friend-circles?${params.toString()}`);
+  const data = await latestApi("friend-circles", `/api/analysis/friend-circles?${params.toString()}`);
+  if (!data) return;
   $("friendCircleList").innerHTML = data.candidates
     .map(
       (item) =>
@@ -1431,7 +1502,7 @@ async function loadFriendCircles() {
         }))}</span></button></li>`,
     )
     .join("");
-  document.querySelectorAll(".rank-button").forEach((button) => {
+  $("friendCircleList").querySelectorAll(".rank-button").forEach((button) => {
     button.addEventListener("click", () => focusAnalysisCandidate(button.dataset.steamId, data.candidates));
   });
   toast(t("toast.analysisLoaded"));

@@ -109,6 +109,7 @@
 - 配置、密钥、项目切换和抓取任务创建使用统一的运行时互斥保护；切换或配置重载失败时会恢复原状态，避免后台任务继续使用已关闭的数据库或 HTTP 客户端。
 - CSV 导出包含项目、备注、标签、层数和评分等完整字段，使用 UTF-8 BOM，并转义电子表格公式前缀；JSON 导出保持原始结构。
 - 图谱界面支持中文 / English 切换。
+- 图谱、统计、项目、路径和分析请求采用“最新请求生效”协调器；新请求会取消同类旧请求，项目切换会清空旧项目视图，避免迟到响应覆盖当前界面。Graph, statistics, project, path, and analysis reads use latest-request-wins coordination, preventing late responses from overwriting the current project view.
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
 
 ## 安全提醒：Public 仓库不要提交这些内容
