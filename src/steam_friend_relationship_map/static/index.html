@@ -592,8 +592,9 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     </div>
 
     <div id="toast" class="toast"></div>
+    <iframe id="exportFrame" name="exportFrame" title="Export download" hidden></iframe>
     <script src="/static/request-coordinator.js?v=1.0.0"></script>
     <script src="/static/graph-lifecycle.js?v=1.0.0"></script>
-    <script src="/static/app.js?v=1.0.18"></script>
+    <script src="/static/app.js?v=1.0.19"></script>
   </body>
 </html>

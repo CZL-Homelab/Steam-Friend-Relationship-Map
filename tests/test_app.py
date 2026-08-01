@@ -699,6 +699,7 @@ def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"] == 'attachment; filename="steam_graph.csv"'
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.content.startswith(b"\xef\xbb\xbf")
@@ -763,6 +764,9 @@ def test_export_accepts_json_body_and_legacy_query_format() -> None:
 
     assert json_response.status_code == 200
     assert json_response.json()["nodes"][0]["steam_id"] == "root"
+    assert json_response.headers["content-disposition"] == 'attachment; filename="steam_graph.json"'
+    assert json_response.headers["cache-control"] == "no-store"
+    assert json_response.headers["x-content-type-options"] == "nosniff"
     assert csv_response.status_code == 200
     assert csv_response.headers["content-type"].startswith("text/csv")
     assert invalid_body.status_code == 422

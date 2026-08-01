@@ -1071,6 +1071,7 @@ def create_app(
 
     @app.post("/api/export", response_model=ExportResponse)
     async def export_graph(
+        response: Response,
         payload: ExportRequest | None = None,
         format: str | None = None,
     ) -> Response | ExportResponse:
@@ -1083,6 +1084,9 @@ def create_app(
             log_buffer.append("error", "export", f"图谱导出失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
         if export_format == "json":
+            response.headers["Content-Disposition"] = 'attachment; filename="steam_graph.json"'
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
             return data
         export_project_id = next(
             (str(node["project_id"]) for node in data.nodes if node.get("project_id")),
@@ -1092,7 +1096,7 @@ def create_app(
             iter_export_csv(data, export_project_id),
             media_type="text/csv",
             headers={
-                "Content-Disposition": "attachment; filename=steam_graph.csv",
+                "Content-Disposition": 'attachment; filename="steam_graph.csv"',
                 "Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff",
             },

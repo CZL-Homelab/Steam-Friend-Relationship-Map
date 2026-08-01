@@ -97,6 +97,67 @@ def test_frontend_javascript_parses() -> None:
         )
 
 
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_export_uses_native_download_without_buffering_blob() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      const forms = [];
+      const messages = [];
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        fetch() {{ throw new Error("export must not use fetch"); }},
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{ addEventListener() {{}} }},
+        document: {{
+          addEventListener() {{}},
+          getElementById() {{ return null; }},
+          createElement(tag) {{
+            if (tag !== "form") throw new Error(`unexpected element: ${{tag}}`);
+            const form = {{
+              submitted: false,
+              removed: false,
+              submit() {{ this.submitted = true; }},
+              remove() {{ this.removed = true; }},
+            }};
+            forms.push(form);
+            return form;
+          }},
+          body: {{ appendChild() {{}} }},
+        }},
+        messages,
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      vm.runInContext(`
+        toast = (message) => messages.push(message);
+        t = (key, values = {{}}) => values.message ? key + ":" + values.message : key;
+        exportFile("csv");
+      `, context);
+
+      if (forms.length !== 1) process.exit(1);
+      const form = forms[0];
+      if (form.method !== "POST" || form.action !== "/api/export?format=csv") process.exit(2);
+      if (form.target !== "exportFrame" || !form.hidden) process.exit(3);
+      if (!form.submitted || !form.removed) process.exit(4);
+      if (messages.at(-1) !== "toast.exportCsv") process.exit(5);
+
+      context.testFrame = {{
+        contentWindow: {{ location: {{ href: "http://localhost/api/export" }} }},
+        contentDocument: {{ body: {{ textContent: '{{"detail":"download failed"}}' }} }},
+      }};
+      vm.runInContext("handleExportFrameLoad({{ currentTarget: testFrame }})", context);
+      if (messages.at(-1) !== "toast.exportFailed:download failed") process.exit(6);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
 def test_request_coordinator_loads_before_application_script() -> None:
     index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 

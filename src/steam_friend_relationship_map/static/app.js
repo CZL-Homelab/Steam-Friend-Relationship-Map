@@ -1683,37 +1683,34 @@ function focusAnalysisCandidate(steamId, candidates) {
   appendSystemLog("info", "analysis", t("analysis.focused", { label: candidate?.label || steamId }));
 }
 
-async function exportFile(format) {
-  try {
-    const response = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ format }),
-    });
-    if (!response.ok) {
-      let message = `${response.status} ${response.statusText}`.trim();
-      try {
-        const payload = await response.json();
-        message = payload.detail || message;
-      } catch {
-        // Keep the HTTP status when the server did not return JSON.
-      }
-      throw new Error(message);
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `steam_graph.${format}`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  } catch (err) {
-    toast(t("toast.exportFailed", { message: err.message }));
-    return;
-  }
+function exportFile(format) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = `/api/export?${new URLSearchParams({ format }).toString()}`;
+  form.target = "exportFrame";
+  form.hidden = true;
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
   toast(t(format === "csv" ? "toast.exportCsv" : "toast.exportJson"));
+}
+
+function handleExportFrameLoad(event) {
+  const frame = event.currentTarget;
+  try {
+    if (frame.contentWindow?.location.href === "about:blank") return;
+    const text = frame.contentDocument?.body?.textContent?.trim();
+    if (!text) return;
+    let message = text;
+    try {
+      message = JSON.parse(text).detail || text;
+    } catch {
+      // Preserve a plain-text server error when the response was not JSON.
+    }
+    toast(t("toast.exportFailed", { message: message.slice(0, 300) }));
+  } catch {
+    // A successful attachment does not expose a readable iframe document.
+  }
 }
 
 async function copySystemLogs() {
@@ -1853,6 +1850,7 @@ function wireEvents() {
   }
   $("exportJson").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("json")).catch(() => {}));
   $("exportCsv").addEventListener("click", (event) => withButtonState(event.currentTarget, async () => exportFile("csv")).catch(() => {}));
+  $("exportFrame").addEventListener("load", handleExportFrameLoad);
   $("copyBloom").addEventListener("click", (event) =>
     withButtonState(event.currentTarget, async () => {
       await navigator.clipboard.writeText($("bloomQuery").value);
