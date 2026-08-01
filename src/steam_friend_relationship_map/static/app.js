@@ -193,14 +193,31 @@ function setLanguage(lang) {
 
 // ── Theme ─────────────────────────────────────────────────────────
 
+function getColorSchemeMedia() {
+  try {
+    return typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function initTheme() {
   const saved = appStorage.getItem("sfm_theme") || "auto";
   applyTheme(saved);
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  const media = getColorSchemeMedia();
+  if (!media) return;
+  const handleChange = () => {
     if ((appStorage.getItem("sfm_theme") || "auto") === "auto") {
       applyTheme("auto");
     }
-  });
+  };
+  if (typeof media.addEventListener === "function") {
+    media.addEventListener("change", handleChange);
+  } else if (typeof media.addListener === "function") {
+    media.addListener(handleChange);
+  }
 }
 
 function getCssVar(name) {
@@ -278,7 +295,7 @@ function applyTheme(mode) {
   } else if (mode === "light") {
     document.documentElement.removeAttribute("data-theme");
   } else {
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const prefersDark = getColorSchemeMedia()?.matches === true;
     document.documentElement.toggleAttribute("data-theme", prefersDark);
   }
   appStorage.setItem("sfm_theme", mode);

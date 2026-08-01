@@ -263,6 +263,10 @@ def test_application_uses_memory_fallback_when_local_storage_is_blocked() -> Non
         clearTimeout,
         window: {{ addEventListener() {{}} }},
         document: {{
+          documentElement: {{
+            removeAttribute() {{}},
+            toggleAttribute() {{}},
+          }},
           addEventListener(event, callback) {{
             if (event === "DOMContentLoaded") domReadyCallbacks.push(callback);
           }},
@@ -280,6 +284,7 @@ def test_application_uses_memory_fallback_when_local_storage_is_blocked() -> Non
       vm.runInContext('appStorage.removeItem("session-key")', context);
       if (vm.runInContext('appStorage.getItem("session-key")', context) !== null) process.exit(2);
       if (domReadyCallbacks.length !== 1) process.exit(3);
+      vm.runInContext('initTheme()', context);
       const overlayWorks = vm.runInContext(`
         (() => {{
           const fallback = createSafeStorage(() => ({{
@@ -306,6 +311,7 @@ def test_application_reports_missing_helper_scripts_without_crashing() -> None:
       const fs = require("fs");
       const vm = require("vm");
       const domReadyCallbacks = [];
+      let legacyThemeListener = null;
       const title = {{ textContent: "" }};
       const hint = {{ textContent: "" }};
       const buttons = [{{ disabled: false }}, {{ disabled: false }}];
@@ -333,7 +339,12 @@ def test_application_reports_missing_helper_scripts_without_crashing() -> None:
         localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
         window: {{
           addEventListener() {{}},
-          matchMedia() {{ return {{ matches: false, addEventListener() {{}} }}; }},
+          matchMedia() {{
+            return {{
+              matches: false,
+              addListener(callback) {{ legacyThemeListener = callback; }},
+            }};
+          }},
         }},
         document: {{
           documentElement: {{
@@ -360,7 +371,8 @@ def test_application_reports_missing_helper_scripts_without_crashing() -> None:
         if (!hint.textContent.includes("vendor/cytoscape.min.js")) process.exit(5);
         if (buttons.some((button) => !button.disabled)) process.exit(6);
         if (!hint.textContent.includes("#graphRoot")) process.exit(7);
-      }}).catch(() => process.exit(8));
+        if (typeof legacyThemeListener !== "function") process.exit(8);
+      }}).catch(() => process.exit(9));
     """
 
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
