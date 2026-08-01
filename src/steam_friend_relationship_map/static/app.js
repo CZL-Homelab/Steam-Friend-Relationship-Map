@@ -975,18 +975,12 @@ async function saveSettings() {
     neo4j_uri: $("settingsNeo4jUri").value.trim(),
     neo4j_user: $("settingsNeo4jUser").value.trim(),
   };
-  await api("/api/settings", { method: "PATCH", body: JSON.stringify(payload) });
   const steamKey = $("steamApiKeyInput").value.trim();
   const neo4jPassword = $("neo4jPasswordInput").value;
-  if (steamKey) {
-    await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "steam_api_key", value: steamKey }) });
-  }
-  if (steamProxy) {
-    await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "steam_proxy_url", value: steamProxy }) });
-  }
-  if (neo4jPassword) {
-    await api("/api/settings/secrets", { method: "POST", body: JSON.stringify({ name: "neo4j_password", value: neo4jPassword }) });
-  }
+  if (steamKey) payload.steam_api_key = steamKey;
+  if (steamProxy) payload.steam_proxy_url = steamProxy;
+  if (neo4jPassword) payload.neo4j_password = neo4jPassword;
+  await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
   $("steamApiKeyInput").value = "";
   $("steamProxyInput").value = "";
   $("neo4jPasswordInput").value = "";

@@ -158,6 +158,76 @@ def test_export_uses_native_download_without_buffering_blob() -> None:
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
 
 
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_settings_save_uses_one_atomic_request() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      (async () => {{
+      const requests = [];
+      function field(value = "") {{
+        const error = {{ textContent: "" }};
+        return {{
+          value,
+          classList: {{ toggle() {{}} }},
+          parentElement: {{
+            querySelector() {{ return error; }},
+            appendChild() {{}},
+          }},
+        }};
+      }}
+      const elements = {{
+        settingsGraphDbEngine: field("kuzu"),
+        settingsKuzuDbPath: field("data/graph_kuzu"),
+        settingsKuzuBufferPoolSizeGb: field("2"),
+        settingsNeo4jUri: field("bolt://localhost:7687"),
+        settingsNeo4jUser: field("neo4j"),
+        steamApiKeyInput: field("steam-secret"),
+        steamProxyInput: field("socks5://127.0.0.1:1080"),
+        neo4jPasswordInput: field("neo4j-secret"),
+      }};
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        requests,
+        setTimeout,
+        clearTimeout,
+        URL,
+        URLSearchParams,
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{ addEventListener() {{}} }},
+        document: {{
+          addEventListener() {{}},
+          getElementById(id) {{ return elements[id] || null; }},
+          createElement() {{ return {{ className: "", textContent: "" }}; }},
+        }},
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      await vm.runInContext(`
+        api = async (path, options) => {{ requests.push({{ path, options }}); return {{}}; }};
+        loadSettings = async () => {{}};
+        testSettings = async () => {{}};
+        toast = () => {{}};
+        t = (key) => key;
+        saveSettings();
+      `, context);
+
+      if (requests.length !== 1) process.exit(1);
+      if (requests[0].path !== "/api/settings" || requests[0].options.method !== "PUT") process.exit(2);
+      const payload = JSON.parse(requests[0].options.body);
+      if (payload.graph_db_engine !== "kuzu" || payload.kuzu_buffer_pool_size_gb !== 2) process.exit(3);
+      if (payload.steam_api_key !== "steam-secret") process.exit(4);
+      if (payload.steam_proxy_url !== "socks5://127.0.0.1:1080") process.exit(5);
+      if (payload.neo4j_password !== "neo4j-secret") process.exit(6);
+      if (elements.steamApiKeyInput.value || elements.steamProxyInput.value || elements.neo4jPasswordInput.value) process.exit(7);
+      }})().catch((error) => {{ console.error(error); process.exit(8); }});
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
 def test_request_coordinator_loads_before_application_script() -> None:
     index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 

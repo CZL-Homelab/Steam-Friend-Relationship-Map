@@ -42,6 +42,7 @@ from .models import (
     PublicSettings,
     SecretUpdate,
     SettingsPatch,
+    SettingsSave,
     SettingsTestResult,
     SteamUserRecord,
     UserPatch,
@@ -469,6 +470,49 @@ def create_app(
         clear_settings_cache()
         return errors
 
+    async def persist_env_settings(values: dict[str, Any]) -> None:
+        if not values:
+            return
+        await asyncio.to_thread(ENV_PATH.touch, exist_ok=True)
+        for field, value in values.items():
+            await asyncio.to_thread(
+                set_key,
+                str(ENV_PATH),
+                ENV_KEYS[field],
+                sanitize_env_value(value),
+                quote_mode="never",
+            )
+
+    async def read_secret_settings(names: Iterable[str]) -> dict[str, str]:
+        def read() -> dict[str, str]:
+            return {name: secret_store.get(name) for name in names}
+
+        return await asyncio.to_thread(read)
+
+    async def persist_secret_settings(values: dict[str, str]) -> None:
+        def persist() -> None:
+            for name, value in values.items():
+                secret_store.set(name, value)
+
+        await asyncio.to_thread(persist)
+
+    async def restore_secret_settings(values: dict[str, str]) -> list[str]:
+        def restore() -> list[str]:
+            errors = []
+            for name, value in values.items():
+                try:
+                    if value:
+                        secret_store.set(name, value)
+                    else:
+                        secret_store.delete(name)
+                except Exception as exc:
+                    errors.append(f"{name}: {exc}")
+            return errors
+
+        errors = await asyncio.to_thread(restore)
+        clear_settings_cache()
+        return errors
+
     async def apply_active_project(project_id: str) -> None:
         """Persist and apply the active project while the runtime mutation lock is held."""
         await asyncio.to_thread(ENV_PATH.touch, exist_ok=True)
@@ -708,6 +752,69 @@ def create_app(
     @app.get("/api/logs", response_model=list[AppLog])
     async def get_logs(after: Annotated[int, Query(ge=0)] = 0, level: str | None = None) -> list[AppLog]:
         return log_buffer.list(after=after, level=level or None)
+
+    @app.put("/api/settings", response_model=PublicSettings)
+    @finish_runtime_mutation("settings")
+    async def save_settings(payload: SettingsSave) -> PublicSettings:
+        async with runtime_mutation_guard():
+            payload_data = payload.model_dump(exclude_none=True)
+            env_values = {
+                field: value
+                for field, value in payload_data.items()
+                if field in ENV_KEYS
+            }
+            secret_values = {
+                field: value
+                for field, value in payload_data.items()
+                if field in {"steam_api_key", "steam_proxy_url", "neo4j_password"}
+            }
+            previous_env = {field: getattr(settings, field) for field in env_values}
+            try:
+                previous_secrets = await read_secret_settings(secret_values)
+            except SecretStorageError as exc:
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+
+            async def rollback() -> list[str]:
+                errors = await restore_env_settings(previous_env)
+                errors.extend(await restore_secret_settings(previous_secrets))
+                if not errors:
+                    try:
+                        await rebuild_runtime()
+                    except Exception as restore_exc:
+                        errors.append(f"runtime: {restore_exc}")
+                return errors
+
+            try:
+                await persist_env_settings(env_values)
+                await persist_secret_settings(secret_values)
+            except Exception as exc:
+                rollback_errors = await rollback()
+                log_buffer.append("error", "settings", f"批量配置写入失败: {exc}")
+                if rollback_errors:
+                    log_buffer.append(
+                        "error",
+                        "settings",
+                        f"批量配置回滚不完整: {'; '.join(rollback_errors)}",
+                    )
+                status_code = 400 if isinstance(exc, SecretStorageError) else 500
+                raise HTTPException(status_code=status_code, detail=safe_detail(exc)) from exc
+
+            try:
+                await rebuild_runtime()
+            except Exception as exc:
+                rollback_errors = await rollback()
+                if rollback_errors:
+                    log_buffer.append(
+                        "error",
+                        "settings",
+                        f"批量配置回滚不完整: {'; '.join(rollback_errors)}",
+                    )
+                raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
+
+            log_buffer.append("info", "settings", "普通配置与敏感配置已批量保存")
+            return await public_settings(
+                "配置已保存；如果修改了 APP_HOST 或 APP_PORT，需要重启服务后生效。"
+            )
 
     @app.patch("/api/settings", response_model=PublicSettings)
     @finish_runtime_mutation("settings")

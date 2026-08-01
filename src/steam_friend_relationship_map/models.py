@@ -190,6 +190,17 @@ class SettingsPatch(BaseModel):
         return value.replace("\n", "").replace("\r", "")
 
 
+class SettingsSave(SettingsPatch):
+    steam_api_key: str | None = Field(default=None, min_length=1)
+    steam_proxy_url: str | None = Field(default=None, min_length=1)
+    neo4j_password: str | None = Field(default=None, min_length=1)
+
+    @field_validator("steam_proxy_url")
+    @classmethod
+    def validate_proxy_secret(cls, value: str | None) -> str | None:
+        return normalize_proxy_url(value) if value is not None else None
+
+
 class SecretUpdate(BaseModel):
     name: Literal["steam_api_key", "steam_proxy_url", "neo4j_password"]
     value: str = Field(min_length=1)

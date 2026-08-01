@@ -26,6 +26,7 @@ from steam_friend_relationship_map.models import (
     GraphResponse,
 )
 from steam_friend_relationship_map.settings import Settings
+from steam_friend_relationship_map.secrets import SecretStorageError
 from steam_friend_relationship_map.steam import SteamApiError, SteamClient
 
 
@@ -272,6 +273,174 @@ def test_secret_api_does_not_echo_secret() -> None:
     body = response.json()
     assert body["steam_api_key_configured"] is True
     assert "super-secret" not in response.text
+
+
+def test_batch_settings_save_rebuilds_runtime_once_and_never_echoes_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    class CountingSchemaRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.schema_calls = 0
+
+        def ensure_schema(self) -> None:
+            self.schema_calls += 1
+
+    old_settings = Settings(default_max_depth=2)
+    new_settings = old_settings.model_copy(
+        update={
+            "default_max_depth": 3,
+            "steam_api_key": "new-steam-key",
+            "steam_proxy_url": "socks5://127.0.0.1:1080",
+            "neo4j_password": "new-neo4j-password",
+        }
+    )
+    settings_loader = MagicMock(return_value=new_settings)
+    env_writes: list[tuple[str, str]] = []
+
+    def record_set_key(_path: str, key: str, value: str, **_: object) -> None:
+        env_writes.append((key, value))
+
+    repo = CountingSchemaRepo()
+    store = FakeSecretStore()
+    monkeypatch.setattr(app_module, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "set_key", record_set_key)
+    monkeypatch.setattr(app_module, "get_settings", settings_loader)
+    app = create_app(
+        settings=old_settings,
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=store,
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.put(
+        "/api/settings",
+        json={
+            "default_max_depth": 3,
+            "steam_api_key": "new-steam-key",
+            "steam_proxy_url": "socks5://127.0.0.1:1080",
+            "neo4j_password": "new-neo4j-password",
+        },
+    )
+
+    assert response.status_code == 200
+    assert env_writes == [("DEFAULT_MAX_DEPTH", "3")]
+    assert store.values == {
+        "steam_api_key": "new-steam-key",
+        "steam_proxy_url": "socks5://127.0.0.1:1080",
+        "neo4j_password": "new-neo4j-password",
+    }
+    assert settings_loader.call_count == 1
+    assert repo.schema_calls == 2  # startup plus one combined runtime rebuild
+    assert "new-steam-key" not in response.text
+    assert "new-neo4j-password" not in response.text
+
+
+def test_batch_settings_save_rolls_back_env_and_partial_secret_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    class PartiallyFailingSecretStore(FakeSecretStore):
+        def set(self, name: str, value: str) -> None:
+            if name == "neo4j_password" and value == "bad-password":
+                raise SecretStorageError("credential write failed")
+            super().set(name, value)
+
+    env_values = {"DEFAULT_MAX_DEPTH": "2"}
+
+    def write_env(_path: str, key: str, value: str, **_: object) -> None:
+        env_values[key] = value
+
+    def load_settings() -> Settings:
+        return Settings(default_max_depth=int(env_values["DEFAULT_MAX_DEPTH"]))
+
+    store = PartiallyFailingSecretStore()
+    store.values = {
+        "steam_api_key": "old-steam-key",
+        "neo4j_password": "old-password",
+    }
+    monkeypatch.setattr(app_module, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "set_key", write_env)
+    monkeypatch.setattr(app_module, "get_settings", load_settings)
+    app = create_app(
+        settings=Settings(default_max_depth=2),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=store,
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.put(
+        "/api/settings",
+        json={
+            "default_max_depth": 3,
+            "steam_api_key": "new-steam-key",
+            "neo4j_password": "bad-password",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "credential write failed" in response.json()["detail"]
+    assert env_values == {"DEFAULT_MAX_DEPTH": "2"}
+    assert store.values == {
+        "steam_api_key": "old-steam-key",
+        "neo4j_password": "old-password",
+    }
+    assert client.get("/api/settings").json()["default_max_depth"] == 2
+
+
+def test_batch_settings_save_rolls_back_all_values_when_database_reconnect_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    old_settings = Settings(kuzu_db_path="data/current", steam_api_key="old-key")
+    new_settings = old_settings.model_copy(
+        update={"kuzu_db_path": "data/missing", "steam_api_key": "new-key"}
+    )
+    old_repo = TrackingRepo()
+    candidate_repo = TrackingRepo(RuntimeError("unable to open database"))
+    store = FakeSecretStore()
+    store.values["steam_api_key"] = "old-key"
+    settings_loader = MagicMock(side_effect=[new_settings, old_settings])
+    env_writes: list[tuple[str, str]] = []
+
+    def record_set_key(_path: str, key: str, value: str, **_: object) -> None:
+        env_writes.append((key, value))
+
+    monkeypatch.setattr(app_module, "set_key", record_set_key)
+    monkeypatch.setattr(app_module, "get_settings", settings_loader)
+    monkeypatch.setattr(
+        app_module,
+        "get_repository",
+        MagicMock(side_effect=[old_repo, candidate_repo]),
+    )
+    app = create_app(
+        settings=old_settings,
+        steam=FakeSteam(),
+        secret_store=store,
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.put(
+        "/api/settings",
+        json={"kuzu_db_path": "data/missing", "steam_api_key": "new-key"},
+    )
+
+    assert response.status_code == 400
+    assert app.state.repo is old_repo
+    assert candidate_repo.close_count == 1
+    assert store.values["steam_api_key"] == "old-key"
+    assert env_writes == [
+        ("KUZU_DB_PATH", "data/missing"),
+        ("KUZU_DB_PATH", "data/current"),
+    ]
+    assert settings_loader.call_count == 2
 
 
 def test_public_settings_reports_explicit_runtime_secrets_without_echoing_them() -> None:
