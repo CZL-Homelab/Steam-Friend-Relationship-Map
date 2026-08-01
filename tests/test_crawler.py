@@ -5,7 +5,14 @@ import asyncio
 import pytest
 
 from steam_friend_relationship_map.crawler import CrawlManager
-from steam_friend_relationship_map.models import CrawlCreate, CrawlRun, CrawlStatus, FriendEdge, SteamUserRecord
+from steam_friend_relationship_map.models import (
+    CrawlCreate,
+    CrawlRun,
+    CrawlStatus,
+    FriendEdge,
+    FriendListCacheUpdate,
+    SteamUserRecord,
+)
 from steam_friend_relationship_map.steam import FriendListResult, placeholder_user
 
 
@@ -141,6 +148,24 @@ class BatchCachedFakeRepo(CachedFakeRepo):
         }
 
 
+class BatchStatusFakeRepo(FakeRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.status_batches: list[list[str]] = []
+
+    def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
+        raise AssertionError("batch status persistence should not use the singular method")
+
+    def mark_friend_list_statuses(
+        self,
+        updates: list[FriendListCacheUpdate],
+        project_id: str = "default",
+    ) -> None:
+        self.status_batches.append([update.steam_id for update in updates])
+        for update in updates:
+            self.statuses[update.steam_id] = update.status
+
+
 class HangingSteam(FakeSteam):
     def __init__(self) -> None:
         super().__init__()
@@ -215,6 +240,27 @@ async def test_crawl_reads_each_friend_cache_batch_with_one_repository_call() ->
     assert lookups[0].friend_ids == ("known",)
     assert lookups[2].friend_ids == ("friend",)
     assert steam.peak_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_persists_each_api_friend_batch_with_one_repository_call() -> None:
+    repo = BatchStatusFakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=2,
+            max_nodes=10,
+            delay_ms=0,
+            request_concurrency=2,
+        )
+    )
+    await manager.controls[run.id].task
+
+    assert repo.runs[run.id].status == CrawlStatus.completed
+    assert repo.status_batches == [["root"], ["a", "b"]]
+    assert repo.statuses == {"root": "public", "a": "public", "b": "public"}
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,14 @@ class FriendEdge(BaseModel):
     source_depth: int
 
 
+class FriendListCacheUpdate(BaseModel):
+    steam_id: str
+    status: str
+    friend_count: int | None = None
+    friend_count_status: str | None = None
+    friend_ids: list[str] | None = None
+
+
 class CrawlCreate(BaseModel):
     root_url: str = Field(min_length=1)
     max_depth: int = Field(default=2, ge=1, le=4)

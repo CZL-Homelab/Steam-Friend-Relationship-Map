@@ -7,7 +7,16 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .logs import AppLogBuffer
-from .models import CrawlCreate, CrawlEvent, CrawlRun, CrawlStatus, FriendEdge, SteamUserRecord, utc_now_iso
+from .models import (
+    CrawlCreate,
+    CrawlEvent,
+    CrawlRun,
+    CrawlStatus,
+    FriendEdge,
+    FriendListCacheUpdate,
+    SteamUserRecord,
+    utc_now_iso,
+)
 from .graph_repo import IGraphRepository
 from .steam import SteamApiError, SteamClient, placeholder_user
 from .rate_limiter import AdaptiveRateLimiter
@@ -232,6 +241,34 @@ class CrawlManager:
 
         return [lookups[steam_id] for steam_id in steam_ids]
 
+    def _persist_api_friend_lists(self, lookups: list[FriendListLookup]) -> None:
+        updates = [
+            FriendListCacheUpdate(
+                steam_id=lookup.steam_id,
+                status=lookup.status,
+                friend_count=len(lookup.friend_ids) if lookup.status == "public" else None,
+                friend_count_status=lookup.status,
+                friend_ids=list(lookup.friend_ids),
+            )
+            for lookup in lookups
+            if lookup.source == "api" and lookup.error is None
+        ]
+        if not updates:
+            return
+        batch_writer = getattr(self.repo, "mark_friend_list_statuses", None)
+        if callable(batch_writer):
+            batch_writer(updates, self.project_id)
+            return
+        for update in updates:
+            self.repo.mark_friend_list_status(
+                update.steam_id,
+                update.status,
+                friend_count=update.friend_count,
+                friend_count_status=update.friend_count_status or "unknown",
+                friend_ids=update.friend_ids or [],
+                project_id=self.project_id,
+            )
+
     async def _run_crawl(self, run: CrawlRun, payload: CrawlCreate, control: CrawlControl) -> None:
         def on_delay_change(old_d: float, new_d: float, reason: str):
             reason_cn = "请求成功" if reason == "success" else "发生重试/受限"
@@ -356,6 +393,7 @@ class CrawlManager:
                     lookups = await self._load_friend_list_batch(batch_ids, payload.cache_valid_days)
                     if control.force_stop:
                         break
+                    self._persist_api_friend_lists(lookups)
 
                     for lookup in lookups:
                         current_id = lookup.steam_id
@@ -379,15 +417,12 @@ class CrawlManager:
 
                         if lookup.status == "private":
                             private_count += 1
-                            if lookup.source == "api":
-                                self.repo.mark_friend_list_status(current_id, "private", friend_count=None, friend_count_status="private", friend_ids=[], project_id=self.project_id)
                             self.append_event(run.id, "warn", "private", f"[{'缓存' if lookup.source == 'cache' else 'API'}] 私密: {current_id}")
                             self.repo.update_crawl_run(run.id, private_count=private_count)
                             continue
 
                         friend_ids = list(lookup.friend_ids)
                         if lookup.source == "api":
-                            self.repo.mark_friend_list_status(current_id, "public", friend_count=len(friend_ids), friend_count_status="public", friend_ids=friend_ids, project_id=self.project_id)
                             self.append_event(run.id, "info", "expand", f"  └ API返回: {len(friend_ids)} 位好友")
                         else:
                             self.append_event(run.id, "info", "expand", f"  └ 缓存命中: {len(friend_ids)} 位好友")
@@ -515,6 +550,7 @@ class CrawlManager:
                         if uses_friend_count_filter
                         else []
                     )
+                    self._persist_api_friend_lists(lookups)
                     lookup_by_id = {lookup.steam_id: lookup for lookup in lookups}
 
                     for friend_id in batch_ids:
@@ -555,15 +591,6 @@ class CrawlManager:
                                     consecutive_auth_errors = 0
                                 if lookup.status == "public":
                                     friend_count = len(lookup.friend_ids)
-                                if lookup.source == "api":
-                                    self.repo.mark_friend_list_status(
-                                        friend_id,
-                                        lookup.status,
-                                        friend_count=friend_count,
-                                        friend_count_status=lookup.status,
-                                        friend_ids=list(lookup.friend_ids),
-                                        project_id=self.project_id,
-                                    )
 
                             if not self._friend_count_matches(friend_count, friend_count_status, payload):
                                 friend_count_filtered_count += 1

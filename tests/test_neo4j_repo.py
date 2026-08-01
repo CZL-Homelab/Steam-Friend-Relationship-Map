@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from steam_friend_relationship_map.models import FriendEdge, SteamUserRecord
+from steam_friend_relationship_map.models import (
+    FriendEdge,
+    FriendListCacheUpdate,
+    SteamUserRecord,
+)
 from steam_friend_relationship_map.neo4j_repo import Neo4jRepositoryImpl
 
 
@@ -159,3 +163,28 @@ def test_neo4j_batches_friend_cache_reads_and_ignores_incomplete_rows() -> None:
     driver.query_params.clear()
     assert repo.get_cached_friend_lists(["public"], 0, "project-a") == {}
     assert driver.queries == []
+
+
+def test_neo4j_batches_friend_cache_updates() -> None:
+    repo, driver = _repo()
+    updates = [
+        FriendListCacheUpdate(
+            steam_id=f"user-{index}",
+            status="private",
+            friend_count=None,
+            friend_count_status="private",
+            friend_ids=[],
+        )
+        for index in range(1001)
+    ]
+
+    repo.mark_friend_list_statuses(updates, "project-a")
+
+    batch_queries = [
+        (query, params)
+        for query, params in zip(driver.queries, driver.query_params, strict=True)
+        if "UNWIND $updates AS update" in query
+    ]
+    assert len(batch_queries) == 2
+    assert len(batch_queries[0][1]["updates"]) == 1000
+    assert len(batch_queries[1][1]["updates"]) == 1

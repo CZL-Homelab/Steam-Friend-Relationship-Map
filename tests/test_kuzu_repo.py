@@ -12,6 +12,7 @@ from steam_friend_relationship_map.models import (
     CrawlRun,
     CrawlStatus,
     FriendEdge,
+    FriendListCacheUpdate,
     ProjectCreate,
     SteamUserRecord,
 )
@@ -335,6 +336,34 @@ def test_kuzu_batches_large_graph_writes_and_deduplicates_relationships(
         {"project_id": "batch-project"},
     ).get_next()[0]
     assert patched_count == 1002
+
+    counting.queries.clear()
+    repo.mark_friend_list_statuses(
+        [
+            FriendListCacheUpdate(
+                steam_id=steam_id,
+                status="private",
+                friend_count=None,
+                friend_count_status="private",
+                friend_ids=[],
+            )
+            for steam_id in steam_ids
+        ],
+        project_id="batch-project",
+    )
+    cache_write_queries = [
+        query for query in counting.queries if "UNWIND $rows AS row" in query
+    ]
+    assert len(cache_write_queries) == 3
+    private_count = connection.execute(
+        """
+        MATCH (u:SteamUser)-[:IN_PROJECT]->(p:Project)
+        WHERE p.id = $project_id AND u.friend_list_status = 'private'
+        RETURN count(u)
+        """,
+        {"project_id": "batch-project"},
+    ).get_next()[0]
+    assert private_count == 1002
 
 
 def test_kuzu_batched_user_write_rolls_back_all_chunks(

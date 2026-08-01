@@ -10,6 +10,7 @@ from .models import (
     ExportResponse,
     FriendCircleAnalysisResponse,
     FriendEdge,
+    FriendListCacheUpdate,
     GraphNode,
     GraphResponse,
     ProjectCreate,
@@ -88,6 +89,20 @@ class IGraphRepository(ABC):
     ) -> None:
         """更新用户的关系抓取状态及好友关联，并建立好友关系边。"""
         pass
+
+    def mark_friend_list_statuses(
+        self, updates: Iterable[FriendListCacheUpdate], project_id: str
+    ) -> None:
+        """批量写回好友列表缓存；默认逐条回退以兼容外部仓储实现。"""
+        for update in updates:
+            self.mark_friend_list_status(
+                update.steam_id,
+                update.status,
+                friend_count=update.friend_count,
+                friend_count_status=update.friend_count_status or "unknown",
+                friend_ids=update.friend_ids or [],
+                project_id=project_id,
+            )
 
     @abstractmethod
     def get_cached_friend_list(

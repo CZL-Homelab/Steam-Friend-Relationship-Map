@@ -15,6 +15,7 @@ from .models import (
     FriendCircleAnalysisResponse,
     FriendCircleCandidate,
     FriendEdge,
+    FriendListCacheUpdate,
     GraphEdge,
     GraphNode,
     GraphResponse,
@@ -384,28 +385,53 @@ class Neo4jRepositoryImpl(IGraphRepository):
         friend_ids: list[str] | None = None,
         project_id: str = "",
     ) -> None:
+        self.mark_friend_list_statuses(
+            [
+                FriendListCacheUpdate(
+                    steam_id=steam_id,
+                    status=status,
+                    friend_count=friend_count,
+                    friend_count_status=friend_count_status,
+                    friend_ids=friend_ids,
+                )
+            ],
+            project_id,
+        )
+
+    def mark_friend_list_statuses(
+        self, updates: Iterable[FriendListCacheUpdate], project_id: str
+    ) -> None:
+        rows = [update.model_dump(mode="json") for update in updates]
+        if not rows:
+            return
+        now = utc_now_iso()
+        batch_size = 1000
         with self.driver.session() as session:
-            session.run(
-                """
+            for offset in range(0, len(rows), batch_size):
+                session.run(
+                    """
                 MERGE (p:Project {id: $project_id})
                 ON CREATE SET p.name = $project_name, p.created_at = $now
-                MERGE (u:SteamUser {steam_id: $steam_id})
-                SET u.friend_list_status = $status,
+                WITH p
+                UNWIND $updates AS update
+                MERGE (u:SteamUser {steam_id: update.steam_id})
+                ON CREATE SET u.first_seen_at = $now
+                SET u.friend_list_status = update.status,
                     u.project_id = CASE
                         WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
                         ELSE u.project_id
                     END,
                     u.friend_count = CASE
-                        WHEN $friend_count IS NULL THEN u.friend_count
-                        ELSE $friend_count
+                        WHEN update.friend_count IS NULL THEN u.friend_count
+                        ELSE update.friend_count
                     END,
                     u.friend_count_status = CASE
-                        WHEN $friend_count_status IS NULL THEN coalesce(u.friend_count_status, "unknown")
-                        ELSE $friend_count_status
+                        WHEN update.friend_count_status IS NULL THEN coalesce(u.friend_count_status, "unknown")
+                        ELSE update.friend_count_status
                     END,
                     u.friend_ids = CASE
-                        WHEN $friend_ids IS NULL THEN u.friend_ids
-                        ELSE $friend_ids
+                        WHEN update.friend_ids IS NULL THEN u.friend_ids
+                        ELSE update.friend_ids
                     END,
                     u.friend_list_fetched_at = $now,
                     u.last_seen_at = $now
@@ -416,16 +442,12 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     membership.prior_pool_link_count = coalesce(membership.prior_pool_link_count, 0),
                     membership.root_closeness_score = coalesce(membership.root_closeness_score, 0),
                     membership.last_scored_crawl_id = coalesce(membership.last_scored_crawl_id, "")
-                """,
-                steam_id=steam_id,
-                status=status,
-                friend_count=friend_count,
-                friend_count_status=friend_count_status,
-                friend_ids=friend_ids,
-                project_id=project_id,
-                project_name="默认项目" if project_id == "default" else project_id,
-                now=utc_now_iso(),
-            ).consume()
+                    """,
+                    updates=rows[offset : offset + batch_size],
+                    project_id=project_id,
+                    project_name="默认项目" if project_id == "default" else project_id,
+                    now=now,
+                ).consume()
 
     def get_cached_friend_list(
         self, steam_id: str, valid_days: int, project_id: str

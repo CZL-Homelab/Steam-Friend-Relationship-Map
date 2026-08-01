@@ -18,6 +18,7 @@ from .models import (
     FriendCircleAnalysisResponse,
     FriendCircleCandidate,
     FriendEdge,
+    FriendListCacheUpdate,
     GraphEdge,
     GraphNode,
     GraphResponse,
@@ -618,47 +619,53 @@ class KuzuRepositoryImpl(IGraphRepository):
         friend_ids: list[str],
         project_id: str,
     ) -> None:
+        self.mark_friend_list_statuses(
+            [
+                FriendListCacheUpdate(
+                    steam_id=steam_id,
+                    status=status,
+                    friend_count=friend_count,
+                    friend_count_status=friend_count_status,
+                    friend_ids=friend_ids,
+                )
+            ],
+            project_id,
+        )
+
+    def mark_friend_list_statuses(
+        self, updates: Iterable[FriendListCacheUpdate], project_id: str
+    ) -> None:
+        rows = [update.model_dump(mode="json") for update in updates]
+        if not rows:
+            return
         now = utc_now_iso()
         conn = self._get_conn()
         self._ensure_project_node(conn, project_id)
-        conn.execute(
-            """
-            MERGE (u:SteamUser {steam_id: $steam_id})
-            ON CREATE SET u.first_seen_at = $now
-            SET u.friend_list_status = $status,
+        query = """
+            MATCH (p:Project {id: $project_id})
+            UNWIND $rows AS row
+            MERGE (u:SteamUser {steam_id: row.steam_id})
+            ON CREATE SET u.first_seen_at = $now,
+                          u.friend_ids = CAST([] AS STRING[])
+            SET u.friend_list_status = row.status,
                 u.project_id = CASE
                     WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
                     ELSE u.project_id
                 END,
                 u.friend_count = CASE
-                    WHEN $friend_count IS NULL THEN u.friend_count
-                    ELSE $friend_count
+                    WHEN row.friend_count IS NULL THEN u.friend_count
+                    ELSE CAST(row.friend_count AS INT64)
                 END,
                 u.friend_count_status = CASE
-                    WHEN $friend_count_status IS NULL THEN coalesce(u.friend_count_status, 'unknown')
-                    ELSE $friend_count_status
+                    WHEN row.friend_count_status IS NULL THEN coalesce(u.friend_count_status, 'unknown')
+                    ELSE row.friend_count_status
                 END,
                 u.friend_ids = CASE
-                    WHEN CAST($friend_ids AS STRING[]) IS NULL THEN u.friend_ids
-                    ELSE CAST($friend_ids AS STRING[])
+                    WHEN row.friend_ids IS NULL THEN u.friend_ids
+                    ELSE CAST(row.friend_ids AS STRING[])
                 END,
                 u.friend_list_fetched_at = $now,
                 u.last_seen_at = $now
-            """,
-            {
-                "steam_id": steam_id,
-                "status": status,
-                "friend_count": friend_count,
-                "friend_count_status": friend_count_status,
-                "friend_ids": friend_ids,
-                "project_id": project_id,
-                "now": now,
-            }
-        )
-        conn.execute(
-            """
-            MATCH (u:SteamUser {steam_id: $steam_id})
-            MATCH (p:Project {id: $project_id})
             MERGE (u)-[membership:IN_PROJECT]->(p)
             SET membership.note = coalesce(membership.note, ''),
                 membership.tags = coalesce(membership.tags, CAST([] AS STRING[])),
@@ -666,9 +673,25 @@ class KuzuRepositoryImpl(IGraphRepository):
                 membership.prior_pool_link_count = coalesce(membership.prior_pool_link_count, 0),
                 membership.root_closeness_score = coalesce(membership.root_closeness_score, 0.0),
                 membership.last_scored_crawl_id = coalesce(membership.last_scored_crawl_id, '')
-            """,
-            {"steam_id": steam_id, "project_id": project_id},
-        )
+        """
+        try:
+            conn.execute("BEGIN TRANSACTION")
+            for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
+                conn.execute(
+                    query,
+                    {
+                        "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
+                        "project_id": project_id,
+                        "now": now,
+                    },
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
 
     def get_cached_friend_list(
         self, steam_id: str, valid_days: int, project_id: str
