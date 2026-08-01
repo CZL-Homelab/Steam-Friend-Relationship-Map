@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -285,6 +286,7 @@ def create_app(
     steam = steam or SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
     runtime_mutation_lock = asyncio.Lock()
+    started_runtime_mutations: set[asyncio.Task[Any]] = set()
 
     async def call_repository(
         method_name: str,
@@ -333,7 +335,49 @@ def create_app(
                     status_code=400,
                     detail="当前有活跃的抓取任务在运行，请先停止任务后再修改运行时状态。",
                 )
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                started_runtime_mutations.add(current_task)
             yield
+
+    def finish_runtime_mutation(source: str):  # type: ignore[no-untyped-def]
+        """Let started writes finish, but cancel writes still waiting for the lock."""
+        def decorator(function):  # type: ignore[no-untyped-def]
+            @wraps(function)
+            async def wrapped(*args, **kwargs):  # type: ignore[no-untyped-def]
+                async def operation():  # type: ignore[no-untyped-def]
+                    try:
+                        return await function(*args, **kwargs)
+                    finally:
+                        current_task = asyncio.current_task()
+                        if current_task is not None:
+                            started_runtime_mutations.discard(current_task)
+
+                task = asyncio.create_task(operation())
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    if task not in started_runtime_mutations:
+                        task.cancel()
+
+                    def report_late_failure(completed: asyncio.Task[Any]) -> None:
+                        try:
+                            completed.result()
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as exc:
+                            log_buffer.append(
+                                "error",
+                                source,
+                                f"Cancelled runtime mutation later failed: {log_buffer.redact(str(exc))}",
+                            )
+
+                    task.add_done_callback(report_late_failure)
+                    raise
+
+            return wrapped
+
+        return decorator
 
     def restore_env_settings(values: dict[str, Any]) -> list[str]:
         errors = []
@@ -567,6 +611,7 @@ def create_app(
         return log_buffer.list(after=after, level=level or None)
 
     @app.patch("/api/settings", response_model=PublicSettings)
+    @finish_runtime_mutation("settings")
     async def patch_settings(payload: SettingsPatch) -> PublicSettings:
         async with runtime_mutation_guard():
             ENV_PATH.touch(exist_ok=True)
@@ -604,6 +649,7 @@ def create_app(
             return public_settings(message)
 
     @app.post("/api/settings/secrets", response_model=PublicSettings)
+    @finish_runtime_mutation("settings")
     async def set_secret(payload: SecretUpdate) -> PublicSettings:
         async with runtime_mutation_guard():
             try:
@@ -632,6 +678,7 @@ def create_app(
             return public_settings("敏感配置已保存到系统凭据库。")
 
     @app.delete("/api/settings/secrets/{name}", response_model=PublicSettings)
+    @finish_runtime_mutation("settings")
     async def delete_secret(name: str) -> PublicSettings:
         async with runtime_mutation_guard():
             try:
@@ -712,6 +759,7 @@ def create_app(
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/projects", response_model=ProjectInfo)
+    @finish_runtime_mutation("project")
     async def create_project(payload: ProjectCreate) -> ProjectInfo:
         async with runtime_mutation_guard():
             pid = await asyncio.to_thread(repo.create_project, payload)
@@ -719,6 +767,7 @@ def create_app(
         return ProjectInfo(id=pid, name=payload.name, created_at=utc_now_iso())
 
     @app.delete("/api/projects/{project_id}")
+    @finish_runtime_mutation("project")
     async def delete_project(project_id: str) -> dict[str, bool]:
         async with runtime_mutation_guard():
             if project_id == "default":
@@ -734,6 +783,7 @@ def create_app(
             return {"ok": True}
 
     @app.post("/api/projects/switch")
+    @finish_runtime_mutation("project")
     async def switch_project(payload: ProjectSwitch) -> ProjectListResponse:
         async with runtime_mutation_guard():
             pid = sanitize_env_value(payload.project_id).strip()

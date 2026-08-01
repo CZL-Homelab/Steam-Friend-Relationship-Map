@@ -1056,6 +1056,112 @@ async def test_cancelled_queued_repository_request_never_starts() -> None:
     assert repo.calls == 1
 
 
+async def test_cancelled_started_runtime_mutation_finishes_before_unlocking() -> None:
+    class BlockingProjectRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.created: list[str] = []
+
+        def create_project(self, payload: object, project_id: str | None = None) -> str:
+            self.started.set()
+            self.release.wait(timeout=2)
+            self.created.append(project_id or "created-project")
+            return project_id or "created-project"
+
+    repo = BlockingProjectRepo()
+    app = create_app(
+        settings=Settings(),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    transport = ASGITransport(app=app)
+    safety_release = threading.Timer(1, repo.release.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            mutation_request = asyncio.create_task(
+                client.post("/api/projects", json={"name": "created-project"})
+            )
+            deadline = time.monotonic() + 0.5
+            while not repo.started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert repo.started.is_set()
+
+            mutation_request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await mutation_request
+
+            health_request = asyncio.create_task(client.get("/api/health"))
+            await asyncio.sleep(0.05)
+            assert not health_request.done()
+
+            repo.release.set()
+            health_response = await health_request
+    finally:
+        repo.release.set()
+        safety_release.cancel()
+
+    assert health_response.status_code == 200
+    assert repo.created == ["created-project"]
+
+
+async def test_cancelled_queued_runtime_mutation_never_starts() -> None:
+    class BlockingGraphAndProjectRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.graph_started = threading.Event()
+            self.release_graph = threading.Event()
+            self.project_calls = 0
+
+        def get_graph(self, **kwargs: object) -> GraphResponse:
+            self.graph_started.set()
+            self.release_graph.wait(timeout=2)
+            return super().get_graph(**kwargs)
+
+        def create_project(self, payload: object, project_id: str | None = None) -> str:
+            self.project_calls += 1
+            return project_id or "queued-project"
+
+    repo = BlockingGraphAndProjectRepo()
+    app = create_app(
+        settings=Settings(),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    transport = ASGITransport(app=app)
+    safety_release = threading.Timer(1, repo.release_graph.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            graph_request = asyncio.create_task(client.get("/api/graph"))
+            deadline = time.monotonic() + 0.5
+            while not repo.graph_started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert repo.graph_started.is_set()
+
+            mutation_request = asyncio.create_task(
+                client.post("/api/projects", json={"name": "queued-project"})
+            )
+            await asyncio.sleep(0.05)
+            mutation_request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await mutation_request
+
+            repo.release_graph.set()
+            graph_response = await graph_request
+            await asyncio.sleep(0.05)
+    finally:
+        repo.release_graph.set()
+        safety_release.cancel()
+
+    assert graph_response.status_code == 200
+    assert repo.project_calls == 0
+
+
 def test_project_switch_rolls_back_auto_created_project_on_reload_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
