@@ -28,15 +28,15 @@ class AdaptiveRateLimiter:
         self._next_request_at = 0.0
 
     async def wait(self) -> None:
-        """Reserve a request start time while allowing in-flight requests to overlap."""
+        """Wait until a request can atomically claim the next start time."""
         loop = asyncio.get_running_loop()
-        async with self.lock:
-            delay = self.current_delay_ms / 1000.0
-            now = loop.time()
-            scheduled_at = max(now, self._next_request_at)
-            self._next_request_at = scheduled_at + delay
-        wait_seconds = scheduled_at - now
-        if wait_seconds > 0:
+        while True:
+            async with self.lock:
+                now = loop.time()
+                wait_seconds = self._next_request_at - now
+                if wait_seconds <= 0:
+                    self._next_request_at = now + self.current_delay_ms / 1000.0
+                    return
             await asyncio.sleep(wait_seconds)
 
     async def report_success(self) -> None:

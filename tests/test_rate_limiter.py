@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from steam_friend_relationship_map.steam import SteamClient, SteamApiError
 async def test_rate_limiter_starts_immediately_then_spaces_requests() -> None:
     limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
     loop = MagicMock()
-    loop.time.side_effect = [10.0, 10.0]
+    loop.time.side_effect = [10.0, 10.0, 10.3]
 
     with (
         patch("steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop", return_value=loop),
@@ -21,6 +22,79 @@ async def test_rate_limiter_starts_immediately_then_spaces_requests() -> None:
 
         await limiter.wait()
         sleep.assert_awaited_once_with(pytest.approx(0.3))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_wait_does_not_reserve_a_phantom_request_slot() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
+    loop = MagicMock()
+    loop.time.return_value = 10.0
+    sleep_started = asyncio.Event()
+
+    async def blocked_sleep(_: float) -> None:
+        sleep_started.set()
+        await asyncio.Future()
+
+    with (
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
+            return_value=loop,
+        ),
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.sleep",
+            side_effect=blocked_sleep,
+        ),
+    ):
+        await limiter.wait()
+        waiting = asyncio.create_task(limiter.wait())
+        await sleep_started.wait()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    assert limiter._next_request_at == pytest.approx(10.3)
+
+
+@pytest.mark.asyncio
+async def test_waiting_request_rechecks_backoff_after_waking() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
+    clock = 10.0
+    sleep_calls: list[float] = []
+    first_sleep_started = asyncio.Event()
+    release_first_sleep = asyncio.Event()
+
+    class Loop:
+        @staticmethod
+        def time() -> float:
+            return clock
+
+    async def advancing_sleep(delay: float) -> None:
+        nonlocal clock
+        sleep_calls.append(delay)
+        if len(sleep_calls) == 1:
+            first_sleep_started.set()
+            await release_first_sleep.wait()
+        clock += delay
+
+    with (
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
+            return_value=Loop(),
+        ),
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.sleep",
+            side_effect=advancing_sleep,
+        ),
+    ):
+        await limiter.wait()
+        waiting = asyncio.create_task(limiter.wait())
+        await first_sleep_started.wait()
+        await limiter.report_backoff(retry_after_ms=1000.0)
+        release_first_sleep.set()
+        await waiting
+
+    assert sleep_calls == [pytest.approx(0.3), pytest.approx(0.7)]
+    assert limiter._next_request_at == pytest.approx(11.45)
 
 
 @pytest.mark.asyncio
