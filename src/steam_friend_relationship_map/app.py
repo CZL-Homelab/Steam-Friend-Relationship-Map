@@ -361,6 +361,7 @@ def create_app(
     steam = steam or SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
     runtime_mutation_lock = asyncio.Lock()
+    network_analysis_lock = asyncio.Lock()
     started_runtime_mutations: set[asyncio.Task[Any]] = set()
 
     async def run_runtime_operation(operation, source: str) -> Any:  # type: ignore[no-untyped-def]
@@ -408,6 +409,48 @@ def create_app(
             return await asyncio.to_thread(method, *args, **kwargs)
 
         return await run_runtime_operation(operation, "repository operation")
+
+    async def calculate_network_analysis(
+        data: ExportResponse,
+        *,
+        limit: int,
+        resolution: float,
+    ) -> NetworkAnalysisResponse:
+        """Run at most one non-cancellable NetworkX worker at a time."""
+        started = asyncio.Event()
+
+        async def operation() -> NetworkAnalysisResponse:
+            async with network_analysis_lock:
+                started.set()
+                return await asyncio.to_thread(
+                    analyze_network,
+                    data,
+                    limit=limit,
+                    resolution=resolution,
+                )
+
+        task = asyncio.create_task(operation())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not started.is_set():
+                task.cancel()
+            else:
+                def report_late_failure(completed: asyncio.Task[NetworkAnalysisResponse]) -> None:
+                    try:
+                        completed.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:
+                        log_buffer.append(
+                            "warn",
+                            "analysis",
+                            "Cancelled network analysis later failed: "
+                            f"{log_buffer.redact(str(exc))}",
+                        )
+
+                task.add_done_callback(report_late_failure)
+            raise
 
     @asynccontextmanager
     async def runtime_mutation_guard() -> AsyncIterator[None]:
@@ -723,6 +766,7 @@ def create_app(
     app.state.steam = steam
     app.state.manager = manager
     app.state.runtime_mutation_lock = runtime_mutation_lock
+    app.state.network_analysis_lock = network_analysis_lock
     app.state.logs = log_buffer
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR, html=True), name="static")
@@ -1310,8 +1354,7 @@ def create_app(
     ) -> NetworkAnalysisResponse:
         try:
             exported = await call_repository("export_graph", project_scoped=True)
-            return await asyncio.to_thread(
-                analyze_network,
+            return await calculate_network_analysis(
                 exported,
                 limit=limit,
                 resolution=resolution,

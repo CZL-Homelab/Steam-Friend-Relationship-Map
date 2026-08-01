@@ -26,6 +26,7 @@ from steam_friend_relationship_map.models import (
     GraphEdge,
     GraphNode,
     GraphResponse,
+    NetworkAnalysisResponse,
 )
 from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.secrets import SecretStorageError
@@ -978,6 +979,62 @@ def test_network_analysis_errors_return_json_detail() -> None:
 
     assert response.status_code == 500
     assert response.json()["detail"] == "analysis export failed"
+
+
+async def test_cancelled_network_analysis_finishes_before_next_worker_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls: list[int] = []
+
+    def blocking_analysis(*_: object, **__: object) -> NetworkAnalysisResponse:
+        calls.append(threading.get_ident())
+        if len(calls) == 1:
+            first_started.set()
+            release_first.wait(timeout=2)
+        return NetworkAnalysisResponse()
+
+    monkeypatch.setattr(app_module, "analyze_network", blocking_analysis)
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    transport = ASGITransport(app=app)
+    safety_release = threading.Timer(1, release_first.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first_request = asyncio.create_task(client.get("/api/analysis/network"))
+            deadline = time.monotonic() + 0.5
+            while not first_started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert first_started.is_set()
+
+            first_request.cancel()
+            second_request = asyncio.create_task(client.get("/api/analysis/network"))
+            await asyncio.sleep(0.05)
+            assert len(calls) == 1
+            assert not second_request.done()
+
+            release_first.set()
+            first_result = await asyncio.gather(
+                first_request,
+                return_exceptions=True,
+            )
+            second_response = await asyncio.wait_for(second_request, timeout=1)
+    finally:
+        release_first.set()
+        safety_release.cancel()
+
+    assert isinstance(first_result[0], asyncio.CancelledError)
+    assert second_response.status_code == 200
+    assert len(calls) == 2
 
 
 def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
