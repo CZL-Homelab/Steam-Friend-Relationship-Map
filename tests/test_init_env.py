@@ -5,7 +5,9 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
+from steam_friend_relationship_map import __main__ as main_module
 from steam_friend_relationship_map.__main__ import init_env
 from steam_friend_relationship_map.settings import Settings
 
@@ -27,6 +29,26 @@ def test_settings_accepts_python_field_names() -> None:
 def test_settings_rejects_invalid_proxy_scheme() -> None:
     with pytest.raises(ValueError, match="proxy URL"):
         Settings(steam_proxy_url="ftp://127.0.0.1:21")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("graph_db_engine", "sqlite"),
+        ("kuzu_db_path", ""),
+        ("kuzu_buffer_pool_size_gb", 0),
+        ("kuzu_buffer_pool_size_gb", 65),
+        ("app_host", ""),
+        ("app_port", 0),
+        ("app_port", 65536),
+        ("active_project", ""),
+    ],
+)
+def test_settings_rejects_values_that_cannot_start_safely(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(**{field: value})
 
 
 def test_init_env_non_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,3 +136,63 @@ def test_init_env_with_example_template(tmp_path: Path, monkeypatch: pytest.Monk
     assert "GRAPH_DB_ENGINE=kuzu" in content
     assert "APP_PORT=8088" in content
     assert "DEFAULT_MAX_DEPTH=2" in content
+
+
+def test_init_env_preserves_existing_file_when_atomic_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("APP_PORT=8123\nACTIVE_PROJECT=existing\n", encoding="utf-8")
+
+    def fail_replace(_source: object, _target: object) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(main_module.os, "replace", fail_replace)
+
+    with pytest.raises(RuntimeError, match="无法安全写入"):
+        init_env(force=True)
+
+    assert env_file.read_text(encoding="utf-8") == "APP_PORT=8123\nACTIVE_PROJECT=existing\n"
+    assert list(tmp_path.glob("..env.*.tmp")) == []
+
+
+def test_init_env_ignores_out_of_range_template_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    (tmp_path / ".env.example").write_text("APP_PORT=99999\n", encoding="utf-8")
+
+    init_env()
+
+    assert "APP_PORT=8000" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
+def test_main_reports_invalid_settings_without_starting_server(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["steam-friend-map"])
+    monkeypatch.setattr(main_module, "init_env", lambda force=False: None)
+    with pytest.raises(ValidationError) as validation_error:
+        Settings(app_port=70000)
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        MagicMock(side_effect=validation_error.value),
+    )
+    run = MagicMock()
+    monkeypatch.setattr(main_module.uvicorn, "run", run)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+
+    assert exit_info.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "启动配置无效" in stderr
+    assert "APP_PORT" in stderr
+    run.assert_not_called()

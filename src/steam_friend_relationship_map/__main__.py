@@ -1,11 +1,39 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
 from pathlib import Path
-import uvicorn
 
-from .settings import get_settings
+import uvicorn
+from pydantic import ValidationError
+
+from .settings import Settings, get_settings
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace a text file only after its complete contents reach disk."""
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def init_env(force: bool = False) -> None:
@@ -26,7 +54,7 @@ def init_env(force: bool = False) -> None:
                 for line in f:
                     if line.strip().startswith("APP_PORT="):
                         port_str = line.split("=", 1)[1].strip()
-                        if port_str.isdigit():
+                        if port_str.isdigit() and 1024 <= int(port_str) <= 65535:
                             default_port = int(port_str)
         except Exception:
             pass
@@ -99,20 +127,39 @@ def init_env(force: bool = False) -> None:
         )
 
     try:
-        env_path.write_text(new_content, encoding="utf-8")
+        _atomic_write_text(env_path, new_content)
         print(f"配置成功：.env 文件已生成，Web UI 本地端口配置为 {port}。")
     except Exception as e:
-        print(f"错误：无法写入 .env 配置文件: {e}")
+        raise RuntimeError(f"无法安全写入 .env 配置文件: {e}") from e
+
+
+def _print_settings_error(exc: ValidationError) -> None:
+    print("启动配置无效，请检查 .env：", file=sys.stderr)
+    for error in exc.errors(include_url=False):
+        location_parts = list(error["loc"])
+        if location_parts:
+            field = Settings.model_fields.get(str(location_parts[0]))
+            if field is not None and field.alias:
+                location_parts[0] = field.alias
+        location = ".".join(str(part) for part in location_parts)
+        print(f"  - {location}: {error['msg']}", file=sys.stderr)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Steam Friend Relationship Map")
     parser.add_argument("--init", action="store_true", help="Force re-initialize the .env configuration file")
-    args, _ = parser.parse_known_args()
+    args = parser.parse_args()
 
-    init_env(force=args.init)
+    try:
+        init_env(force=args.init)
+        settings = get_settings()
+    except ValidationError as exc:
+        _print_settings_error(exc)
+        raise SystemExit(2) from None
+    except RuntimeError as exc:
+        print(f"启动初始化失败：{exc}", file=sys.stderr)
+        raise SystemExit(2) from None
 
-    settings = get_settings()
     uvicorn.run(
         "steam_friend_relationship_map.app:create_app",
         host=settings.app_host,
