@@ -102,3 +102,80 @@ def test_request_coordinator_loads_before_application_script() -> None:
 
     assert index.index("/static/request-coordinator.js") < index.index("/static/app.js")
     assert index.index("/static/graph-lifecycle.js") < index.index("/static/app.js")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_application_reports_missing_helper_scripts_without_crashing() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      const domReadyCallbacks = [];
+      const title = {{ textContent: "" }};
+      const hint = {{ textContent: "" }};
+      const buttons = [{{ disabled: false }}, {{ disabled: false }}];
+      const classList = () => ({{
+        add() {{}},
+        remove() {{}},
+        toggle() {{}},
+        contains() {{ return false; }},
+      }});
+      const elements = {{
+        graphEmpty: {{
+          classList: classList(),
+          querySelector(selector) {{ return selector === "h3" ? title : hint; }},
+        }},
+        graphLoading: {{ classList: classList() }},
+        graph: {{
+          closest() {{ return {{ querySelectorAll() {{ return buttons; }} }}; }},
+        }},
+      }};
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        setTimeout,
+        clearTimeout,
+        fetch: async () => {{ throw new Error("missing i18n"); }},
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{
+          addEventListener() {{}},
+          matchMedia() {{ return {{ matches: false, addEventListener() {{}} }}; }},
+        }},
+        document: {{
+          documentElement: {{
+            lang: "",
+            setAttribute() {{}},
+            removeAttribute() {{}},
+            toggleAttribute() {{}},
+          }},
+          title: "",
+          addEventListener(event, callback) {{
+            if (event === "DOMContentLoaded") domReadyCallbacks.push(callback);
+          }},
+          getElementById(id) {{ return elements[id] || null; }},
+          querySelectorAll() {{ return []; }},
+        }},
+      }};
+      context.globalThis = context;
+      vm.runInNewContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      if (domReadyCallbacks.length !== 1) process.exit(1);
+      domReadyCallbacks[0]().then(() => {{
+        if (title.textContent !== "界面启动失败") process.exit(2);
+        if (!hint.textContent.includes("request-coordinator.js")) process.exit(3);
+        if (!hint.textContent.includes("graph-lifecycle.js")) process.exit(4);
+        if (!hint.textContent.includes("vendor/cytoscape.min.js")) process.exit(5);
+        if (buttons.some((button) => !button.disabled)) process.exit(6);
+      }}).catch(() => process.exit(7));
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+def test_application_reports_missing_frontend_dependencies_before_initializing_graph() -> None:
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    startup = source.index('document.addEventListener("DOMContentLoaded"')
+    dependency_check = source.index("getMissingFrontendDependencies()", startup)
+    failure_display = source.index("showStartupFailure(missingDependencies)", dependency_check)
+    graph_init = source.index("initGraph()", failure_display)
+
+    assert dependency_check < failure_display < graph_init
+    assert "button.disabled = true" in source

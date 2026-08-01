@@ -8,6 +8,8 @@ const FALLBACK_ZH = {
   "graph.loadFailed": "图谱加载失败",
   "graph.emptyTitle": "暂无图谱",
   "graph.emptyHint": "完成抓取或刷新图谱后会显示节点。",
+  "startup.failedTitle": "界面启动失败",
+  "startup.missingDependencies": "必要静态资源加载失败：{dependencies}。请强制刷新页面；若仍然失败，请检查 /static 资源是否完整。",
   "log.empty": "暂无日志",
   "path.empty": "未选择路径",
   "path.noPath": "没有路径",
@@ -34,8 +36,30 @@ let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
 let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
-const requestCoordinator = new window.LatestRequestCoordinator();
-const graphLifecycle = new window.GraphLifecycleCoordinator();
+const startupDependencyErrors = [];
+
+function createFrontendCoordinator(globalName, resourceName) {
+  const Coordinator = window[globalName];
+  if (typeof Coordinator !== "function") {
+    startupDependencyErrors.push(resourceName);
+    return null;
+  }
+  try {
+    return new Coordinator();
+  } catch (error) {
+    startupDependencyErrors.push(`${resourceName}: ${error.message}`);
+    return null;
+  }
+}
+
+const requestCoordinator = createFrontendCoordinator(
+  "LatestRequestCoordinator",
+  "request-coordinator.js",
+);
+const graphLifecycle = createFrontendCoordinator(
+  "GraphLifecycleCoordinator",
+  "graph-lifecycle.js",
+);
 const PROJECT_SCOPED_REQUEST_KEYS = [
   "graph",
   "db-stats",
@@ -501,7 +525,6 @@ function initGraph() {
       },
     ],
     layout: { name: "cose", animate: false, padding: 40 },
-    wheelSensitivity: 0.18,
   });
 
   updateCytoscapeStyle();
@@ -658,6 +681,36 @@ function runLayout() {
     idealEdgeLength: 90,
     numIter: nodeCount > 500 ? 500 : 1000, // 大图下减少 cose 迭代次数以缩短运算耗时
   }));
+}
+
+function getMissingFrontendDependencies() {
+  const missing = [...startupDependencyErrors];
+  if (typeof window.cytoscape !== "function") {
+    missing.push("vendor/cytoscape.min.js");
+  }
+  return missing;
+}
+
+function showStartupFailure(dependencies) {
+  const message = t("startup.missingDependencies", {
+    dependencies: dependencies.join(", "),
+  });
+  const empty = $("graphEmpty");
+  if (empty) {
+    empty.classList.remove("hidden");
+    const title = empty.querySelector("h3");
+    const hint = empty.querySelector("p");
+    if (title) title.textContent = t("startup.failedTitle");
+    if (hint) hint.textContent = message;
+  }
+  const loading = $("graphLoading");
+  if (loading) loading.classList.add("hidden");
+  const graphSection = $("graph")?.closest("section");
+  graphSection?.querySelectorAll("button").forEach((button) => {
+    button.disabled = true;
+  });
+  appendSystemLog("error", "startup", message);
+  console.error(message);
 }
 
 function fillProfile(node) {
@@ -1943,6 +1996,11 @@ window.addEventListener("unhandledrejection", (event) => {
 document.addEventListener("DOMContentLoaded", async () => {
   initTheme();
   await loadI18n();
+  const missingDependencies = getMissingFrontendDependencies();
+  if (missingDependencies.length > 0) {
+    showStartupFailure(missingDependencies);
+    return;
+  }
   applyTranslations();
   if (window.lucide) window.lucide.createIcons();
   initGraph();
