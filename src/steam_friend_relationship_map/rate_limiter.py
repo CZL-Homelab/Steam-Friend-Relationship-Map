@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Callable
+
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveRateLimiter:
@@ -41,6 +45,7 @@ class AdaptiveRateLimiter:
 
     async def report_success(self) -> None:
         """报告请求成功，使用非线性曲线缩短延迟（加快）"""
+        change: tuple[float, float, str] | None = None
         async with self.lock:
             old_delay = self.current_delay_ms
             # 比例渐进回收曲线：高延迟时恢复步长更大，低延迟时平缓趋近最小延迟
@@ -49,11 +54,12 @@ class AdaptiveRateLimiter:
             new_delay = max(self.min_delay_ms, old_delay - decrease_step)
             if new_delay != old_delay:
                 self.current_delay_ms = new_delay
-                if self.on_change_callback:
-                    self.on_change_callback(old_delay, new_delay, "success")
+                change = (old_delay, new_delay, "success")
+        self._notify_change(change)
 
     async def report_backoff(self, retry_after_ms: float | None = None) -> None:
         """报告请求拥堵或受限，乘性延长延迟（退避）"""
+        change: tuple[float, float, str] | None = None
         async with self.lock:
             old_delay = self.current_delay_ms
             adaptive_delay = max(self.backoff_floor_ms, old_delay * self.increase_factor)
@@ -66,5 +72,13 @@ class AdaptiveRateLimiter:
             )
             if new_delay != old_delay:
                 self.current_delay_ms = new_delay
-                if self.on_change_callback:
-                    self.on_change_callback(old_delay, new_delay, "backoff")
+                change = (old_delay, new_delay, "backoff")
+        self._notify_change(change)
+
+    def _notify_change(self, change: tuple[float, float, str] | None) -> None:
+        if change is None or self.on_change_callback is None:
+            return
+        try:
+            self.on_change_callback(*change)
+        except Exception:
+            logger.warning("Rate limiter change callback failed", exc_info=True)

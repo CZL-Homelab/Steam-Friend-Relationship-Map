@@ -113,8 +113,11 @@ async def test_rate_limiter_can_back_off_from_zero_delay() -> None:
 @pytest.mark.asyncio
 async def test_adaptive_rate_limiter_aimd():
     changes = []
+    callback_lock_states = []
+
     def callback(old_val, new_val, reason):
         changes.append((old_val, new_val, reason))
+        callback_lock_states.append(limiter.lock.locked())
 
     # Base delay 300ms, min 250ms, max 1000ms
     limiter = AdaptiveRateLimiter(
@@ -149,6 +152,32 @@ async def test_adaptive_rate_limiter_aimd():
     limiter.current_delay_ms = 800.0
     await limiter.report_backoff()  # 800 * 1.5 = 1200 -> cap at 1000
     assert limiter.current_delay_ms == 1000.0
+    assert not any(callback_lock_states)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_callback_failure_does_not_break_state_updates(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def failing_callback(_: float, __: float, ___: str) -> None:
+        raise RuntimeError("log sink unavailable")
+
+    limiter = AdaptiveRateLimiter(
+        base_delay_ms=300.0,
+        min_delay_ms=250.0,
+        max_delay_ms=1000.0,
+        on_change_callback=failing_callback,
+    )
+
+    await limiter.report_success()
+    assert limiter.current_delay_ms == 287.5
+
+    await limiter.report_backoff()
+    assert limiter.current_delay_ms == 431.25
+    assert [record.message for record in caplog.records] == [
+        "Rate limiter change callback failed",
+        "Rate limiter change callback failed",
+    ]
 
 
 @pytest.mark.asyncio
