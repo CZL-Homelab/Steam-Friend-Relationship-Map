@@ -99,6 +99,22 @@ def _consume_rows(result: Any) -> list[list[Any]]:
     return list(_iter_rows(result))
 
 
+def _execute_discard(
+    conn: kuzu.Connection,
+    query: str,
+    parameters: dict[str, Any] | None = None,
+) -> None:
+    """Execute a statement and promptly release its unused Kuzu result."""
+    result = (
+        conn.execute(query, parameters)
+        if parameters is not None
+        else conn.execute(query)
+    )
+    close = getattr(result, "close", None)
+    if callable(close):
+        close()
+
+
 class KuzuRepositoryImpl(IGraphRepository):
     """Kùzu 进程内嵌入式图数据库实现。"""
 
@@ -213,7 +229,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         }
 
         if "SteamUser" not in existing_tables:
-            conn.execute("""
+            _execute_discard(conn, """
                 CREATE NODE TABLE SteamUser(
                     steam_id STRING,
                     persona_name STRING,
@@ -243,7 +259,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             """)
 
         if "CrawlRun" not in existing_tables:
-            conn.execute("""
+            _execute_discard(conn, """
                 CREATE NODE TABLE CrawlRun(
                     id STRING,
                     root_steam_id STRING,
@@ -272,7 +288,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             """)
 
         if "Project" not in existing_tables:
-            conn.execute("""
+            _execute_discard(conn, """
                 CREATE NODE TABLE Project(
                     id STRING,
                     name STRING,
@@ -282,7 +298,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             """)
 
         if "SchemaMigration" not in existing_tables:
-            conn.execute("""
+            _execute_discard(conn, """
                 CREATE NODE TABLE SchemaMigration(
                     id STRING,
                     applied_at STRING,
@@ -291,7 +307,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             """)
 
         if "STEAM_FRIEND" not in existing_tables:
-            conn.execute("""
+            _execute_discard(conn, """
                 CREATE REL TABLE STEAM_FRIEND(
                     FROM SteamUser TO SteamUser,
                     crawl_id STRING,
@@ -301,7 +317,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             """)
 
         if "IN_PROJECT" not in existing_tables:
-            conn.execute("""
+            _execute_discard(conn, """
                 CREATE REL TABLE IN_PROJECT(
                     FROM SteamUser TO Project,
                     depth_min INT64,
@@ -322,7 +338,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             }
             for name, property_type in _PROJECT_MEMBER_PROPERTY_TYPES.items():
                 if name not in existing_properties:
-                    conn.execute(f"ALTER TABLE IN_PROJECT ADD {name} {property_type}")
+                    _execute_discard(conn, f"ALTER TABLE IN_PROJECT ADD {name} {property_type}")
 
         self._migrate_project_memberships(conn)
         self._migrate_project_member_metadata(conn)
@@ -330,7 +346,8 @@ class KuzuRepositoryImpl(IGraphRepository):
     @staticmethod
     def _ensure_project_node(conn: kuzu.Connection, project_id: str) -> None:
         name = "默认项目" if project_id == "default" else project_id
-        conn.execute(
+        _execute_discard(
+            conn,
             """
             MERGE (p:Project {id: $project_id})
             ON CREATE SET p.name = $name, p.created_at = $now
@@ -363,7 +380,8 @@ class KuzuRepositoryImpl(IGraphRepository):
         for project_id in sorted(legacy_project_ids):
             self._ensure_project_node(conn, project_id)
 
-        conn.execute(
+        _execute_discard(
+            conn,
             """
             MATCH (u:SteamUser)
             MATCH (p:Project)
@@ -374,7 +392,8 @@ class KuzuRepositoryImpl(IGraphRepository):
             MERGE (u)-[:IN_PROJECT]->(p)
             """
         )
-        conn.execute(
+        _execute_discard(
+            conn,
             """
             MATCH (a:SteamUser)-[r:STEAM_FRIEND]->(b:SteamUser)
             MATCH (p:Project)
@@ -386,7 +405,8 @@ class KuzuRepositoryImpl(IGraphRepository):
             MERGE (b)-[:IN_PROJECT]->(p)
             """
         )
-        conn.execute(
+        _execute_discard(
+            conn,
             "MERGE (m:SchemaMigration {id: $id}) SET m.applied_at = $now",
             {"id": migration_id, "now": utc_now_iso()},
         )
@@ -405,7 +425,8 @@ class KuzuRepositoryImpl(IGraphRepository):
 
         # Legacy node properties belonged to the user's original project. Copy them
         # once, then use IN_PROJECT exclusively for project-specific metadata.
-        conn.execute(
+        _execute_discard(
+            conn,
             """
             MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
             WHERE p.id = CASE
@@ -421,7 +442,8 @@ class KuzuRepositoryImpl(IGraphRepository):
                 membership.category = coalesce(u.category, '')
             """
         )
-        conn.execute(
+        _execute_discard(
+            conn,
             "MERGE (m:SchemaMigration {id: $id}) SET m.applied_at = $now",
             {"id": migration_id, "now": utc_now_iso()},
         )
@@ -443,7 +465,8 @@ class KuzuRepositoryImpl(IGraphRepository):
         pid = project_id or str(uuid.uuid4())
         now = utc_now_iso()
         conn = self._get_conn()
-        conn.execute(
+        _execute_discard(
+            conn,
             """
             MERGE (p:Project {id: $pid})
             ON CREATE SET p.name = $name, p.created_at = $now
@@ -462,12 +485,29 @@ class KuzuRepositoryImpl(IGraphRepository):
             return False
 
         try:
-            conn.execute("BEGIN TRANSACTION")
-            conn.execute("MATCH ()-[r:STEAM_FRIEND]->() WHERE r.project_id = $pid DELETE r", {"pid": project_id})
-            conn.execute("MATCH (:SteamUser)-[m:IN_PROJECT]->(p:Project) WHERE p.id = $pid DELETE m", {"pid": project_id})
-            conn.execute("MATCH (r:CrawlRun) WHERE r.project_id = $pid DELETE r", {"pid": project_id})
-            conn.execute("MATCH (p:Project) WHERE p.id = $pid DELETE p", {"pid": project_id})
-            conn.execute(
+            _execute_discard(conn, "BEGIN TRANSACTION")
+            _execute_discard(
+                conn,
+                "MATCH ()-[r:STEAM_FRIEND]->() WHERE r.project_id = $pid DELETE r",
+                {"pid": project_id},
+            )
+            _execute_discard(
+                conn,
+                "MATCH (:SteamUser)-[m:IN_PROJECT]->(p:Project) WHERE p.id = $pid DELETE m",
+                {"pid": project_id},
+            )
+            _execute_discard(
+                conn,
+                "MATCH (r:CrawlRun) WHERE r.project_id = $pid DELETE r",
+                {"pid": project_id},
+            )
+            _execute_discard(
+                conn,
+                "MATCH (p:Project) WHERE p.id = $pid DELETE p",
+                {"pid": project_id},
+            )
+            _execute_discard(
+                conn,
                 """
                 MATCH (u:SteamUser)
                 WHERE NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }
@@ -475,11 +515,11 @@ class KuzuRepositoryImpl(IGraphRepository):
                 DELETE u
                 """
             )
-            conn.execute("COMMIT")
+            _execute_discard(conn, "COMMIT")
             return True
         except Exception:
             try:
-                conn.execute("ROLLBACK")
+                _execute_discard(conn, "ROLLBACK")
             except Exception:
                 pass
             raise
@@ -614,7 +654,8 @@ class KuzuRepositoryImpl(IGraphRepository):
     def start_crawl_run(self, run: CrawlRun, project_id: str) -> None:
         now = utc_now_iso()
         conn = self._get_conn()
-        conn.execute(
+        _execute_discard(
+            conn,
             """
             MERGE (r:CrawlRun {id: $run_id})
             ON CREATE SET
@@ -657,7 +698,8 @@ class KuzuRepositoryImpl(IGraphRepository):
             return
         assignments = ", ".join(f"r.{key} = ${key}" for key in fields)
         conn = self._get_conn()
-        conn.execute(
+        _execute_discard(
+            conn,
             f"MATCH (r:CrawlRun {{id: $run_id}}) SET {assignments}",
             {"run_id": run_id, **fields}
         )
@@ -723,9 +765,10 @@ class KuzuRepositoryImpl(IGraphRepository):
                 membership.category = coalesce(membership.category, '')
         """
         try:
-            conn.execute("BEGIN TRANSACTION")
+            _execute_discard(conn, "BEGIN TRANSACTION")
             for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
-                conn.execute(
+                _execute_discard(
+                    conn,
                     query,
                     {
                         "now": now,
@@ -733,10 +776,10 @@ class KuzuRepositoryImpl(IGraphRepository):
                         "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
                     }
                 )
-            conn.execute("COMMIT")
+            _execute_discard(conn, "COMMIT")
         except Exception:
             try:
-                conn.execute("ROLLBACK")
+                _execute_discard(conn, "ROLLBACK")
             except Exception:
                 pass
             raise
@@ -806,9 +849,10 @@ class KuzuRepositoryImpl(IGraphRepository):
                 membership.last_scored_crawl_id = coalesce(membership.last_scored_crawl_id, '')
         """
         try:
-            conn.execute("BEGIN TRANSACTION")
+            _execute_discard(conn, "BEGIN TRANSACTION")
             for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
-                conn.execute(
+                _execute_discard(
+                    conn,
                     query,
                     {
                         "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
@@ -816,10 +860,10 @@ class KuzuRepositoryImpl(IGraphRepository):
                         "now": now,
                     },
                 )
-            conn.execute("COMMIT")
+            _execute_discard(conn, "COMMIT")
         except Exception:
             try:
-                conn.execute("ROLLBACK")
+                _execute_discard(conn, "ROLLBACK")
             except Exception:
                 pass
             raise
@@ -912,19 +956,20 @@ class KuzuRepositoryImpl(IGraphRepository):
                 b_membership.last_scored_crawl_id = coalesce(b_membership.last_scored_crawl_id, '')
         """
         try:
-            conn.execute("BEGIN TRANSACTION")
+            _execute_discard(conn, "BEGIN TRANSACTION")
             for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
-                conn.execute(
+                _execute_discard(
+                    conn,
                     query,
                     {
                         "project_id": project_id,
                         "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
                     }
                 )
-            conn.execute("COMMIT")
+            _execute_discard(conn, "COMMIT")
         except Exception:
             try:
-                conn.execute("ROLLBACK")
+                _execute_discard(conn, "ROLLBACK")
             except Exception:
                 pass
             raise
@@ -949,7 +994,8 @@ class KuzuRepositoryImpl(IGraphRepository):
             return
         assignments = ", ".join(f"membership.{key} = ${key}" for key in fields)
         conn = self._get_conn()
-        conn.execute(
+        _execute_discard(
+            conn,
             f"""
             MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
             WHERE u.steam_id = $steam_id AND p.id = $project_id
@@ -983,7 +1029,7 @@ class KuzuRepositoryImpl(IGraphRepository):
 
         conn = self._get_conn()
         try:
-            conn.execute("BEGIN TRANSACTION")
+            _execute_discard(conn, "BEGIN TRANSACTION")
             for signature, rows in grouped.items():
                 assignments = ", ".join(
                     f"membership.{key} = "
@@ -997,17 +1043,18 @@ class KuzuRepositoryImpl(IGraphRepository):
                     SET {assignments}
                 """
                 for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
-                    conn.execute(
+                    _execute_discard(
+                        conn,
                         query,
                         {
                             "project_id": project_id,
                             "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
                         },
                     )
-            conn.execute("COMMIT")
+            _execute_discard(conn, "COMMIT")
         except Exception:
             try:
-                conn.execute("ROLLBACK")
+                _execute_discard(conn, "ROLLBACK")
             except Exception:
                 pass
             raise

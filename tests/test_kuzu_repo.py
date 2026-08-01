@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import shutil
 import tempfile
 from collections.abc import Generator
@@ -7,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
+from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl, _execute_discard
 from steam_friend_relationship_map.models import (
     CrawlRun,
     CrawlStatus,
@@ -1012,6 +1013,48 @@ def test_kuzu_results_are_iterated_only_by_closing_consumer() -> None:
     assert source.count(".has_next()") == 1
     assert "while result.has_next():" in source
     assert "return list(_iter_rows(result))" in source
+
+    tree = ast.parse(source)
+    bare_execute_lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "execute"
+    ]
+    assert bare_execute_lines == []
+
+
+def test_kuzu_discarded_results_are_closed() -> None:
+    class ClosableResult:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class RecordingConnection:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+            self.results: list[ClosableResult] = []
+
+        def execute(self, query: str, parameters: object = None) -> ClosableResult:
+            self.calls.append((query, parameters))
+            result = ClosableResult()
+            self.results.append(result)
+            return result
+
+    connection = RecordingConnection()
+
+    _execute_discard(connection, "BEGIN TRANSACTION")  # type: ignore[arg-type]
+    _execute_discard(connection, "SET value = $value", {"value": 1})  # type: ignore[arg-type]
+
+    assert connection.calls == [
+        ("BEGIN TRANSACTION", None),
+        ("SET value = $value", {"value": 1}),
+    ]
+    assert all(result.closed for result in connection.results)
 
 
 def test_kuzu_project_member_metadata_migration_copies_legacy_primary_project(
