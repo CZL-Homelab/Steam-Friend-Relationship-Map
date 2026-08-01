@@ -9,6 +9,7 @@ import re
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from functools import wraps
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs, urlparse
@@ -98,6 +99,7 @@ CSV_EXPORT_FIELDS = (
     "root_closeness_score",
 )
 CSV_EXPORT_CHUNK_SIZE = 64 * 1024
+SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 class AppStaticFiles(StaticFiles):
@@ -405,6 +407,7 @@ def create_app(
     network_analysis_lock = asyncio.Lock()
     network_analysis_tasks: set[asyncio.Task[NetworkAnalysisResponse]] = set()
     started_runtime_mutations: set[asyncio.Task[Any]] = set()
+    csrf_bind_host = settings.app_host.lower()
 
     async def run_runtime_operation(operation, source: str) -> Any:  # type: ignore[no-untyped-def]
         """Keep a started runtime read protected until all async or worker work finishes."""
@@ -844,17 +847,41 @@ def create_app(
     def safe_detail(exc: object) -> str:
         return log_buffer.redact(str(exc))
 
-    def is_allowed_write_origin(origin: str) -> bool:
+    def is_allowed_write_origin(origin: str, request: Request) -> bool:
         parsed = urlparse(origin)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             return False
-        default_port = 443 if parsed.scheme == "https" else 80
         try:
-            port = parsed.port or default_port
+            origin_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            request_port = request.url.port or (
+                443 if request.url.scheme == "https" else 80
+            )
         except ValueError:
             return False
-        allowed_hosts = {settings.app_host, "localhost", "127.0.0.1", "::1"}
-        return parsed.hostname in allowed_hosts and port == settings.app_port
+        origin_host = parsed.hostname.lower()
+        request_host = (request.url.hostname or "").lower()
+        if (
+            parsed.scheme != request.url.scheme
+            or origin_host != request_host
+            or origin_port != request_port
+        ):
+            return False
+
+        allowed_hosts = {csrf_bind_host, "localhost", "127.0.0.1", "::1"}
+        if origin_host in allowed_hosts:
+            return True
+        if csrf_bind_host not in {"0.0.0.0", "::"}:
+            return False
+        try:
+            ip_address(origin_host)
+        except ValueError:
+            return False
+        return True
 
     def classify_steam_test_error(exc: object) -> tuple[str, str]:
         message = safe_detail(exc)
@@ -883,9 +910,9 @@ def create_app(
     @app.middleware("http")
     async def csrf_check(request: Request, call_next):  # type: ignore[no-untyped-def]
         """CSRF 防护：仅拦截跨域写请求。同源请求（Origin 为空）放行。"""
-        if request.method in ("POST", "PATCH", "DELETE"):
+        if request.method not in SAFE_HTTP_METHODS:
             origin = request.headers.get("origin") or request.headers.get("referer") or ""
-            if origin and not is_allowed_write_origin(origin):
+            if origin and not is_allowed_write_origin(origin, request):
                 return Response(
                     content='{"detail":"Cross-origin request denied"}',
                     status_code=403,

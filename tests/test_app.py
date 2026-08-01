@@ -949,7 +949,7 @@ def test_secret_update_restores_previous_value_when_database_reconnect_fails() -
 
 def test_csrf_rejects_localhost_prefix_spoof() -> None:
     app = create_app(settings=Settings(app_host="127.0.0.1", app_port=8000), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost:8000")
 
     response = client.post(
         "/api/settings/test",
@@ -962,7 +962,7 @@ def test_csrf_rejects_localhost_prefix_spoof() -> None:
 
 def test_csrf_allows_exact_localhost_origin() -> None:
     app = create_app(settings=Settings(app_host="127.0.0.1", app_port=8000), repo=FakeRepo(), steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost:8000")
 
     response = client.post(
         "/api/settings/test",
@@ -1063,6 +1063,61 @@ def test_network_analysis_endpoint() -> None:
     assert body["community_count"] == 1
     assert body["leaders"][0]["id"] == "root"
     assert body["leaders"][0]["pagerank"] == 1
+
+
+def test_csrf_rejects_cross_origin_put_and_scheme_mismatch() -> None:
+    app = create_app(
+        settings=Settings(app_host="127.0.0.1", app_port=8000),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app, base_url="http://localhost:8000")
+
+    cross_origin = client.put(
+        "/api/settings",
+        json={},
+        headers={"Origin": "http://evil.example:8000"},
+    )
+    wrong_scheme = client.put(
+        "/api/settings",
+        json={},
+        headers={"Origin": "https://localhost:8000"},
+    )
+    userinfo_origin = client.put(
+        "/api/settings",
+        json={},
+        headers={"Origin": "http://evil@localhost:8000"},
+    )
+
+    assert cross_origin.status_code == 403
+    assert wrong_scheme.status_code == 403
+    assert userinfo_origin.status_code == 403
+
+
+def test_csrf_allows_same_origin_lan_ip_for_wildcard_bind_only() -> None:
+    app = create_app(
+        settings=Settings(app_host="0.0.0.0", app_port=8000),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    lan_client = TestClient(app, base_url="http://192.168.1.25:8000")
+    hostname_client = TestClient(app, base_url="http://attacker.example:8000")
+
+    lan_response = lan_client.post(
+        "/api/settings/test",
+        json={},
+        headers={"Origin": "http://192.168.1.25:8000"},
+    )
+    hostname_response = hostname_client.post(
+        "/api/settings/test",
+        json={},
+        headers={"Origin": "http://attacker.example:8000"},
+    )
+
+    assert lan_response.status_code == 200
+    assert hostname_response.status_code == 403
 
 
 def test_network_analysis_errors_return_json_detail() -> None:
