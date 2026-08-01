@@ -26,6 +26,8 @@ class _FakeResult:
             return {"id": migration_id} if migration_id in self.driver.migrations else None
         if "RETURN p" in self.query:
             return {"p": {"id": "project-a"}}
+        if "c.status IN $statuses" in self.query and "AS count" in self.query:
+            return {"count": self.driver.recovery_count}
         if "AS count" in self.query:
             return {"count": 0}
         return None
@@ -73,6 +75,7 @@ class _FakeDriver:
         self.project_user_counts: list[dict[str, Any]] = []
         self.project_relationship_counts: list[dict[str, Any]] = []
         self.project_crawl_counts: list[dict[str, Any]] = []
+        self.recovery_count = 0
         self.migrations: set[str] = set()
 
     def session(self) -> _FakeSession:
@@ -136,6 +139,21 @@ def test_neo4j_project_membership_migration_is_idempotent() -> None:
 
     assert first_migration_query_count == 1
     assert sum("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries) == 1
+
+
+def test_neo4j_recovers_crawls_interrupted_by_restart() -> None:
+    repo, driver = _repo()
+    driver.recovery_count = 3
+
+    assert repo.recover_interrupted_crawls() == 3
+
+    query = driver.queries[-1]
+    params = driver.query_params[-1]
+    assert "c.status IN $statuses" in query
+    assert params["statuses"] == ["pending", "running", "paused"]
+    assert params["status"] == "stopped"
+    assert params["message"] == "应用重启前抓取未正常结束"
+    assert params["finished_at"]
 
 
 def test_neo4j_batches_friend_cache_reads_and_ignores_incomplete_rows() -> None:

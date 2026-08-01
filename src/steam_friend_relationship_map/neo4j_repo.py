@@ -57,6 +57,30 @@ class Neo4jRepositoryImpl(IGraphRepository):
         self.driver.verify_connectivity()
         return "Neo4j 连接正常"
 
+    def recover_interrupted_crawls(self) -> int:
+        message = "应用重启前抓取未正常结束"
+        with self.driver.session() as session:
+            record = session.run(
+                """
+                MATCH (c:CrawlRun)
+                WHERE c.status IN $statuses
+                SET c.status = $status,
+                    c.finished_at = $finished_at,
+                    c.message = $message,
+                    c.last_event = $message
+                RETURN count(c) AS count
+                """,
+                statuses=[
+                    CrawlStatus.pending.value,
+                    CrawlStatus.running.value,
+                    CrawlStatus.paused.value,
+                ],
+                status=CrawlStatus.stopped.value,
+                finished_at=utc_now_iso(),
+                message=message,
+            ).single()
+        return int(record["count"] or 0) if record else 0
+
     def ensure_schema(self) -> None:
         # 约束保证 MERGE 的唯一键稳定，也能让后续查询更快。
         statements = [

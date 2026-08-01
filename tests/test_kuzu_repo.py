@@ -155,6 +155,44 @@ def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert retrieved2.nodes_discovered == 10
 
 
+def test_kuzu_recovers_crawls_interrupted_by_restart(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    statuses = [
+        CrawlStatus.pending,
+        CrawlStatus.running,
+        CrawlStatus.paused,
+        CrawlStatus.completed,
+    ]
+    for index, status in enumerate(statuses):
+        repo.start_crawl_run(
+            CrawlRun(
+                id=f"recovery-{index}",
+                root_steam_id="root",
+                max_depth=2,
+                max_nodes=100,
+                status=status,
+            ),
+            "default",
+        )
+
+    assert repo.recover_interrupted_crawls() == 3
+    for index in range(3):
+        recovered = repo.get_crawl_run(f"recovery-{index}")
+        assert recovered is not None
+        assert recovered.status == CrawlStatus.stopped
+        assert recovered.finished_at
+        assert recovered.message == "应用重启前抓取未正常结束"
+        assert recovered.last_event == recovered.message
+
+    completed = repo.get_crawl_run("recovery-3")
+    assert completed is not None
+    assert completed.status == CrawlStatus.completed
+    assert repo.recover_interrupted_crawls() == 0
+
+
 def test_kuzu_friend_list_cache_round_trip(
     temp_kuzu_repo: KuzuRepositoryImpl, monkeypatch: pytest.MonkeyPatch
 ) -> None:

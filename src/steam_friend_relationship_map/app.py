@@ -269,6 +269,18 @@ def create_app(
         repo.ensure_schema()
     except Exception as exc:
         log_buffer.append("warn", "database", f"数据库 Schema 初始化失败: {exc}")
+    else:
+        try:
+            recovery = getattr(repo, "recover_interrupted_crawls", None)
+            interrupted = recovery() if callable(recovery) else 0
+            if interrupted:
+                log_buffer.append(
+                    "warn",
+                    "crawl:recovery",
+                    f"已将 {interrupted} 个上次启动中断的抓取任务标记为已停止",
+                )
+        except Exception as exc:
+            log_buffer.append("warn", "crawl:recovery", f"中断抓取状态恢复失败: {exc}")
     steam = steam or SteamClient(settings.steam_api_key, proxy_url=settings.steam_proxy_url)
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
     runtime_mutation_lock = asyncio.Lock()

@@ -37,6 +37,10 @@ class IGraphRepository(ABC):
         """初始化图数据库的约束、Schema和必要索引。"""
         pass
 
+    def recover_interrupted_crawls(self) -> int:
+        """Mark crawl records left active by a previous process as stopped."""
+        return 0
+
     @abstractmethod
     def list_projects(self) -> ProjectListResponse:
         """获取所有项目信息列表。"""

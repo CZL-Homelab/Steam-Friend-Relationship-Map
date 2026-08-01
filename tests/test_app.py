@@ -154,6 +154,35 @@ class TrackingRepo(FakeRepo):
             raise self.schema_error
 
 
+class RecoveringRepo(FakeRepo):
+    def __init__(self, interrupted: int) -> None:
+        self.interrupted = interrupted
+        self.recovery_calls = 0
+
+    def recover_interrupted_crawls(self) -> int:
+        self.recovery_calls += 1
+        return self.interrupted
+
+
+def test_app_recovers_interrupted_crawls_on_startup() -> None:
+    repo = RecoveringRepo(interrupted=2)
+    app = create_app(
+        settings=Settings(),
+        repo=repo,  # type: ignore[arg-type]
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )
+    client = TestClient(app)
+
+    assert repo.recovery_calls == 1
+    logs = client.get("/api/logs?after=0").json()
+    assert any(
+        entry["source"] == "crawl:recovery"
+        and "2 个上次启动中断" in entry["message"]
+        for entry in logs
+    )
+
+
 def test_graph_endpoint_uses_repo() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)

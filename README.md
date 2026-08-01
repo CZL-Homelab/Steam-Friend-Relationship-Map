@@ -111,6 +111,7 @@
 - 图谱界面支持中文 / English 切换。
 - 图谱、统计、项目、路径和分析请求采用“最新请求生效”协调器；新请求会取消同类旧请求，项目切换会清空旧项目视图，避免迟到响应覆盖当前界面。Graph, statistics, project, path, and analysis reads use latest-request-wins coordination, preventing late responses from overwriting the current project view.
 - Kùzu 的 Root 图谱、最短路径和朋友圈分析均使用最多 4 层的分层 BFS，不枚举可变长度路径组合，避免密集图耗尽 Buffer Pool。Kùzu root graphs, shortest paths, and friend-circle analysis use bounded layer-by-layer BFS instead of variable-length path enumeration to protect the buffer pool on dense graphs.
+- 应用启动时会把上一次进程异常退出遗留的等待中、运行中或暂停中的抓取记录标记为已停止，避免界面长期显示不存在的后台任务。On startup, orphaned pending, running, or paused crawls from a previous process are marked stopped so the UI never reports a background task that no longer exists.
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
 
 ## 安全提醒：Public 仓库不要提交这些内容

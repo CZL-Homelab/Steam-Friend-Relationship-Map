@@ -164,10 +164,44 @@ class KuzuRepositoryImpl(IGraphRepository):
 
     def test_connection(self) -> str:
         conn = self._get_conn()
-        res = conn.execute("RETURN 1")
-        if res.has_next():
+        if _consume_rows(conn.execute("RETURN 1")):
             return "Kùzu 连接正常"
         raise RuntimeError("Kùzu 连接异常")
+
+    def recover_interrupted_crawls(self) -> int:
+        conn = self._get_conn()
+        statuses = [
+            CrawlStatus.pending.value,
+            CrawlStatus.running.value,
+            CrawlStatus.paused.value,
+        ]
+        interrupted = self._scalar_count(
+            conn,
+            "MATCH (c:CrawlRun) WHERE c.status IN $statuses RETURN count(c)",
+            {"statuses": statuses},
+        )
+        if not interrupted:
+            return 0
+        message = "应用重启前抓取未正常结束"
+        _consume_rows(
+            conn.execute(
+                """
+                MATCH (c:CrawlRun)
+                WHERE c.status IN $statuses
+                SET c.status = $status,
+                    c.finished_at = $finished_at,
+                    c.message = $message,
+                    c.last_event = $message
+                """,
+                {
+                    "statuses": statuses,
+                    "status": CrawlStatus.stopped.value,
+                    "finished_at": utc_now_iso(),
+                    "message": message,
+                },
+            )
+        )
+        return interrupted
 
     def ensure_schema(self) -> None:
         conn = self._get_conn()
