@@ -193,28 +193,32 @@ class SteamClient:
         last_error: Exception | None = None
         transient_limit = max(1, int(retries))
         transient_failures = 0
-        auth_failures = 0
-        max_attempts = transient_limit + len(request_keys) - 1
+        key_cursor = 0
+        friend_list_request = "/getfriendlist/" in path.lower()
         request_params = {key: value for key, value in params.items() if key != "key"}
-        for attempt in range(max_attempts):
-            current_key = request_keys[attempt % len(request_keys)]
+        while transient_failures < transient_limit:
+            request_keys = [
+                key for key in request_keys if key not in self._disabled_api_keys
+            ]
+            if not request_keys:
+                raise SteamApiError("所有已配置的 Steam API Key 均已被拒绝", 403)
+            key_cursor %= len(request_keys)
+            current_key = request_keys[key_cursor]
             try:
                 if self.rate_limiter:
                     await self.rate_limiter.wait()
+                if current_key in self._disabled_api_keys:
+                    continue
                 response = await self._client.get(
                     url,
                     params={**request_params, "key": current_key},
                 )
                 retry_after = parse_retry_after(response.headers.get("Retry-After"))
-                if response.status_code == 403:
+                if response.status_code == 403 or (
+                    response.status_code == 401 and not friend_list_request
+                ):
                     self._disabled_api_keys.add(current_key)
-                    auth_failures += 1
-                    if auth_failures < len(request_keys):
-                        continue
-                    raise SteamApiError(
-                        f"Steam API 请求失败: HTTP {response.status_code}",
-                        response.status_code,
-                    )
+                    continue
                 if response.status_code in {429, 500, 502, 503, 504}:
                     if self.rate_limiter:
                         await self.rate_limiter.report_backoff(
@@ -226,6 +230,7 @@ class SteamClient:
                         )
                     transient_failures += 1
                     if transient_failures < transient_limit:
+                        key_cursor = (key_cursor + 1) % len(request_keys)
                         delay = max(
                             1.2 * (2 ** (transient_failures - 1)),
                             retry_after or 0.0,
@@ -241,15 +246,17 @@ class SteamClient:
                         f"Steam API 请求失败: HTTP {response.status_code}",
                         response.status_code,
                     )
+                data = response.json()
                 if self.rate_limiter:
                     await self.rate_limiter.report_success()
-                return response.json()
+                return data
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
                 if self.rate_limiter:
                     await self.rate_limiter.report_backoff()
                 transient_failures += 1
                 if transient_failures < transient_limit:
+                    key_cursor = (key_cursor + 1) % len(request_keys)
                     delay = 1.2 * (2 ** (transient_failures - 1))
                     await asyncio.sleep(delay + random.uniform(0.1, 0.5 * delay))
                     continue

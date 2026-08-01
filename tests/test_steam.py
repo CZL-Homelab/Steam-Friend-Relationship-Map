@@ -175,6 +175,121 @@ async def test_auth_fallback_does_not_mutate_params_or_back_off_good_keys() -> N
 
 
 @pytest.mark.asyncio
+async def test_disabled_key_is_not_reused_after_a_good_key_transient_failure() -> None:
+    queried_keys: list[str] = []
+    good_key_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal good_key_attempts
+        key = str(request.url.params.get("key"))
+        queried_keys.append(key)
+        if key == "bad-key":
+            return httpx.Response(403, json={})
+        good_key_attempts += 1
+        if good_key_attempts == 1:
+            return httpx.Response(500, json={})
+        return httpx.Response(200, json={"response": {"players": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = SteamClient(
+            "bad-key,good-key",
+            base_url="https://api.test",
+            client=http_client,
+        )
+        with (
+            patch("steam_friend_relationship_map.steam.asyncio.sleep", new=AsyncMock()),
+            patch("random.uniform", return_value=0.0),
+        ):
+            result = await client._get_json("/test", {}, retries=2)
+
+    assert result == {"response": {"players": []}}
+    assert queried_keys == ["bad-key", "good-key", "good-key"]
+    assert client._disabled_api_keys == {"bad-key"}
+
+
+@pytest.mark.asyncio
+async def test_non_friend_list_unauthorized_response_rotates_api_keys() -> None:
+    queried_keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = str(request.url.params.get("key"))
+        queried_keys.append(key)
+        if key == "bad-key":
+            return httpx.Response(401, json={})
+        return httpx.Response(200, json={"response": {"players": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = SteamClient(
+            "bad-key,good-key",
+            base_url="https://api.test",
+            client=http_client,
+        )
+        assert await client.get_player_summaries(["123"]) == []
+        assert await client.get_player_summaries(["456"]) == []
+
+    assert queried_keys == ["bad-key", "good-key", "good-key"]
+    assert client._disabled_api_keys == {"bad-key"}
+
+
+@pytest.mark.asyncio
+async def test_malformed_success_response_only_reports_backoff() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=0)
+    limiter.wait = AsyncMock()
+    limiter.report_success = AsyncMock()
+    limiter.report_backoff = AsyncMock()
+    http_client = AsyncMock()
+    http_client.get.side_effect = [
+        httpx.Response(200, content=b"{"),
+        httpx.Response(200, json={"response": {"players": []}}),
+    ]
+    client = SteamClient("key", client=http_client, rate_limiter=limiter)
+
+    with (
+        patch("steam_friend_relationship_map.steam.asyncio.sleep", new=AsyncMock()),
+        patch("random.uniform", return_value=0.0),
+    ):
+        result = await client._get_json("/test", {}, retries=2)
+
+    assert result == {"response": {"players": []}}
+    limiter.report_backoff.assert_awaited_once_with()
+    limiter.report_success.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_key_disabled_while_rate_limited_is_skipped_before_request() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=0)
+    limiter.report_success = AsyncMock()
+    limiter.report_backoff = AsyncMock()
+    queried_keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queried_keys.append(str(request.url.params.get("key")))
+        return httpx.Response(200, json={"response": {"players": []}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = SteamClient(
+            "key-1,key-2",
+            base_url="https://api.test",
+            client=http_client,
+            rate_limiter=limiter,
+        )
+        wait_count = 0
+
+        async def wait_and_disable_first_key() -> None:
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 1:
+                client._disabled_api_keys.add("key-1")
+
+        limiter.wait = AsyncMock(side_effect=wait_and_disable_first_key)
+        result = await client._get_json("/test", {}, retries=1)
+
+    assert result == {"response": {"players": []}}
+    assert queried_keys == ["key-2"]
+    assert limiter.wait.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_steam_client_key_rotation() -> None:
     queried_keys = []
 
