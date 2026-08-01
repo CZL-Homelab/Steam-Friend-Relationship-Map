@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import logging
 import threading
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 
 from steam_friend_relationship_map.app import create_app, iter_export_csv
 from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
+from steam_friend_relationship_map.logs import AppLogHandler
 from steam_friend_relationship_map.models import (
     CrawlRun,
     CrawlStatus,
@@ -1986,6 +1988,31 @@ def test_app_lifespan_closes_resources_in_dependency_order() -> None:
         }
 
     assert events == ["manager", "steam", "repo"]
+
+
+def test_app_lifespan_releases_log_buffer_when_resource_cleanup_fails() -> None:
+    class CloseFailingRepo(FakeRepo):
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    app = create_app(
+        settings=Settings(),
+        repo=CloseFailingRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    handler = next(
+        candidate
+        for candidate in logging.getLogger("steam_friend_relationship_map").handlers
+        if isinstance(candidate, AppLogHandler)
+    )
+    assert handler.buffer is app.state.logs
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        with TestClient(app):
+            pass
+
+    assert handler.buffer is not app.state.logs
 
 
 def test_health_returns_503_when_database_is_unavailable() -> None:

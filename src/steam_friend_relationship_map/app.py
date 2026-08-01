@@ -20,7 +20,7 @@ from neo4j.exceptions import AuthError, ServiceUnavailable
 
 from .analytics import analyze_network
 from .crawler import CrawlManager
-from .logs import AppLogBuffer, install_log_handler
+from .logs import AppLogBuffer, install_log_handler, release_log_handler
 from .models import (
     AppLog,
     CrawlCreate,
@@ -335,7 +335,7 @@ def create_app(
     secret_store = secret_store or SecretStore()
     log_buffer = AppLogBuffer()
     log_buffer.set_secret_values(sensitive_setting_values(settings))
-    install_log_handler(log_buffer)
+    log_handler = install_log_handler(log_buffer)
     if repo is None:
         try:
             repo = get_repository(settings)
@@ -707,13 +707,16 @@ def create_app(
             yield
         finally:
             try:
-                async with runtime_mutation_lock:
-                    await manager.shutdown()
-            finally:
                 try:
-                    await steam.aclose()
+                    async with runtime_mutation_lock:
+                        await manager.shutdown()
                 finally:
-                    await asyncio.to_thread(repo.close)
+                    try:
+                        await steam.aclose()
+                    finally:
+                        await asyncio.to_thread(repo.close)
+            finally:
+                release_log_handler(log_handler, log_buffer)
 
     app = FastAPI(title="Steam Friend Relationship Map", lifespan=lifespan)
     app.state.repo = repo

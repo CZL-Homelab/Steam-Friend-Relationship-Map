@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import weakref
 from threading import Lock
 
 from .models import AppLog, utc_now_iso
@@ -59,36 +60,89 @@ class AppLogBuffer:
 class AppLogHandler(logging.Handler):
     def __init__(self, buffer: AppLogBuffer, source: str = "python") -> None:
         super().__init__()
-        self.buffer = buffer
         self.source = source
+        self._buffers: list[weakref.ReferenceType[AppLogBuffer]] = []
+        self.register_buffer(buffer)
+
+    def _live_buffers(self) -> list[AppLogBuffer]:
+        live = [
+            buffer
+            for reference in self._buffers
+            if (buffer := reference()) is not None
+        ]
+        self._buffers = [weakref.ref(buffer) for buffer in live]
+        return live
+
+    @property
+    def buffer(self) -> AppLogBuffer | None:
+        with self.lock:
+            live = self._live_buffers()
+            return live[-1] if live else None
+
+    @buffer.setter
+    def buffer(self, buffer: AppLogBuffer) -> None:
+        self.register_buffer(buffer)
+
+    def register_buffer(self, buffer: AppLogBuffer) -> None:
+        with self.lock:
+            live = [
+                candidate
+                for candidate in self._live_buffers()
+                if candidate is not buffer
+            ]
+            live.append(buffer)
+            self._buffers = [weakref.ref(candidate) for candidate in live]
+
+    def unregister_buffer(self, buffer: AppLogBuffer) -> None:
+        with self.lock:
+            live = [
+                candidate
+                for candidate in self._live_buffers()
+                if candidate is not buffer
+            ]
+            self._buffers = [weakref.ref(candidate) for candidate in live]
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             level = record.levelname.lower()
             if level == "warning":
                 level = "warn"
-            self.buffer.append(level, record.name or self.source, self.format(record))
+            buffer = self.buffer
+            if buffer is not None:
+                buffer.append(level, record.name or self.source, self.format(record))
         except Exception:
             self.handleError(record)
 
 
 def install_log_handler(buffer: AppLogBuffer) -> AppLogHandler:
-    handler: AppLogHandler | None = None
-    for name in ("steam_friend_relationship_map", "uvicorn.error"):
+    logger_names = ("steam_friend_relationship_map", "uvicorn.error")
+    handler = next(
+        (
+            candidate
+            for name in logger_names
+            for candidate in logging.getLogger(name).handlers
+            if isinstance(candidate, AppLogHandler)
+        ),
+        None,
+    )
+    if handler is None:
+        handler = AppLogHandler(buffer)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.setLevel(logging.INFO)
+    else:
+        handler.register_buffer(buffer)
+
+    for name in logger_names:
         logger = logging.getLogger(name)
-        existing = next(
-            (candidate for candidate in logger.handlers if isinstance(candidate, AppLogHandler)),
-            None,
-        )
-        if existing is not None:
-            existing.buffer = buffer
-            handler = handler or existing
-        else:
-            if handler is None:
-                handler = AppLogHandler(buffer)
-                handler.setFormatter(logging.Formatter("%(message)s"))
-                handler.setLevel(logging.INFO)
+        for candidate in list(logger.handlers):
+            if isinstance(candidate, AppLogHandler) and candidate is not handler:
+                logger.removeHandler(candidate)
+        if handler not in logger.handlers:
             logger.addHandler(handler)
         logger.setLevel(logging.INFO)
-    assert handler is not None
     return handler
+
+
+def release_log_handler(handler: AppLogHandler, buffer: AppLogBuffer) -> None:
+    """Detach one app buffer without disturbing other live app instances."""
+    handler.unregister_buffer(buffer)
