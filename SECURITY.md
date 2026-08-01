@@ -70,6 +70,14 @@ GitHub Actions uses read-only permissions, concurrency cancellation, and full-SH
 - Application lifecycle smoke test with an isolated temporary Kuzu database: HTTP `200`; the existing `data/graph_kuzu` path was not opened or modified.
 - GitHub Actions: Ubuntu tests, Windows tests, static/dependency checks, and secret scan all passed in audit PR `#27` at `830589b`.
 
+## 候审交付记录 / Review Delivery Record
+
+- 审计 PR `#27` 已通过 merge commit `cf8d05620b55e65c3e4674b381df7007f2631573` 合入 `security-check-before-main`，合并后四项质量门禁再次全部通过。
+- GitHub API 客户端在创建该 merge commit 时错误地将中文元数据编码为问号。为遵守“不改写历史”规则，原提交保持不变；其规范双语标题记录为：`security: 合入最终安全审计交付 / merge final security audit delivery`。
+- 后续元数据 PR 仅补充本记录并使用显式 UTF-8 请求创建双语 merge commit，不包含功能或安全行为变化。
+
+Audit PR `#27` was merged into `security-check-before-main` as `cf8d05620b55e65c3e4674b381df7007f2631573`, and all four post-merge gates passed again. The API client incorrectly encoded the Chinese portion of that merge commit metadata as question marks. The commit is retained to honor the no-history-rewrite rule; its canonical bilingual title is recorded above. The metadata follow-up PR contains no functional or security behavior changes.
+
 ## Bandit 局部抑制 / Local Bandit Suppressions
 
 以下 5 处是误报，均采用最小行级 `nosec`，未全局关闭规则：
