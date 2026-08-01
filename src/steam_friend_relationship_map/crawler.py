@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .logs import AppLogBuffer
@@ -27,7 +27,9 @@ class CrawlControl:
     cancel: bool = False
     pause: bool = False
     force_stop: bool = False
+    terminal: bool = False
     task: asyncio.Task | None = None
+    transition_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,15 @@ class CrawlManager:
                 return True
         return False
 
+    @staticmethod
+    def _is_active(control: CrawlControl | None) -> bool:
+        return bool(
+            control is not None
+            and not control.terminal
+            and control.task is not None
+            and not control.task.done()
+        )
+
     async def shutdown(self, timeout_seconds: float = 15.0) -> None:
         """Stop background crawls before their shared HTTP and database resources close."""
         async with self._lock:
@@ -143,54 +154,68 @@ class CrawlManager:
             control.task = asyncio.create_task(self._run_crawl(run, payload, control))
             return run
 
-    def cancel(self, run_id: str) -> bool:
+    async def cancel(self, run_id: str) -> bool:
         """优雅停止：完成当前层后停止，数据保留。"""
         control = self.controls.get(run_id)
-        if control is None:
+        if not self._is_active(control):
             return False
-        control.cancel = True
-        self.append_event(run_id, "warn", "cancel", "收到停止请求，将在当前层完成后停止")
-        return True
+        assert control is not None
+        async with control.transition_lock:
+            if not self._is_active(control) or control.cancel:
+                return False
+            control.cancel = True
+            self.append_event(run_id, "warn", "cancel", "收到停止请求，将在当前层完成后停止")
+            return True
 
-    def force_stop(self, run_id: str) -> bool:
+    async def force_stop(self, run_id: str) -> bool:
         """强制中断：立即停止，已扫描数据保留。"""
         control = self.controls.get(run_id)
-        if control is None:
+        if not self._is_active(control):
             return False
-        control.force_stop = True
-        control.pause = False
-        self.append_event(run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）")
-        return True
+        assert control is not None
+        async with control.transition_lock:
+            if not self._is_active(control) or control.force_stop:
+                return False
+            control.force_stop = True
+            control.pause = False
+            self.append_event(run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）")
+            return True
 
     async def pause(self, run_id: str) -> bool:
         """暂停扫描（如遇 Steam 限流）。"""
         control = self.controls.get(run_id)
-        if control is None:
+        if not self._is_active(control):
             return False
-        if control.pause:
-            return False
-        control.pause = True
-        try:
-            await self._call_repo("update_crawl_run", run_id, status=CrawlStatus.paused.value)
-        except Exception:
-            control.pause = False
-            raise
-        self.append_event(run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续")
-        return True
+        assert control is not None
+        async with control.transition_lock:
+            if not self._is_active(control) or control.pause:
+                return False
+            control.pause = True
+            try:
+                await self._call_repo("update_crawl_run", run_id, status=CrawlStatus.paused.value)
+            except Exception:
+                control.pause = False
+                raise
+            self.append_event(run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续")
+            return True
 
     async def resume(self, run_id: str) -> bool:
         """继续扫描。"""
         control = self.controls.get(run_id)
-        if control is None or not control.pause:
+        if not self._is_active(control):
             return False
-        control.pause = False
-        try:
-            await self._call_repo("update_crawl_run", run_id, status=CrawlStatus.running.value)
-        except Exception:
-            control.pause = True
-            raise
-        self.append_event(run_id, "info", "resume", "扫描已继续")
-        return True
+        assert control is not None
+        async with control.transition_lock:
+            if not self._is_active(control) or not control.pause:
+                return False
+            control.pause = False
+            try:
+                await self._call_repo("update_crawl_run", run_id, status=CrawlStatus.running.value)
+            except Exception:
+                control.pause = True
+                raise
+            self.append_event(run_id, "info", "resume", "扫描已继续")
+            return True
 
     def get_events(self, run_id: str, after: int = 0) -> list[CrawlEvent]:
         return [event for event in self.events.get(run_id, []) if event.seq > after]
@@ -339,13 +364,27 @@ class CrawlManager:
             "message": message,
             "last_event": message,
         }
-        last_error: Exception | None = None
-        for _ in range(2):
-            try:
-                await self._call_repo("update_crawl_run", run.id, **fields)
-                return True
-            except Exception as exc:
-                last_error = exc
+        control = self.controls.get(run.id)
+
+        async def persist() -> tuple[bool, Exception | None]:
+            last_error: Exception | None = None
+            for _ in range(2):
+                try:
+                    await self._call_repo("update_crawl_run", run.id, **fields)
+                    return True, None
+                except Exception as exc:
+                    last_error = exc
+            return False, last_error
+
+        if control is None:
+            saved, last_error = await persist()
+        else:
+            async with control.transition_lock:
+                control.terminal = True
+                control.pause = False
+                saved, last_error = await persist()
+        if saved:
+            return True
         if self.logs is not None and last_error is not None:
             self.logs.append(
                 "error",

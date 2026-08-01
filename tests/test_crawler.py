@@ -342,16 +342,111 @@ async def test_pause_and_resume_roll_back_memory_state_when_persistence_fails() 
     repo.update_crawl_run = fail_update  # type: ignore[method-assign]
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
     control = CrawlControl()
+    control.task = asyncio.create_task(asyncio.Event().wait())
     manager.controls["run"] = control
 
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        await manager.pause("run")
-    assert control.pause is False
+    try:
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await manager.pause("run")
+        assert control.pause is False
 
-    control.pause = True
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        await manager.resume("run")
-    assert control.pause is True
+        control.pause = True
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await manager.resume("run")
+        assert control.pause is True
+    finally:
+        control.task.cancel()
+        await asyncio.gather(control.task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_completed_crawl_rejects_all_control_transitions() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+    control = CrawlControl(terminal=True)
+    control.task = asyncio.create_task(asyncio.Event().wait())
+    manager.controls["run"] = control
+
+    try:
+        assert await manager.cancel("run") is False
+        assert await manager.force_stop("run") is False
+        assert await manager.pause("run") is False
+        control.pause = True
+        assert await manager.resume("run") is False
+    finally:
+        control.task.cancel()
+        await asyncio.gather(control.task, return_exceptions=True)
+
+    assert repo.run_updates == []
+    assert manager.get_events("run") == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_write_is_serialized_after_pending_pause() -> None:
+    class BlockingPauseRepo(FakeRepo):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pause_started = threading.Event()
+            self.release_pause = threading.Event()
+
+        def update_crawl_run(self, run_id: str, **fields: object) -> None:
+            if fields.get("status") == CrawlStatus.paused.value:
+                self.pause_started.set()
+                self.release_pause.wait(timeout=2)
+            super().update_crawl_run(run_id, **fields)
+
+    repo = BlockingPauseRepo()
+    run = CrawlRun(
+        id="run",
+        root_steam_id="root",
+        max_depth=1,
+        max_nodes=10,
+        status=CrawlStatus.running,
+    )
+    repo.runs[run.id] = run
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+    control = CrawlControl()
+    control.task = asyncio.create_task(asyncio.Event().wait())
+    manager.controls[run.id] = control
+    safety_release = threading.Timer(1, repo.release_pause.set)
+    safety_release.start()
+
+    terminal_kwargs = {
+        "status": CrawlStatus.completed,
+        "message": "done",
+        "nodes_discovered": 1,
+        "edges_discovered": 0,
+        "private_count": 0,
+        "error_count": 0,
+        "filtered_count": 0,
+        "friend_count_filtered_count": 0,
+        "prior_pool_filtered_count": 0,
+        "expanded_count": 1,
+    }
+    try:
+        pause_task = asyncio.create_task(manager.pause(run.id))
+        while not repo.pause_started.is_set():
+            await asyncio.sleep(0.005)
+        terminal_task = asyncio.create_task(
+            manager._persist_terminal_run(run, **terminal_kwargs)
+        )
+        await asyncio.sleep(0.05)
+        assert not terminal_task.done()
+
+        repo.release_pause.set()
+        assert await pause_task is True
+        assert await terminal_task is True
+    finally:
+        repo.release_pause.set()
+        safety_release.cancel()
+        control.task.cancel()
+        await asyncio.gather(control.task, return_exceptions=True)
+
+    statuses = [update.get("status") for update in repo.run_updates]
+    assert statuses == [CrawlStatus.paused.value, CrawlStatus.completed.value]
+    assert repo.runs[run.id].status == CrawlStatus.completed
+    assert control.terminal is True
+    assert control.pause is False
 
 
 def test_crawler_repository_calls_use_async_wrapper() -> None:

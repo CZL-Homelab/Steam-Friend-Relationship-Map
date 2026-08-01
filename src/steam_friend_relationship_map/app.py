@@ -1175,12 +1175,12 @@ def create_app(
     @app.post("/api/crawls/{run_id}/cancel")
     async def cancel_crawl(run_id: str) -> dict[str, bool]:
         """优雅停止：完成当前层后停止。"""
-        return {"cancelled": manager.cancel(run_id)}
+        return {"cancelled": await manager.cancel(run_id)}
 
     @app.post("/api/crawls/{run_id}/force-stop")
     async def force_stop_crawl(run_id: str) -> dict[str, bool]:
         """强制中断：立即停止。"""
-        return {"stopped": manager.force_stop(run_id)}
+        return {"stopped": await manager.force_stop(run_id)}
 
     @app.post("/api/crawls/{run_id}/pause")
     async def pause_crawl(run_id: str) -> dict[str, bool]:

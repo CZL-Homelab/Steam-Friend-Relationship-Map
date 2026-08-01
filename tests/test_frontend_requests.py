@@ -392,6 +392,57 @@ def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> N
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_force_stop_keeps_polling_until_the_server_reports_a_terminal_state() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    coordinator_path = str((STATIC_DIR / "request-coordinator.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      const {{ LatestRequestCoordinator }} = require({json.dumps(coordinator_path)});
+      (async () => {{
+      const requests = [];
+      const pollDelays = [];
+      const timerStops = [];
+      const statsStops = [];
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{ LatestRequestCoordinator, addEventListener() {{}} }},
+        document: {{ addEventListener() {{}}, getElementById() {{ return null; }} }},
+        requests,
+        pollDelays,
+        timerStops,
+        statsStops,
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      await vm.runInContext(`
+        currentRunId = "run-1";
+        api = async (path, options) => {{ requests.push({{ path, options }}); return {{ stopped: true }}; }};
+        scheduleRunPoll = (delay) => pollDelays.push(delay);
+        stopTimer = () => timerStops.push(true);
+        stopDbStatsPolling = () => statsStops.push(true);
+        toast = () => {{}};
+        t = (key) => key;
+        forceStopCrawl();
+      `, context);
+
+      if (requests.length !== 1) process.exit(1);
+      if (requests[0].path !== "/api/crawls/run-1/force-stop") process.exit(2);
+      if (requests[0].options.method !== "POST") process.exit(3);
+      if (pollDelays.length !== 1 || pollDelays[0] !== 100) process.exit(4);
+      if (timerStops.length !== 0 || statsStops.length !== 0) process.exit(5);
+      }})().catch((error) => {{ console.error(error); process.exit(6); }});
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_stale_frontend_responses_cannot_overwrite_current_state() -> None:
     app_path = str((STATIC_DIR / "app.js").resolve())
     coordinator_path = str((STATIC_DIR / "request-coordinator.js").resolve())

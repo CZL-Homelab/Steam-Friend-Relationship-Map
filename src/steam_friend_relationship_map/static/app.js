@@ -1252,6 +1252,11 @@ function scheduleRunPoll(delay = 1200) {
   }, delay);
 }
 
+function refreshCrawlStatusSoon(delay = 100) {
+  requestCoordinator.cancel("crawl-status");
+  scheduleRunPoll(delay);
+}
+
 async function pollRun() {
   if (!currentRunId) return;
   clearTimeout(pollTimer);
@@ -1368,31 +1373,37 @@ function stopSystemLogPolling() {
 
 async function cancelCrawl() {
   if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
-  await api(`/api/crawls/${currentRunId}/cancel`, { method: "POST", body: "{}" });
+  const result = await api(`/api/crawls/${currentRunId}/cancel`, { method: "POST", body: "{}" });
+  refreshCrawlStatusSoon();
+  if (!result.cancelled) { toast(t("toast.noActiveCrawl")); return; }
   toast(t("toast.cancelRequested"));
 }
 
 async function forceStopCrawl() {
   if (!currentRunId) { toast(t("toast.noActiveCrawl")); return; }
-  await api(`/api/crawls/${currentRunId}/force-stop`, { method: "POST", body: "{}" });
-  stopTimer();
-  stopDbStatsPolling();
+  const result = await api(`/api/crawls/${currentRunId}/force-stop`, { method: "POST", body: "{}" });
+  refreshCrawlStatusSoon();
+  if (!result.stopped) { toast(t("toast.noActiveCrawl")); return; }
   toast(t("toast.forceStop"));
 }
 
 async function pauseCrawl() {
   if (!currentRunId) return;
-  await api(`/api/crawls/${currentRunId}/pause`, { method: "POST", body: "{}" });
-  $("pauseCrawl").style.display = "none";
-  $("resumeCrawl").style.display = "";
+  const result = await api(`/api/crawls/${currentRunId}/pause`, { method: "POST", body: "{}" });
+  refreshCrawlStatusSoon();
+  if (!result.paused) return;
+  setStatus("crawlStatus", "paused");
+  updateCrawlButtons("paused");
   toast(t("toast.paused"));
 }
 
 async function resumeCrawl() {
   if (!currentRunId) return;
-  await api(`/api/crawls/${currentRunId}/resume`, { method: "POST", body: "{}" });
-  $("pauseCrawl").style.display = "";
-  $("resumeCrawl").style.display = "none";
+  const result = await api(`/api/crawls/${currentRunId}/resume`, { method: "POST", body: "{}" });
+  refreshCrawlStatusSoon();
+  if (!result.resumed) return;
+  setStatus("crawlStatus", "running");
+  updateCrawlButtons("running");
   toast(t("toast.resumed"));
 }
 
