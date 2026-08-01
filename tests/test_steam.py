@@ -31,7 +31,7 @@ async def test_steam_client_honors_retry_after_header() -> None:
     ]
     http_client = AsyncMock()
     http_client.get.side_effect = responses
-    client = SteamClient("key", client=http_client, rate_limiter=limiter)
+    client = SteamClient("key-1,key-2", client=http_client, rate_limiter=limiter)
 
     with (
         patch("steam_friend_relationship_map.steam.asyncio.sleep", new=AsyncMock()) as sleep,
@@ -40,6 +40,9 @@ async def test_steam_client_honors_retry_after_header() -> None:
         result = await client._get_json("/test", {}, retries=2)
 
     assert result == {"response": {"players": []}}
+    assert [
+        call.kwargs["params"]["key"] for call in http_client.get.await_args_list
+    ] == ["key-1", "key-2"]
     limiter.report_backoff.assert_awaited_once_with(retry_after_ms=7000.0)
     sleep.assert_awaited_once_with(7.0)
 
@@ -96,15 +99,79 @@ async def test_invalid_url_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_private_friend_list_is_marked() -> None:
+    request_count = 0
+
     def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
         return httpx.Response(401, json={})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-        client = SteamClient("key", base_url="https://api.test", client=http_client)
+        client = SteamClient("key-1,key-2", base_url="https://api.test", client=http_client)
         result = await client.get_friend_list("76561197960435530")
 
     assert result.private is True
     assert result.friend_ids == []
+    assert request_count == 1
+
+
+@pytest.mark.asyncio
+async def test_forbidden_friend_list_rotates_keys_and_surfaces_auth_error() -> None:
+    queried_keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queried_keys.append(str(request.url.params.get("key")))
+        return httpx.Response(403, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = SteamClient(
+            "bad-key-1,bad-key-2",
+            base_url="https://api.test",
+            client=http_client,
+        )
+        with pytest.raises(SteamApiError) as error:
+            await client.get_friend_list("76561197960435530")
+        with pytest.raises(SteamApiError) as repeated_error:
+            await client.get_friend_list("76561197960435531")
+
+    assert error.value.status_code == 403
+    assert repeated_error.value.status_code == 403
+    assert queried_keys == ["bad-key-1", "bad-key-2"]
+
+
+@pytest.mark.asyncio
+async def test_auth_fallback_does_not_mutate_params_or_back_off_good_keys() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=0)
+    limiter.wait = AsyncMock()
+    limiter.report_success = AsyncMock()
+    limiter.report_backoff = AsyncMock()
+    queried_keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = str(request.url.params.get("key"))
+        queried_keys.append(key)
+        if key == "bad-key":
+            return httpx.Response(403, json={})
+        return httpx.Response(200, json={"response": {"players": []}})
+
+    params = {"steamids": "123", "key": "caller-value"}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = SteamClient(
+            "bad-key,good-key",
+            base_url="https://api.test",
+            client=http_client,
+            rate_limiter=limiter,
+        )
+        result = await client._get_json("/test", params, retries=1)
+        repeated_result = await client._get_json("/test", params, retries=1)
+
+    assert result == {"response": {"players": []}}
+    assert repeated_result == result
+    assert queried_keys == ["bad-key", "good-key", "good-key"]
+    assert params == {"steamids": "123", "key": "caller-value"}
+    assert limiter.wait.await_count == 3
+    assert limiter.report_success.await_count == 2
+    limiter.report_backoff.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -117,7 +184,11 @@ async def test_steam_client_key_rotation() -> None:
         return httpx.Response(200, json={"response": {"players": []}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-        client = SteamClient("key1, key2; key3\nkey4", base_url="https://api.test", client=http_client)
+        client = SteamClient(
+            "key1, key2; key1\nkey3 key4",
+            base_url="https://api.test",
+            client=http_client,
+        )
         assert client.api_keys == ["key1", "key2", "key3", "key4"]
 
         await client.get_player_summaries(["123"])
