@@ -12,11 +12,12 @@ graph TD
     classDef p2 fill:#fef9e7,stroke:#f1c40f,stroke-width:2px;
     classDef p3 fill:#fdf2e9,stroke:#e67e22,stroke-width:2px;
 
-    subgraph Phase1["🟢 阶段 1: 本地体验与性能优化 (近期规划)"]
-        A["增量抓取与本地缓存"]
-        B["自适应并发限速器 (Rate Limiter)"]
-        C["HTTP/SOCKS 代理配置"]
-        D["Neo4j 批量写入优化 (apoc/UNWIND)"]
+    subgraph Phase1["🟢 阶段 1: 本地体验与性能优化 (已完成)"]
+        A["增量抓取与本地缓存 ✅"]
+        B["自适应并发限速器 ✅"]
+        C["HTTP/SOCKS 代理配置 ✅"]
+        D["Neo4j 批量写入优化 ✅"]
+        J["优雅关闭与健康检查 ✅"]
     end
 
     subgraph Phase2["🟡 阶段 2: 社交网络分析深度赋能 (中期规划)"]
@@ -33,7 +34,7 @@ graph TD
     Phase1 --> Phase2
     Phase2 --> Phase3
 
-    class A,B,C,D p1;
+    class A,B,C,D,J p1;
     class E,F,G p2;
     class H,I p3;
 ```
@@ -42,24 +43,27 @@ graph TD
 
 ## 2. 迭代阶段规划详情
 
-### 🟢 阶段 1：本地体验优化与性能强化 (近期规划)
+### 🟢 阶段 1：本地体验优化与性能强化 (已完成)
 本阶段的核心目标是**优化数据抓取效率，减少等待时间，并提升本地运行的健壮性**。
 
 > [!NOTE]
 > 阶段 1 的改动主要集中在底层网络与数据库写入性能，不涉及复杂算法，但能极大提升二次使用的体验。
 
-1. **增量抓取与本地缓存**
-   - **内容**：支持对已抓取的节点设置有效期（例如 7 天）。在有效期内，若再次爬取该用户的关联网络，直接读取本地 Neo4j 数据库数据，跳过 Steam API 请求。
+1. **增量抓取与本地缓存（已完成）**
+   - **内容**：支持为已抓取好友列表设置有效期。在有效期内再次抓取时，Kuzu 与 Neo4j 均直接读取本地缓存并跳过 Steam API 请求。
    - **收益**：大幅减少 API 额度消耗，二次图谱刷新速度提升 90% 以上。
-2. **自适应并发限速器 (Rate Limiter)**
-   - **内容**：目前请求为串行延时（通过 Delay ms 保证）。后续引入自适应滑动窗口限速，在维持安全频控的同时，允许安全限额下的异步并发请求。
+2. **自适应并发限速器 (Rate Limiter，已完成)**
+   - **内容**：按请求起始时间调度，支持 AIMD 动态延迟、零延迟退避、`Retry-After` 和每层 `1-16` 个有界异步请求；网络读取并发执行，数据库归并写入保持串行。
    - **收益**：缩短多层抓取任务的总耗时。
-3. **代理 (Proxy) 配置支持**
-   - **内容**：在 Web GUI 安全配置中提供 HTTP/SOCKS 代理输入口，或通过 `.env` 中的 `HTTP_PROXY` / `HTTPS_PROXY` 加载。
+3. **代理 (Proxy) 配置支持（已完成）**
+   - **内容**：Web GUI 安全配置已支持 HTTP/HTTPS/SOCKS5/SOCKS5H 代理，凭据保存到系统凭据库；同时支持 `STEAM_PROXY_URL` 以及系统 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量回退。
    - **收益**：保障国内网络环境可以稳定直接地连通 Steam Web API。
-4. **Neo4j 批量写入优化**
-   - **内容**：对现有的 `UNWIND` 逻辑进行调优，在导入超大规模节点或关系时优化批处理大小（Batching）。
+4. **Neo4j 批量写入优化（已完成）**
+   - **内容**：节点与关系通过 `UNWIND` 分批写入，关系批次限制为 1000 条，降低大规模导入时的单次事务压力。
    - **收益**：降低爬取中后期 Neo4j 本地数据库的写入抖动与 CPU 负载。
+5. **优雅关闭与健康检查（已完成）**
+   - **内容**：服务退出时先停止并等待后台抓取任务，再关闭 HTTP 客户端和图数据库；`/api/health` 同时报告数据库、活动项目和抓取状态。
+   - **收益**：减少 Kuzu 文件锁残留和任务状态悬空，并为本地脚本或后续容器编排提供就绪探针。
 
 ---
 
@@ -102,10 +106,11 @@ graph TD
 
 | 迭代阶段 | 待办特性 | 优先级 | 估算复杂度 | 依赖模块 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Phase 1** | 代理 (Proxy) 配置支持 | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` |
-| **Phase 1** | 增量抓取与本地缓存 | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `neo4j_repo.py` |
-| **Phase 1** | 自适应并发限速器 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py` |
-| **Phase 1** | Neo4j 批量写入优化 | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` |
+| **Phase 1** | 代理 (Proxy) 配置支持 ✅ | ⭐⭐⭐⭐⭐ | 🟢 简单 (Easy) | `steam.py` |
+| **Phase 1** | 增量抓取与本地缓存 ✅ | ⭐⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `kuzu_repo.py`, `neo4j_repo.py` |
+| **Phase 1** | 自适应并发限速器 ✅ | ⭐⭐⭐ | 🟡 中等 (Medium) | `rate_limiter.py`, `steam.py`, `crawler.py` |
+| **Phase 1** | Neo4j 批量写入优化 ✅ | ⭐⭐ | 🟡 中等 (Medium) | `neo4j_repo.py` |
+| **Phase 1** | 优雅关闭与健康检查 ✅ | ⭐⭐⭐⭐ | 🟢 简单 (Easy) | `app.py`, `crawler.py`, `logs.py` |
 | **Phase 2** | 图算法集成 (Louvain/PageRank) | ⭐⭐⭐⭐ | 🔴 困难 (Hard) | `neo4j_repo.py`, `app.js` |
 | **Phase 2** | 多 Root 关系对比与交集 | ⭐⭐⭐ | 🟡 中等 (Medium) | `crawler.py`, `app.js` |
 | **Phase 2** | ECharts 图表可视化面板 | ⭐⭐ | 🟡 中等 (Medium) | `app.js`, `index.html` |

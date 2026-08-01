@@ -1,23 +1,136 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-import httpx
-from unittest.mock import AsyncMock, MagicMock
 
 from steam_friend_relationship_map.rate_limiter import AdaptiveRateLimiter
-from steam_friend_relationship_map.steam import SteamClient, SteamApiError
+from steam_friend_relationship_map.steam import SteamApiError, SteamClient
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_starts_immediately_then_spaces_requests() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
+    loop = MagicMock()
+    loop.time.side_effect = [10.0, 10.0, 10.3]
+
+    with (
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
+            return_value=loop,
+        ),
+        patch("steam_friend_relationship_map.rate_limiter.asyncio.sleep", new=AsyncMock()) as sleep,
+    ):
+        await limiter.wait()
+        sleep.assert_not_awaited()
+
+        await limiter.wait()
+        sleep.assert_awaited_once_with(pytest.approx(0.3))
+
+
+@pytest.mark.asyncio
+async def test_cancelled_wait_does_not_reserve_a_phantom_request_slot() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
+    loop = MagicMock()
+    loop.time.return_value = 10.0
+    sleep_started = asyncio.Event()
+
+    async def blocked_sleep(_: float) -> None:
+        sleep_started.set()
+        await asyncio.Future()
+
+    with (
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
+            return_value=loop,
+        ),
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.sleep",
+            side_effect=blocked_sleep,
+        ),
+    ):
+        await limiter.wait()
+        waiting = asyncio.create_task(limiter.wait())
+        await sleep_started.wait()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    assert limiter._next_request_at == pytest.approx(10.3)
+
+
+@pytest.mark.asyncio
+async def test_waiting_request_rechecks_backoff_after_waking() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=300.0)
+    clock = 10.0
+    sleep_calls: list[float] = []
+    first_sleep_started = asyncio.Event()
+    release_first_sleep = asyncio.Event()
+
+    class Loop:
+        @staticmethod
+        def time() -> float:
+            return clock
+
+    async def advancing_sleep(delay: float) -> None:
+        nonlocal clock
+        sleep_calls.append(delay)
+        if len(sleep_calls) == 1:
+            first_sleep_started.set()
+            await release_first_sleep.wait()
+        clock += delay
+
+    with (
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
+            return_value=Loop(),
+        ),
+        patch(
+            "steam_friend_relationship_map.rate_limiter.asyncio.sleep",
+            side_effect=advancing_sleep,
+        ),
+    ):
+        await limiter.wait()
+        waiting = asyncio.create_task(limiter.wait())
+        await first_sleep_started.wait()
+        await limiter.report_backoff(retry_after_ms=1000.0)
+        release_first_sleep.set()
+        await waiting
+
+    assert sleep_calls == [pytest.approx(0.3), pytest.approx(0.7)]
+    assert limiter._next_request_at == pytest.approx(11.45)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_can_back_off_from_zero_delay() -> None:
+    limiter = AdaptiveRateLimiter(base_delay_ms=0.0)
+    loop = MagicMock()
+    loop.time.return_value = 20.0
+
+    with patch(
+        "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
+        return_value=loop,
+    ):
+        await limiter.report_backoff(retry_after_ms=1500.0)
+
+    assert limiter.current_delay_ms == 100.0
+    assert limiter._next_request_at == pytest.approx(21.5)
 
 
 @pytest.mark.asyncio
 async def test_adaptive_rate_limiter_aimd():
     changes = []
+    callback_lock_states = []
+
     def callback(old_val, new_val, reason):
         changes.append((old_val, new_val, reason))
+        callback_lock_states.append(limiter.lock.locked())
 
     # Base delay 300ms, min 250ms, max 1000ms
     limiter = AdaptiveRateLimiter(
         base_delay_ms=300.0,
         min_delay_ms=250.0,
         max_delay_ms=1000.0,
-        on_change_callback=callback
+        on_change_callback=callback,
     )
 
     assert limiter.current_delay_ms == 300.0
@@ -45,6 +158,32 @@ async def test_adaptive_rate_limiter_aimd():
     limiter.current_delay_ms = 800.0
     await limiter.report_backoff()  # 800 * 1.5 = 1200 -> cap at 1000
     assert limiter.current_delay_ms == 1000.0
+    assert not any(callback_lock_states)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_callback_failure_does_not_break_state_updates(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def failing_callback(_: float, __: float, ___: str) -> None:
+        raise RuntimeError("log sink unavailable")
+
+    limiter = AdaptiveRateLimiter(
+        base_delay_ms=300.0,
+        min_delay_ms=250.0,
+        max_delay_ms=1000.0,
+        on_change_callback=failing_callback,
+    )
+
+    await limiter.report_success()
+    assert limiter.current_delay_ms == 287.5
+
+    await limiter.report_backoff()
+    assert limiter.current_delay_ms == 431.25
+    assert [record.message for record in caplog.records] == [
+        "Rate limiter change callback failed",
+        "Rate limiter change callback failed",
+    ]
 
 
 @pytest.mark.asyncio

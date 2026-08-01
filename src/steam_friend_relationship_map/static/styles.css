@@ -16,7 +16,6 @@
   --surface-teal: #e6f0fa;
   --surface-teal-light: #f0f5fa;
   --surface-gray: #f1f5f4;
-  --surface-project: #f9fbfb;
   --progress-bg: #e3eaed;
   --brand-fg: #ffffff;
   --tool-bg: #ffffff;
@@ -49,7 +48,6 @@
   --surface-teal: #193246;
   --surface-teal-light: #20415a;
   --surface-gray: #1b2838;
-  --surface-project: #111b27;
   --progress-bg: #213c4f;
   --brand-fg: #ffffff;
   --tool-bg: #141f2c;
@@ -160,12 +158,21 @@ textarea {
   box-shadow: var(--shadow-sm);
 }
 
-.sidebar-tab-content,
-.inspector-tab-content {
+.sidebar-tab-content {
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
   width: 33.3333%;
+  flex-shrink: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.inspector-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  width: 25%;
   flex-shrink: 0;
   height: 0;
   overflow: hidden;
@@ -176,8 +183,9 @@ textarea {
 .sidebar-tab-slider[data-active-index="1"] #tabFilter,
 .sidebar-tab-slider[data-active-index="2"] #tabSettings,
 .inspector-tab-slider[data-active-index="0"] #insTabPath,
-.inspector-tab-slider[data-active-index="1"] #insTabRank,
-.inspector-tab-slider[data-active-index="2"] #insTabCypher {
+.inspector-tab-slider[data-active-index="1"] #insTabAnalysis,
+.inspector-tab-slider[data-active-index="2"] #insTabRank,
+.inspector-tab-slider[data-active-index="3"] #insTabCypher {
   height: auto;
   overflow: visible;
 }
@@ -206,12 +214,15 @@ textarea {
   color: var(--muted);
   font-size: 0.8125rem;
   font-weight: 700;
+  border: 1px solid transparent;
+  cursor: pointer;
 }
 
 .lang-button.active {
   background: var(--panel);
   color: var(--teal);
   box-shadow: var(--shadow-sm);
+  border: 1px solid var(--line);
 }
 
 .theme-toggle {
@@ -221,7 +232,7 @@ textarea {
   height: 2.25rem;
   border: 1px solid var(--line);
   border-radius: 0.5rem;
-  background: var(--icon-bg);
+  background: var(--surface-alt);
   color: var(--muted);
   cursor: pointer;
 }
@@ -230,6 +241,25 @@ textarea {
   width: 2.5rem;
   height: 2.5rem;
   flex-shrink: 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.brand-mark:hover {
+  transform: scale(1.05);
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  transition: filter 0.3s ease;
+}
+
+[data-theme="light"] .brand-mark img {
+  filter: brightness(1.1) contrast(1.05) invert(0.88) hue-rotate(185deg);
 }
 
 h1,
@@ -260,7 +290,7 @@ h3 {
 
 .panel,
 .profile-card {
-  background: var(--panel);
+  background: var(--surface-alt);
   border: 1px solid var(--line);
   border-radius: 0.5rem;
   box-shadow: var(--shadow);
@@ -288,7 +318,11 @@ h3 {
 
 .panel-title {
   margin-bottom: 12px;
+  padding-bottom: 8px;
   font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
 }
 
 .status-grid,
@@ -320,6 +354,18 @@ textarea {
   color: var(--ink);
   padding: 0.5rem 0.625rem;
   outline: none;
+  box-sizing: border-box;
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+input,
+select {
+  height: 34px;
 }
 
 textarea {
@@ -336,23 +382,124 @@ textarea:focus {
 button {
   border: 0;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  font-family: inherit;
+  will-change: transform;
+  /* 默认离开时使用 elastic 曲线平滑复位 */
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.25s, border-color 0.25s, color 0.25s, box-shadow 0.25s;
 }
 
 button:active {
-  transform: scale(0.97);
+  transform: scale(0.96) !important;
 }
 
 button:disabled {
-  cursor: wait;
-  opacity: 0.62;
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
-button svg {
+/* ── SVG / Lucide Icons Theme & Size System ─────────────────────── */
+
+svg.lucide,
+[data-lucide] {
+  display: inline-block;
+  vertical-align: middle;
+  stroke: currentColor;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.25s ease, stroke-width 0.25s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Light Theme: 1.8px delicate stroke width */
+svg.lucide {
+  stroke-width: 1.8px;
+}
+
+/* Dark Theme: 2.0px stroke width to maintain crisp clarity on dark background */
+[data-theme="dark"] svg.lucide {
+  stroke-width: 2px;
+}
+
+/* --- Icon Sizes Specification --- */
+
+/* 1. Large size (panel headers, title badges, etc.) */
+.lucide-lg,
+.panel-title svg,
+.panel-title [data-lucide] {
+  width: 18px;
+  height: 18px;
+}
+svg.lucide-lg {
+  stroke-width: 2px;
+}
+[data-theme="dark"] svg.lucide-lg {
+  stroke-width: 2.2px;
+}
+
+/* 2. Medium size - Default button icons (L1 large action buttons, L2 tab switch text icons) */
+button svg,
+button [data-lucide],
+.tab-button svg,
+.ins-tab-button svg {
   width: 16px;
   height: 16px;
 }
 
+/* 3. Small size - Small tool buttons (L3 tool actions, preset select buttons, lock buttons) */
+.icon-button svg,
+.icon-button [data-lucide],
+.tool svg,
+.tool [data-lucide],
+.mini-button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2px;
+}
+[data-theme="dark"] .icon-button svg,
+[data-theme="dark"] .tool svg,
+[data-theme="dark"] .mini-button svg {
+  stroke-width: 2.2px;
+}
+
+/* 4. Mini size (project meta markers, small inline indicators) */
+.lucide-xs,
+.project-meta svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.2px;
+}
+[data-theme="dark"] svg.lucide-xs {
+  stroke-width: 2.4px;
+}
+
+/* --- Active & Hover State Transitions --- */
+
+/* Smooth stroke colors transition to teal on hover */
+.icon-button:hover svg,
+.tool:hover svg,
+.primary:hover svg,
+.secondary:hover svg,
+.tab-button:hover svg,
+.ins-tab-button:hover svg,
+.lang-button:hover svg {
+  stroke: var(--teal);
+}
+
+/* Accent active states with glowing backdrop drop-shadows */
+.tab-button.active svg,
+.ins-tab-button.active svg,
+.lang-button.active svg {
+  stroke: var(--teal);
+  filter: drop-shadow(0 0 2px rgba(0, 180, 216, 0.4));
+}
+[data-theme="dark"] .tab-button.active svg,
+[data-theme="dark"] .ins-tab-button.active svg,
+[data-theme="dark"] .lang-button.active svg {
+  filter: drop-shadow(0 0 3px rgba(0, 180, 216, 0.6));
+}
+
+/* 1. Primary & Secondary Buttons (Unified Large Buttons) */
 .primary,
 .secondary {
   display: inline-flex;
@@ -362,50 +509,117 @@ button svg {
   width: 100%;
   min-height: 2.5rem;
   margin-top: 0.75rem;
-  border-radius: 0.375rem;
-  color: var(--brand-fg);
+  border-radius: 0.5rem;
   font-weight: 700;
+  letter-spacing: 0.03em;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  
+  /* 默认浅色主题：浅色风格 */
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
 }
 
-.primary {
-  background: var(--teal);
+.primary:hover,
+.secondary:hover {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--teal);
+  color: var(--teal);
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.1);
 }
 
-.primary:hover {
-  background: var(--teal-dark);
+/* 流光扫过效果（大按钮） */
+.primary::before,
+.secondary::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: skewX(-25deg);
+  transition: none;
 }
 
-.secondary {
-  background: var(--blue);
+.primary:hover::before,
+.secondary:hover::before {
+  left: 150%;
+  transition: left 0.85s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.button-success {
-  background: var(--teal-dark) !important;
-  color: var(--brand-fg) !important;
+/* 暗色主题重写：大按钮采用暗色风格 */
+[data-theme="dark"] .primary,
+[data-theme="dark"] .secondary {
+  background: rgba(20, 31, 44, 0.55);
+  border-color: var(--line);
+  color: var(--ink);
 }
 
-.button-error {
-  background: var(--rose) !important;
-  color: var(--brand-fg) !important;
+[data-theme="dark"] .primary:hover,
+[data-theme="dark"] .secondary:hover {
+  background: rgba(25, 50, 70, 0.75);
+  border-color: var(--teal);
+  color: var(--teal);
+  box-shadow: 0 4px 12px rgba(102, 192, 244, 0.12);
 }
+
+/* 2. Interactive States (Loading, Success, Error) */
 
 .is-loading {
-  position: relative;
+  pointer-events: none;
+  opacity: 0.8;
 }
 
-.is-loading::after {
+/* 图标自转 */
+.is-loading svg,
+.is-loading [data-lucide] {
+  animation: spin 1s linear infinite !important;
+  display: inline-block !important;
+}
+
+/* 无图标按钮的 spinner 样式 */
+.is-loading:not(:has(svg)):not(:has([data-lucide])) {
+  position: relative;
+  padding-right: 2.2rem !important;
+}
+
+.is-loading:not(:has(svg)):not(:has([data-lucide]))::after {
+  content: "";
+  position: absolute;
+  right: 0.8rem;
+  top: calc(50% - 6px);
   width: 12px;
   height: 12px;
   border: 2px solid currentColor;
   border-top-color: transparent;
-  border-radius: 999px;
-  content: "";
-  animation: spin 700ms linear infinite;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
 
-.is-loading svg,
-.is-loading [data-lucide] {
-  display: none !important;
+.button-success {
+  background: linear-gradient(135deg, #2ecc71, #27ae60) !important;
+  border-color: #27ae60 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 0 4px rgba(46, 204, 113, 0.3) !important;
+  animation: successPulse 0.6s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.button-error {
+  background: linear-gradient(135deg, #e74c3c, #c0392b) !important;
+  border-color: #c0392b !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 0 4px rgba(231, 76, 60, 0.3) !important;
+  animation: shake 0.5s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 @keyframes spin {
@@ -414,10 +628,32 @@ button svg {
   }
 }
 
+@keyframes successPulse {
+  0% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 0px rgba(46, 204, 113, 0.5);
+  }
+  50% {
+    transform: scale(0.97);
+    box-shadow: 0 0 0 10px rgba(46, 204, 113, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0px rgba(46, 204, 113, 0);
+  }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  15%, 45%, 75% { transform: translateX(-4px); }
+  30%, 60%, 90% { transform: translateX(4px); }
+}
+
 .compact {
   min-height: 36px;
 }
 
+/* 3. Icon Buttons & Tools */
 .icon-button,
 .tool {
   display: grid;
@@ -425,20 +661,28 @@ button svg {
   width: 34px;
   height: 34px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--icon-bg);
+  border-radius: 8px;
+  background: rgba(var(--bg-rgb), 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   color: var(--ink);
+  box-shadow: var(--shadow-sm);
 }
 
 .icon-button:hover,
 .tool:hover {
   border-color: var(--teal);
   color: var(--teal);
+  background: rgba(var(--bg-rgb), 0.7);
+  box-shadow: 0 4px 10px rgba(0, 113, 227, 0.15);
 }
 
-.danger:hover {
-  border-color: var(--rose);
-  color: var(--rose);
+/* 针对 Danger 按钮的悬停定制 */
+.icon-button.danger:hover {
+  border-color: var(--rose) !important;
+  color: var(--rose) !important;
+  background: var(--danger-bg) !important;
+  box-shadow: 0 4px 10px rgba(223, 32, 32, 0.15) !important;
 }
 
 .crawl-actions {
@@ -502,12 +746,37 @@ button svg {
   overflow-wrap: anywhere;
 }
 
+/* Hide redundant success description text */
 .connection-detail.ok {
-  color: var(--teal);
+  display: none !important;
 }
 
 .connection-detail.failed {
   color: var(--rose);
+}
+
+/* Color sync for connection status grid titles and labels */
+.status-grid strong[data-status="ok"] {
+  color: var(--teal) !important;
+}
+
+.status-grid div:has(strong[data-status="ok"]) .muted {
+  color: var(--teal) !important;
+  opacity: 1;
+}
+
+.status-grid strong[data-status="failed"] {
+  color: var(--rose) !important;
+}
+
+.status-grid div:has(strong[data-status="failed"]) .muted {
+  color: var(--rose) !important;
+  opacity: 1;
+}
+
+.status-grid strong[data-status="testing"] {
+  color: var(--ink) !important;
+  opacity: 0.65;
 }
 
 .crawl-timer {
@@ -537,7 +806,7 @@ button svg {
 
 .topbar {
   padding: 14px 18px;
-  background: var(--panel);
+  background: var(--surface-alt);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
@@ -571,21 +840,69 @@ button svg {
 .graph-empty {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-content: center;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   color: var(--muted);
   text-align: center;
   pointer-events: none;
+  background: radial-gradient(circle at center, rgba(0, 180, 216, 0.03) 0%, transparent 65%);
+  transition: opacity 0.5s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
-.graph-empty strong {
+.empty-icon-wrap {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  box-shadow: 0 0 20px rgba(0, 180, 216, 0.1), inset 0 0 10px rgba(255, 255, 255, 0.05);
+  color: var(--teal);
+  margin-bottom: 4px;
+  animation: floatOrb 4s ease-in-out infinite;
+}
+
+.empty-icon-wrap svg {
+  width: 32px;
+  height: 32px;
+  stroke-width: 1.5px;
+  filter: drop-shadow(0 0 4px rgba(0, 180, 216, 0.4));
+  animation: rotateOrb 16s linear infinite;
+}
+
+.graph-empty h3 {
   color: var(--ink);
-  font-size: 16px;
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.graph-empty p {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  margin: 0;
+  max-width: 260px;
+  line-height: 1.5;
 }
 
 .graph-empty.hidden {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
+  display: none !important;
+}
+
+@keyframes floatOrb {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes rotateOrb {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .profile-card {
@@ -702,6 +1019,62 @@ dd {
   background: var(--surface-teal-light);
 }
 
+.rank-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.rank-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.community-swatch {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  background: var(--community-color, var(--teal));
+}
+
+.rank-empty {
+  padding: 8px 2px;
+  line-height: 1.45;
+}
+
+.network-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.network-summary div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.network-summary span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.network-summary strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.network-color-toggle {
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
 .path-result {
   margin-top: 10px;
   padding: 10px;
@@ -795,6 +1168,17 @@ dd {
 
 .secret-state strong {
   color: var(--ink);
+}
+
+.secret-state-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.secret-state-controls .icon-button {
+  width: 28px;
+  height: 28px;
 }
 
 .log-drawer {
@@ -1012,7 +1396,7 @@ body.resize-in-progress #graph {
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--surface-alt);
   z-index: 100;
   overflow: hidden;
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
@@ -1113,7 +1497,7 @@ body {
 
 .preset-bar select {
   flex: 1;
-  height: 32px;
+  height: 34px;
   min-width: 0;
   padding: 4px 6px;
   font-size: 12px;
@@ -1121,8 +1505,8 @@ body {
 }
 
 .preset-bar .icon-button {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   box-sizing: border-box;
 }
@@ -1210,10 +1594,6 @@ body {
   white-space: nowrap;
 }
 
-.project-panel {
-  background: var(--surface-project);
-}
-
 .project-info {
   display: flex;
   align-items: center;
@@ -1238,18 +1618,21 @@ body {
 }
 
 .project-actions input {
-  flex: 5;
+  flex: 1;
   min-width: 0;
   height: 2.125rem;
   box-sizing: border-box;
 }
 
 .project-actions .secondary {
-  flex: 1;
+  width: 2.125rem;
   height: 2.125rem;
-  padding: 0 10px;
+  flex-shrink: 0;
+  padding: 0;
   margin-top: 0;
   box-sizing: border-box;
+  display: grid;
+  place-items: center;
 }
 
 .project-list {
@@ -1406,111 +1789,78 @@ body {
 
 /* ── Interactive Micro-animations ───────────────────────────────── */
 
-/* 1. Small Actions (Icon Buttons, Tools, Theme Toggles, Lang Switches, Mini-Buttons) */
+/* 1. Small Actions (Icon Buttons, Tools, Theme Toggles, Mini-Buttons) */
 .icon-button,
 .tool,
 .theme-toggle,
-.lang-button,
 .mini-button {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.25s, border-color 0.25s, color 0.25s, box-shadow 0.25s;
 }
 
-.icon-button:hover,
-.tool:hover,
-.theme-toggle:hover,
-.lang-button:hover,
+/* 为没有挂载 JS 吸附的 mini-button 保留默认 hover */
 .mini-button:hover {
-  transform: scale(1.06) !important;
-  background: var(--surface-teal) !important;
-  border-color: var(--teal) !important;
-  color: var(--teal) !important;
+  transform: scale(1.05);
+  background: var(--surface-teal);
+  border-color: var(--teal);
+  color: var(--teal);
 }
 
-.icon-button:active,
-.tool:active,
-.theme-toggle:active,
-.lang-button:active,
-.mini-button:active {
-  transform: scale(0.94) !important;
+/* 主题切换按钮 hover 时保留高亮和阴影，但由 JS 全权接管 transform */
+.theme-toggle:hover {
+  background: var(--surface-teal);
+  border-color: var(--teal);
+  color: var(--teal);
+  box-shadow: 0 4px 10px rgba(0, 113, 227, 0.15);
 }
 
-/* Icon rotation on hover for Small Actions */
-.icon-button svg,
-.icon-button [data-lucide],
-.tool svg,
-.tool [data-lucide],
-.theme-toggle svg,
-.theme-toggle [data-lucide],
-.mini-button svg,
-.mini-button [data-lucide] {
-  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
-}
-
-.icon-button:hover svg,
-.icon-button:hover [data-lucide],
-.tool:hover svg,
-.tool:hover [data-lucide],
-.theme-toggle:hover svg,
-.theme-toggle:hover [data-lucide],
-.mini-button:hover svg,
-.mini-button:hover [data-lucide] {
-  transform: rotate(15deg) !important;
-}
-
-/* Theme toggle special 30deg rotation override */
-.theme-toggle:hover svg,
-.theme-toggle:hover [data-lucide] {
-  transform: rotate(30deg) !important;
-}
-
-/* 2. Medium Actions (Tab Buttons, Chips) */
+/* 2. Medium Actions (Tab Buttons, Lang Buttons, Chips) */
 .tab-button,
 .ins-tab-button,
+.lang-button,
 .recent-root-chip {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1), background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
+  will-change: transform;
 }
 
 .tab-button:hover,
 .ins-tab-button:hover,
+.lang-button:hover,
 .recent-root-chip:hover {
-  transform: scale(1.03) !important;
+  background: rgba(var(--bg-rgb), 0.7);
+  color: var(--teal);
+  transform: scale(1.03);
 }
 
 .tab-button:active,
 .ins-tab-button:active,
+.lang-button:active,
 .recent-root-chip:active {
-  transform: scale(0.97) !important;
+  transform: scale(0.97);
 }
 
-/* Tab icon shift on hover */
+/* Tab & Lang Button 激活状态的高级效果 */
+.tab-button.active,
+.ins-tab-button.active,
+.lang-button.active {
+  background: var(--panel);
+  color: var(--teal);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--line);
+}
+
+/* 选项卡图标轻微向上偏移和缩放 */
 .tab-button svg,
 .tab-button [data-lucide],
 .ins-tab-button svg,
 .ins-tab-button [data-lucide] {
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 .tab-button:hover svg,
 .tab-button:hover [data-lucide],
 .ins-tab-button:hover svg,
 .ins-tab-button:hover [data-lucide] {
-  transform: translateY(-1px) scale(1.05) !important;
-}
-
-/* 3. Large Actions (Primary, Secondary Form Buttons) */
-.primary,
-.secondary {
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
-}
-
-.primary:hover,
-.secondary:hover {
-  transform: scale(1.015) !important;
-}
-
-.primary:active,
-.secondary:active {
-  transform: scale(0.985) !important;
+  transform: translateY(-2px) scale(1.08);
 }
 
 /* ── Tab Switch Sliders (Horizontal Swiping) ────────────────────── */
@@ -1521,11 +1871,17 @@ body {
   flex-shrink: 0;
 }
 
-.sidebar-tab-slider,
-.inspector-tab-slider {
+.sidebar-tab-slider {
   display: flex;
   align-items: flex-start;
   width: 300%;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.inspector-tab-slider {
+  display: flex;
+  align-items: flex-start;
+  width: 400%;
   transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -1536,5 +1892,84 @@ body {
 
 /* Inspector Translations */
 .inspector-tab-slider[data-active-index="0"] { transform: translateX(0); }
-.inspector-tab-slider[data-active-index="1"] { transform: translateX(-33.3333%); }
-.inspector-tab-slider[data-active-index="2"] { transform: translateX(-66.6666%); }
+.inspector-tab-slider[data-active-index="1"] { transform: translateX(-25%); }
+.inspector-tab-slider[data-active-index="2"] { transform: translateX(-50%); }
+.inspector-tab-slider[data-active-index="3"] { transform: translateX(-75%); }
+
+/* ── Custom iOS/Mac Style Switch / Checkbox ─────────────────────── */
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 12px 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+  transition: color 0.25s;
+}
+
+.checkbox-label:hover {
+  color: var(--ink);
+}
+
+.checkbox-label input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.checkbox-label .switch-slider {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--progress-bg);
+  border: 1px solid var(--line);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  will-change: background-color, border-color;
+  flex-shrink: 0;
+}
+
+.checkbox-label .switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  bottom: 2px;
+  border-radius: 50%;
+  background-color: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  will-change: transform;
+}
+
+.checkbox-label input[type="checkbox"]:checked + .switch-slider {
+  background-color: var(--teal);
+  border-color: var(--teal);
+}
+
+.checkbox-label input[type="checkbox"]:checked + .switch-slider::before {
+  transform: translateX(18px);
+}
+
+.checkbox-label:hover .switch-slider {
+  border-color: var(--teal);
+}
+
+/* Dark Theme overrides for Custom Switch */
+[data-theme="dark"] .checkbox-label .switch-slider {
+  background: rgba(20, 31, 44, 0.6);
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .checkbox-label input[type="checkbox"]:checked + .switch-slider {
+  background-color: var(--teal);
+  border-color: var(--teal);
+}
+
