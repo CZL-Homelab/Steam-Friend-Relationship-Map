@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from pathlib import Path
 
 import pytest
 
-from steam_friend_relationship_map.crawler import CrawlManager
+from steam_friend_relationship_map.crawler import CrawlControl, CrawlManager
 from steam_friend_relationship_map.logs import AppLogBuffer
 from steam_friend_relationship_map.models import (
     CrawlCreate,
@@ -180,6 +182,19 @@ class HangingSteam(FakeSteam):
         raise AssertionError("unreachable")
 
 
+class BlockingRepo(FakeRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def blocking_write(self) -> None:
+        self.started.set()
+        self.release.wait(timeout=2)
+        self.finished.set()
+
+
 class PrivateBatchSteam(FakeSteam):
     async def get_friend_list(self, steam_id: str) -> FriendListResult:
         if steam_id == "root":
@@ -276,6 +291,75 @@ async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs(
         await manager.create_crawl(
             CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
         )
+
+
+@pytest.mark.asyncio
+async def test_crawler_repository_work_does_not_block_event_loop() -> None:
+    repo = BlockingRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    try:
+        operation = asyncio.create_task(manager._call_repo("blocking_write"))
+        while not repo.started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.01)
+        responsive_after = loop.time() - started_at
+        repo.release.set()
+        await operation
+    finally:
+        repo.release.set()
+
+    assert responsive_after < 0.5
+    assert repo.finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_crawler_waits_for_started_repository_work() -> None:
+    repo = BlockingRepo()
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+    operation = asyncio.create_task(manager._call_repo("blocking_write"))
+    while not repo.started.is_set():
+        await asyncio.sleep(0.005)
+
+    operation.cancel()
+    await asyncio.sleep(0.01)
+    assert operation.done() is False
+
+    repo.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    assert repo.finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_pause_and_resume_roll_back_memory_state_when_persistence_fails() -> None:
+    repo = FakeRepo()
+
+    def fail_update(_run_id: str, **_fields: object) -> None:
+        raise RuntimeError("database unavailable")
+
+    repo.update_crawl_run = fail_update  # type: ignore[method-assign]
+    manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
+    control = CrawlControl()
+    manager.controls["run"] = control
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await manager.pause("run")
+    assert control.pause is False
+
+    control.pause = True
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await manager.resume("run")
+    assert control.pause is True
+
+
+def test_crawler_repository_calls_use_async_wrapper() -> None:
+    source = Path("src/steam_friend_relationship_map/crawler.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "self.repo." not in source
 
 
 @pytest.mark.asyncio

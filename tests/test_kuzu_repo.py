@@ -3,7 +3,9 @@ from __future__ import annotations
 import ast
 import shutil
 import tempfile
+import threading
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -42,9 +44,11 @@ def temp_kuzu_repo() -> Generator[KuzuRepositoryImpl, None, None]:
     db_dir = tempfile.mkdtemp()
     db_path = Path(db_dir) / "kuzu_db"
     repo = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
-    yield repo
-    # Cleanup
-    shutil.rmtree(db_dir)
+    try:
+        yield repo
+    finally:
+        repo.close()
+        shutil.rmtree(db_dir)
 
 
 def test_kuzu_lifecycle_and_schema(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
@@ -86,6 +90,69 @@ def test_kuzu_close_releases_database_lock(tmp_path: Path) -> None:
         assert reopened.test_connection()
     finally:
         reopened.close()
+
+
+def test_kuzu_close_releases_connections_created_by_worker_threads(tmp_path: Path) -> None:
+    class FakeDatabase:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    database = FakeDatabase()
+    barrier = threading.Barrier(3)
+
+    def use_connection(repo: KuzuRepositoryImpl) -> FakeConnection:
+        connection = repo._get_conn()
+        barrier.wait(timeout=2)
+        return connection  # type: ignore[return-value]
+
+    with (
+        patch("steam_friend_relationship_map.kuzu_repo.kuzu.Database", return_value=database),
+        patch(
+            "steam_friend_relationship_map.kuzu_repo.kuzu.Connection",
+            side_effect=lambda _database: FakeConnection(),
+        ),
+    ):
+        repo = KuzuRepositoryImpl(db_path=str(tmp_path / "fake_db"))
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(use_connection, repo) for _ in range(2)]
+            barrier.wait(timeout=2)
+            connections = [future.result(timeout=2) for future in futures]
+        repo.close()
+
+    assert connections[0] is not connections[1]
+    assert all(connection.closed for connection in connections)
+    assert database.closed is True
+    with pytest.raises(RuntimeError, match="closed"):
+        repo._get_conn()
+
+
+def test_kuzu_worker_connection_does_not_keep_real_database_locked(tmp_path: Path) -> None:
+    db_path = tmp_path / "worker_kuzu_db"
+    repo = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        executor.submit(repo.ensure_schema).result(timeout=5)
+        assert executor.submit(repo.test_connection).result(timeout=5)
+        repo.close()
+
+        reopened = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+        try:
+            reopened.ensure_schema()
+            assert reopened.test_connection()
+        finally:
+            reopened.close()
+    finally:
+        executor.shutdown(wait=True)
 
 
 def test_kuzu_open_failure_does_not_move_database(tmp_path: Path) -> None:

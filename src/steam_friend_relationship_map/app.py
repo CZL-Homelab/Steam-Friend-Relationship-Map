@@ -948,11 +948,11 @@ def create_app(
 
     @app.post("/api/crawls/{run_id}/pause")
     async def pause_crawl(run_id: str) -> dict[str, bool]:
-        return {"paused": manager.pause(run_id)}
+        return {"paused": await manager.pause(run_id)}
 
     @app.post("/api/crawls/{run_id}/resume")
     async def resume_crawl(run_id: str) -> dict[str, bool]:
-        return {"resumed": manager.resume(run_id)}
+        return {"resumed": await manager.resume(run_id)}
 
     @app.get("/api/graph", response_model=GraphResponse)
     async def get_graph(

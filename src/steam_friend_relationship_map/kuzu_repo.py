@@ -154,6 +154,8 @@ class KuzuRepositoryImpl(IGraphRepository):
             raise RuntimeError(f"{hint} Original error: {detail}") from exc
 
         self._local = threading.local()
+        self._connections_lock = threading.Lock()
+        self._connections: dict[int, kuzu.Connection] = {}
         self._closed = False
 
     def _get_conn(self) -> kuzu.Connection:
@@ -161,25 +163,42 @@ class KuzuRepositoryImpl(IGraphRepository):
         if self._closed:
             raise RuntimeError("Kuzu repository is closed")
         if not hasattr(self._local, "conn"):
-            self._local.conn = kuzu.Connection(self.db)
+            with self._connections_lock:
+                if self._closed:
+                    raise RuntimeError("Kuzu repository is closed")
+                conn = kuzu.Connection(self.db)
+                self._connections[id(conn)] = conn
+                self._local.conn = conn
         return self._local.conn
 
     def close(self) -> None:
         """Release Kuzu objects so the embedded database file lock can be reacquired."""
-        if self._closed:
-            return
-        self._closed = True
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
+        with self._connections_lock:
+            if self._closed:
+                return
+            self._closed = True
+            connections = list(self._connections.values())
+            self._connections.clear()
+        first_error: Exception | None = None
+        for conn in connections:
             close_conn = getattr(conn, "close", None)
             if callable(close_conn):
-                close_conn()
+                try:
+                    close_conn()
+                except Exception as exc:
+                    first_error = first_error or exc
+        if hasattr(self._local, "conn"):
             delattr(self._local, "conn")
         close_db = getattr(self.db, "close", None)
         if callable(close_db):
-            close_db()
+            try:
+                close_db()
+            except Exception as exc:
+                first_error = first_error or exc
         self.db = None  # type: ignore[assignment]
         gc.collect()
+        if first_error is not None:
+            raise first_error
 
     def test_connection(self) -> str:
         conn = self._get_conn()

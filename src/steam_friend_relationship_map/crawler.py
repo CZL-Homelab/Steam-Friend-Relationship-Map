@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .logs import AppLogBuffer
 from .models import (
@@ -51,6 +51,24 @@ class CrawlManager:
         self.run_history: list[str] = []
         self._lock = asyncio.Lock()
         self._shutting_down = False
+
+    async def _call_repo(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Run synchronous database work off-loop and finish started work on cancellation."""
+        method = getattr(self.repo, method_name)
+        worker = asyncio.create_task(asyncio.to_thread(method, *args, **kwargs))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.shield(worker)
+            except Exception as exc:
+                if self.logs is not None:
+                    self.logs.append(
+                        "warn",
+                        "crawl:database",
+                        f"Cancelled database operation later failed: {exc}",
+                    )
+            raise
 
     def _gc_completed_runs(self) -> None:
         completed_run_ids = []
@@ -114,8 +132,8 @@ class CrawlManager:
                 nodes_discovered=0,
                 edges_discovered=0,
             )
-            self.repo.ensure_schema()
-            self.repo.start_crawl_run(run, self.project_id)
+            await self._call_repo("ensure_schema")
+            await self._call_repo("start_crawl_run", run, self.project_id)
             self.events[run.id] = []
             self.event_seq[run.id] = 0
             control = CrawlControl()
@@ -144,7 +162,7 @@ class CrawlManager:
         self.append_event(run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）")
         return True
 
-    def pause(self, run_id: str) -> bool:
+    async def pause(self, run_id: str) -> bool:
         """暂停扫描（如遇 Steam 限流）。"""
         control = self.controls.get(run_id)
         if control is None:
@@ -152,17 +170,25 @@ class CrawlManager:
         if control.pause:
             return False
         control.pause = True
-        self.repo.update_crawl_run(run_id, status=CrawlStatus.paused.value)
+        try:
+            await self._call_repo("update_crawl_run", run_id, status=CrawlStatus.paused.value)
+        except Exception:
+            control.pause = False
+            raise
         self.append_event(run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续")
         return True
 
-    def resume(self, run_id: str) -> bool:
+    async def resume(self, run_id: str) -> bool:
         """继续扫描。"""
         control = self.controls.get(run_id)
         if control is None or not control.pause:
             return False
         control.pause = False
-        self.repo.update_crawl_run(run_id, status=CrawlStatus.running.value)
+        try:
+            await self._call_repo("update_crawl_run", run_id, status=CrawlStatus.running.value)
+        except Exception:
+            control.pause = True
+            raise
         self.append_event(run_id, "info", "resume", "扫描已继续")
         return True
 
@@ -191,12 +217,20 @@ class CrawlManager:
         api_ids: list[str] = []
         batch_loader = getattr(self.repo, "get_cached_friend_lists", None)
         if callable(batch_loader):
-            cached_lists = batch_loader(steam_ids, cache_valid_days, self.project_id)
+            cached_lists = await self._call_repo(
+                "get_cached_friend_lists",
+                steam_ids,
+                cache_valid_days,
+                self.project_id,
+            )
         else:
             cached_lists = {}
             for steam_id in dict.fromkeys(steam_ids):
-                cached = self.repo.get_cached_friend_list(
-                    steam_id, cache_valid_days, self.project_id
+                cached = await self._call_repo(
+                    "get_cached_friend_list",
+                    steam_id,
+                    cache_valid_days,
+                    self.project_id,
                 )
                 if cached is not None:
                     cached_lists[steam_id] = cached
@@ -241,7 +275,7 @@ class CrawlManager:
 
         return [lookups[steam_id] for steam_id in steam_ids]
 
-    def _persist_api_friend_lists(self, lookups: list[FriendListLookup]) -> None:
+    async def _persist_api_friend_lists(self, lookups: list[FriendListLookup]) -> None:
         updates = [
             FriendListCacheUpdate(
                 steam_id=lookup.steam_id,
@@ -257,10 +291,11 @@ class CrawlManager:
             return
         batch_writer = getattr(self.repo, "mark_friend_list_statuses", None)
         if callable(batch_writer):
-            batch_writer(updates, self.project_id)
+            await self._call_repo("mark_friend_list_statuses", updates, self.project_id)
             return
         for update in updates:
-            self.repo.mark_friend_list_status(
+            await self._call_repo(
+                "mark_friend_list_status",
                 update.steam_id,
                 update.status,
                 friend_count=update.friend_count,
@@ -269,7 +304,7 @@ class CrawlManager:
                 project_id=self.project_id,
             )
 
-    def _persist_terminal_run(
+    async def _persist_terminal_run(
         self,
         run: CrawlRun,
         *,
@@ -307,7 +342,7 @@ class CrawlManager:
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                self.repo.update_crawl_run(run.id, **fields)
+                await self._call_repo("update_crawl_run", run.id, **fields)
                 return True
             except Exception as exc:
                 last_error = exc
@@ -348,7 +383,8 @@ class CrawlManager:
         edges_discovered = 0
         try:
             event = self.append_event(run.id, "info", "root", "正在抓取 Root 用户资料")
-            self.repo.update_crawl_run(
+            await self._call_repo(
+                "update_crawl_run",
                 run.id,
                 status=CrawlStatus.running.value,
                 message=event.message,
@@ -360,7 +396,7 @@ class CrawlManager:
             root.depth_min = 0
             root.root_closeness_score = 100
             root.last_scored_crawl_id = run.id
-            self.repo.upsert_users([root], self.project_id)
+            await self._call_repo("upsert_users", [root], self.project_id)
             nodes_discovered = 1
             self.append_event(run.id, "info", "root", f"Root 用户已写入: {run.root_steam_id}")
 
@@ -375,7 +411,7 @@ class CrawlManager:
                 # ── 强制中断：立即停止，数据保留 ──
                 if control.force_stop:
                     event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
-                    self._persist_terminal_run(
+                    await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.stopped,
                         message=event.message,
@@ -393,7 +429,7 @@ class CrawlManager:
                 # ── 优雅停止：完成当前层 ──
                 if control.cancel:
                     event = self.append_event(run.id, "warn", "cancelled", "用户停止扫描，完成当前层后停止（数据保留）")
-                    self._persist_terminal_run(
+                    await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.cancelled,
                         message=event.message,
@@ -430,7 +466,8 @@ class CrawlManager:
                         )
 
                     processed_count = batch_start + len(batch_ids)
-                    self.repo.update_crawl_run(
+                    await self._call_repo(
+                        "update_crawl_run",
                         run.id,
                         current_depth=depth,
                         current_steam_id=batch_ids[-1],
@@ -443,7 +480,7 @@ class CrawlManager:
                     lookups = await self._load_friend_list_batch(batch_ids, payload.cache_valid_days)
                     if control.force_stop:
                         break
-                    self._persist_api_friend_lists(lookups)
+                    await self._persist_api_friend_lists(lookups)
                     errors_before_batch = error_count
                     private_before_batch = private_count
 
@@ -495,13 +532,13 @@ class CrawlManager:
                     if private_count != private_before_batch:
                         counter_updates["private_count"] = private_count
                     if counter_updates:
-                        self.repo.update_crawl_run(run.id, **counter_updates)
+                        await self._call_repo("update_crawl_run", run.id, **counter_updates)
 
 
                 # ── 内层循环后再次检查强制中断 ──
                 if control.force_stop:
                     event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
-                    self._persist_terminal_run(
+                    await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.stopped,
                         message=event.message,
@@ -540,7 +577,7 @@ class CrawlManager:
                         rec.last_scored_crawl_id = str(met.get("last_scored_crawl_id", ""))
                         batch_records.append(rec)
                     
-                    self.repo.upsert_users(batch_records, self.project_id)
+                    await self._call_repo("upsert_users", batch_records, self.project_id)
                     
                     batch_edges = []
                     for sid in batch_ids:
@@ -560,11 +597,14 @@ class CrawlManager:
                         same_pool_edge_keys.clear()
                     
                     if batch_edges:
-                        self.repo.upsert_relationships(batch_edges, self.project_id)
+                        await self._call_repo(
+                            "upsert_relationships", batch_edges, self.project_id
+                        )
                         edges_discovered += len(batch_edges)
                         
                     nodes_discovered = len(discovered)
-                    self.repo.update_crawl_run(
+                    await self._call_repo(
+                        "update_crawl_run",
                         run.id,
                         nodes_discovered=nodes_discovered,
                         edges_discovered=edges_discovered,
@@ -580,8 +620,11 @@ class CrawlManager:
                 if payload.prior_pool_min_links:
                     inner_pool = [sid for sid, d in discovered.items() if d <= depth]
                     if inner_pool and candidate_hits:
-                        cross_links = self.repo.count_inner_layer_links(
-                            list(candidate_hits.keys()), inner_pool, self.project_id,
+                        cross_links = await self._call_repo(
+                            "count_inner_layer_links",
+                            list(candidate_hits.keys()),
+                            inner_pool,
+                            self.project_id,
                         )
                         self.append_event(
                             run.id, "info", "filter",
@@ -606,7 +649,7 @@ class CrawlManager:
                         if uses_friend_count_filter
                         else []
                     )
-                    self._persist_api_friend_lists(lookups)
+                    await self._persist_api_friend_lists(lookups)
                     lookup_by_id = {lookup.steam_id: lookup for lookup in lookups}
 
                     for friend_id in batch_ids:
@@ -695,12 +738,14 @@ class CrawlManager:
                     same_pool_edges = []
                     same_pool_edge_keys.clear()
                     if batch_edges:
-                        self.repo.upsert_relationships(batch_edges, self.project_id)
+                        await self._call_repo(
+                            "upsert_relationships", batch_edges, self.project_id
+                        )
                         edges_discovered += len(batch_edges)
 
                 if control.force_stop:
                     event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
-                    self._persist_terminal_run(
+                    await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.stopped,
                         message=event.message,
@@ -725,7 +770,8 @@ class CrawlManager:
                     self.append_event(run.id, "info", "users", f"已写入用户节点, 总计{nodes_discovered}")
                     self.append_event(run.id, "info", "edges", f"已写入关系线, 关系总计{edges_discovered}")
 
-                self.repo.update_crawl_run(
+                await self._call_repo(
+                    "update_crawl_run",
                     run.id,
                     nodes_discovered=nodes_discovered,
                     edges_discovered=edges_discovered,
@@ -744,7 +790,7 @@ class CrawlManager:
                 run.id, "info", "completed",
                 f"抓取完成! 节点{nodes_discovered} 关系{edges_discovered} 私密{private_count} 错误{error_count} 筛选{filtered_count}",
             )
-            self._persist_terminal_run(
+            await self._persist_terminal_run(
                 run,
                 status=CrawlStatus.completed,
                 message=event.message,
@@ -759,7 +805,7 @@ class CrawlManager:
             )
         except asyncio.CancelledError:
             event = self.append_event(run.id, "warn", "stopped", "应用关闭，抓取任务已停止")
-            self._persist_terminal_run(
+            await self._persist_terminal_run(
                 run,
                 status=CrawlStatus.stopped,
                 message=event.message,
@@ -775,7 +821,7 @@ class CrawlManager:
             raise
         except Exception as exc:
             event = self.append_event(run.id, "error", "failed", str(exc))
-            self._persist_terminal_run(
+            await self._persist_terminal_run(
                 run,
                 status=CrawlStatus.failed,
                 message=event.message,
