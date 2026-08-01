@@ -1,0 +1,91 @@
+name: Quality and security
+
+on:
+  push:
+    branches: [dev-base, security-check-before-main, main]
+  pull_request:
+    branches: [dev-base, security-check-before-main, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Sync locked environment
+        run: uv sync --frozen
+      - name: Run tests
+        run: uv run --frozen pytest -q
+
+  quality:
+    name: Static and dependency checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Sync locked environment
+        run: uv sync --frozen
+      - name: Check Python
+        run: |
+          uv run --frozen ruff check src tests
+          uv run --frozen ruff format --check src tests
+          uv run --frozen bandit -c pyproject.toml -r src
+      - name: Audit locked runtime dependencies
+        run: |
+          uv export --frozen --no-dev --format requirements-txt --no-emit-project --output-file requirements-audit.txt
+          uv run --frozen pip-audit --strict -r requirements-audit.txt
+      - name: Check frontend assets
+        run: |
+          node --check src/steam_friend_relationship_map/static/app.js
+          node -e "JSON.parse(require('fs').readFileSync('src/steam_friend_relationship_map/static/i18n.json', 'utf8'))"
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan full history for audit delivery
+        if: github.event_name == 'pull_request' && github.base_ref == 'security-check-before-main' && startsWith(github.head_ref, 'dev/fix/security-audit-')
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
+        with:
+          version: 3.96.0
+          base: ""
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --results=verified,unknown
+      - name: Scan changed commits for secrets
+        if: github.event_name != 'pull_request' || github.base_ref != 'security-check-before-main' || !startsWith(github.head_ref, 'dev/fix/security-audit-')
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
+        with:
+          version: 3.96.0
+          extra_args: --results=verified,unknown
