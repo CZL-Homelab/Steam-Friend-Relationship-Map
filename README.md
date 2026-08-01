@@ -100,6 +100,7 @@
 - 抓取深度限制为 1-4 层，最大用户数限制为 10000。
 - 自动写入 `SteamUser` 节点和 `STEAM_FRIEND` 关系。
 - 多项目通过显式 `IN_PROJECT` 成员关系隔离；同一 Steam 用户可安全出现在多个项目，删除一个项目不会删除其他项目仍在使用的用户。
+- 备注、标签、分类、Root 层数、内层连接数和紧密度分数也存放在 `IN_PROJECT` 上；同一用户在不同项目中可拥有完全独立的视图数据和分析指标。
 - 旧版仅使用 `project_id` 的数据库会在启动时自动执行一次幂等成员关系迁移，无需手工转换。
 - 图谱界面支持中文 / English 切换。
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
@@ -710,6 +711,8 @@ This project is a local Steam friend graph crawler and Neo4j visualizer. The Web
 8. Use the Secure Settings panel to save your Steam API Key and Neo4j password into the system credential store.
 
 The app only uses public Steam Web API data. Private friend lists are marked as inaccessible and skipped. Pre-scan filters can limit candidates by public friend count or by links to the prior user pool; post-scan filters and Friend Circle Analysis work only on data already stored in your local Neo4j database.
+
+Project membership is represented by explicit `IN_PROJECT` relationships. Notes, tags, categories, Root depth, prior-pool link counts, and closeness scores are stored on that membership, so one Steam user can have independent annotations and analysis metrics in different projects. Legacy node metadata is migrated idempotently on startup.
 
 System Logs / Dev Logs redact API keys, passwords, Cookie, Authorization, and common `password=` / `key=` values before showing them in the browser. SteamIDs, notes, screenshots, and relationship context may still be personal data, so review logs before sharing.
 

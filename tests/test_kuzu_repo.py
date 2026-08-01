@@ -216,7 +216,7 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRep
         {"steam_id": "c", "category": "show"},
         {"steam_id": "d", "category": "show"},
         {"steam_id": "other", "category": "show"},
-    ])
+    ], project_id="project-a")
     repo.upsert_users(
         [
             SteamUserRecord(steam_id="root-b", persona_name="Root Other", depth_min=0),
@@ -520,3 +520,130 @@ def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert bob.note == "Bob's note"
     assert bob.tags == ["Dota2"]
     assert bob.category == "colleague"
+
+
+def test_kuzu_project_member_metadata_is_fully_isolated(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.upsert_users(
+        [
+            SteamUserRecord(
+                steam_id="shared",
+                persona_name="Shared",
+                depth_min=1,
+                prior_pool_link_count=2,
+                root_closeness_score=10.0,
+                last_scored_crawl_id="crawl-a",
+            )
+        ],
+        "project-a",
+    )
+    repo.patch_user(
+        "shared",
+        note="Project A note",
+        tags=["alpha"],
+        category="a-category",
+        project_id="project-a",
+    )
+    repo.upsert_users(
+        [
+            SteamUserRecord(
+                steam_id="shared",
+                persona_name="Shared updated",
+                depth_min=3,
+                prior_pool_link_count=7,
+                root_closeness_score=4.0,
+                last_scored_crawl_id="crawl-b",
+            )
+        ],
+        "project-b",
+    )
+    repo.patch_user(
+        "shared",
+        note="Project B note",
+        tags=["beta"],
+        category="b-category",
+        project_id="project-b",
+    )
+
+    project_a = repo.get_graph(root=None, depth=1, limit=10, project_id="project-a")
+    project_b = repo.get_graph(root=None, depth=1, limit=10, project_id="project-b")
+    node_a = project_a.nodes[0]
+    node_b = project_b.nodes[0]
+
+    assert node_a.label == "Shared updated"
+    assert (node_a.depth, node_a.prior_pool_link_count, node_a.root_closeness_score) == (1, 2, 10.0)
+    assert (node_a.note, node_a.tags, node_a.category) == (
+        "Project A note",
+        ["alpha"],
+        "a-category",
+    )
+    assert (node_b.depth, node_b.prior_pool_link_count, node_b.root_closeness_score) == (3, 7, 4.0)
+    assert (node_b.note, node_b.tags, node_b.category) == (
+        "Project B note",
+        ["beta"],
+        "b-category",
+    )
+
+    assert len(repo.get_graph(root=None, depth=1, limit=10, category="a-category", project_id="project-a").nodes) == 1
+    assert not repo.get_graph(root=None, depth=1, limit=10, category="a-category", project_id="project-b").nodes
+
+    exported_a = repo.export_graph("project-a").nodes[0]
+    exported_b = repo.export_graph("project-b").nodes[0]
+    assert exported_a["project_id"] == "project-a"
+    assert exported_a["note"] == "Project A note"
+    assert exported_a["depth_min"] == 1
+    assert exported_a["last_scored_crawl_id"] == "crawl-a"
+    assert exported_b["project_id"] == "project-b"
+    assert exported_b["note"] == "Project B note"
+    assert exported_b["depth_min"] == 3
+    assert exported_b["last_scored_crawl_id"] == "crawl-b"
+
+
+def test_kuzu_project_member_metadata_migration_copies_legacy_primary_project(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.upsert_users(
+        [SteamUserRecord(steam_id="legacy", persona_name="Legacy")],
+        "project-a",
+    )
+    conn = repo._get_conn()
+    conn.execute(
+        """
+        MATCH (u:SteamUser {steam_id: 'legacy'})
+        SET u.depth_min = 2,
+            u.prior_pool_link_count = 5,
+            u.root_closeness_score = 8.5,
+            u.last_scored_crawl_id = 'legacy-crawl',
+            u.note = 'legacy note',
+            u.tags = ['legacy-tag'],
+            u.category = 'legacy-category'
+        """
+    )
+    conn.execute("MATCH (:SteamUser)-[membership:IN_PROJECT]->(:Project) DELETE membership")
+    conn.execute("DROP TABLE IN_PROJECT")
+    conn.execute("CREATE REL TABLE IN_PROJECT(FROM SteamUser TO Project)")
+    conn.execute(
+        """
+        MATCH (u:SteamUser {steam_id: 'legacy'})
+        MATCH (p:Project {id: 'project-a'})
+        CREATE (u)-[:IN_PROJECT]->(p)
+        """
+    )
+    conn.execute(
+        "MATCH (migration:SchemaMigration) WHERE migration.id = 'project-member-metadata-v2' DELETE migration"
+    )
+
+    repo.ensure_schema()
+
+    node = repo.get_graph(root=None, depth=1, limit=10, project_id="project-a").nodes[0]
+    assert (node.depth, node.prior_pool_link_count, node.root_closeness_score) == (2, 5, 8.5)
+    assert (node.note, node.tags, node.category) == (
+        "legacy note",
+        ["legacy-tag"],
+        "legacy-category",
+    )

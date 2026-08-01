@@ -186,13 +186,22 @@ def test_app_starts_when_repository_is_unavailable() -> None:
 
 
 def test_user_patch_endpoint() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    class PatchTrackingRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.project_id = ""
+
+        def patch_user(self, *_: object, **kwargs: object) -> None:
+            self.project_id = str(kwargs["project_id"])
+
+    repo = PatchTrackingRepo()
+    app = create_app(settings=Settings(active_project="project-a"), repo=repo, steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.patch("/api/users/root", json={"note": "friend", "tags": ["cs2", "cs2"], "category": "game"})
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+    assert repo.project_id == "project-a"
 
 
 def test_db_stats_endpoint() -> None:

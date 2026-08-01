@@ -145,7 +145,7 @@ def main():
                             "category": category,
                         })
                 if patches:
-                    dest_repo.bulk_patch_users(patches)
+                    dest_repo.bulk_patch_users(patches, project_id=pid)
             
             # Import relationships
             if exported.edges:

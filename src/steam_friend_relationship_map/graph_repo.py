@@ -109,13 +109,16 @@ class IGraphRepository(ABC):
         note: str | None = None,
         tags: list[str] | None = None,
         category: str | None = None,
+        project_id: str = "default",
     ) -> None:
-        """局部更新用户节点属性（备注、标签、分类）。"""
+        """局部更新用户在指定项目中的备注、标签和分类。"""
         pass
 
     @abstractmethod
-    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
-        """批量局部更新用户节点属性（备注、标签、分类）。"""
+    def bulk_patch_users(
+        self, patches: Iterable[dict[str, Any]], project_id: str = "default"
+    ) -> None:
+        """批量更新用户在指定项目中的备注、标签和分类。"""
         pass
 
     @abstractmethod

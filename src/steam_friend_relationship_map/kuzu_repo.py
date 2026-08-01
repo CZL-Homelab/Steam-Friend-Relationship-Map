@@ -30,6 +30,16 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+_PROJECT_MEMBER_PROPERTY_TYPES = {
+    "depth_min": "INT64",
+    "prior_pool_link_count": "INT64",
+    "root_closeness_score": "DOUBLE",
+    "last_scored_crawl_id": "STRING",
+    "note": "STRING",
+    "tags": "STRING[]",
+    "category": "STRING",
+}
+
 
 def _parse_node(row_val: Any) -> dict[str, Any]:
     """将 Kùzu 查询返回的节点转换为标准的 Python 字典。"""
@@ -204,11 +214,27 @@ class KuzuRepositoryImpl(IGraphRepository):
         if "IN_PROJECT" not in existing_tables:
             conn.execute("""
                 CREATE REL TABLE IN_PROJECT(
-                    FROM SteamUser TO Project
+                    FROM SteamUser TO Project,
+                    depth_min INT64,
+                    prior_pool_link_count INT64,
+                    root_closeness_score DOUBLE,
+                    last_scored_crawl_id STRING,
+                    note STRING,
+                    tags STRING[],
+                    category STRING
                 )
             """)
+        else:
+            info = conn.execute("CALL table_info('IN_PROJECT') RETURN name")
+            existing_properties = set()
+            while info.has_next():
+                existing_properties.add(info.get_next()[0])
+            for name, property_type in _PROJECT_MEMBER_PROPERTY_TYPES.items():
+                if name not in existing_properties:
+                    conn.execute(f"ALTER TABLE IN_PROJECT ADD {name} {property_type}")
 
         self._migrate_project_memberships(conn)
+        self._migrate_project_member_metadata(conn)
 
     @staticmethod
     def _ensure_project_node(conn: kuzu.Connection, project_id: str) -> None:
@@ -265,6 +291,39 @@ class KuzuRepositoryImpl(IGraphRepository):
             END
             MERGE (a)-[:IN_PROJECT]->(p)
             MERGE (b)-[:IN_PROJECT]->(p)
+            """
+        )
+        conn.execute(
+            "MERGE (m:SchemaMigration {id: $id}) SET m.applied_at = $now",
+            {"id": migration_id, "now": utc_now_iso()},
+        )
+
+    @staticmethod
+    def _migrate_project_member_metadata(conn: kuzu.Connection) -> None:
+        migration_id = "project-member-metadata-v2"
+        existing = conn.execute(
+            "MATCH (m:SchemaMigration) WHERE m.id = $id RETURN m.id",
+            {"id": migration_id},
+        )
+        if existing.has_next():
+            return
+
+        # Legacy node properties belonged to the user's original project. Copy them
+        # once, then use IN_PROJECT exclusively for project-specific metadata.
+        conn.execute(
+            """
+            MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+            WHERE p.id = CASE
+                WHEN coalesce(u.project_id, '') = '' THEN 'default'
+                ELSE u.project_id
+            END
+            SET membership.depth_min = u.depth_min,
+                membership.prior_pool_link_count = coalesce(u.prior_pool_link_count, 0),
+                membership.root_closeness_score = coalesce(u.root_closeness_score, 0.0),
+                membership.last_scored_crawl_id = coalesce(u.last_scored_crawl_id, ''),
+                membership.note = coalesce(u.note, ''),
+                membership.tags = coalesce(u.tags, CAST([] AS STRING[])),
+                membership.category = coalesce(u.category, '')
             """
         )
         conn.execute(
@@ -484,9 +543,6 @@ class KuzuRepositoryImpl(IGraphRepository):
                     """
                     MERGE (u:SteamUser {steam_id: $steam_id})
                     ON CREATE SET u.first_seen_at = $now,
-                                  u.note = '',
-                                  u.tags = CAST([] AS STRING[]),
-                                  u.category = '',
                                   u.friend_ids = CAST([] AS STRING[]),
                                   u.friend_list_fetched_at = ''
                     SET u.last_seen_at = $now,
@@ -509,26 +565,10 @@ class KuzuRepositoryImpl(IGraphRepository):
                             WHEN $friend_count_status IS NULL OR $friend_count_status = 'unknown' THEN coalesce(u.friend_count_status, 'unknown')
                             ELSE $friend_count_status
                         END,
-                        u.prior_pool_link_count = CASE
-                            WHEN $prior_pool_link_count > coalesce(u.prior_pool_link_count, 0) THEN $prior_pool_link_count
-                            ELSE coalesce(u.prior_pool_link_count, 0)
-                        END,
-                        u.root_closeness_score = CASE
-                            WHEN $root_closeness_score > coalesce(u.root_closeness_score, 0.0) THEN $root_closeness_score
-                            ELSE coalesce(u.root_closeness_score, 0.0)
-                        END,
-                        u.last_scored_crawl_id = CASE
-                            WHEN $last_scored_crawl_id = '' THEN coalesce(u.last_scored_crawl_id, '')
-                            ELSE $last_scored_crawl_id
-                        END,
                         u.friend_list_status = CASE
                             WHEN $friend_list_status = 'unknown' THEN coalesce(u.friend_list_status, 'unknown')
                             WHEN coalesce(u.friend_list_status, 'unknown') = 'private' THEN 'private'
                             ELSE $friend_list_status
-                        END,
-                        u.depth_min = CASE
-                            WHEN u.depth_min IS NULL OR $depth_min < u.depth_min THEN $depth_min
-                            ELSE u.depth_min
                         END
                     """,
                     {
@@ -544,20 +584,42 @@ class KuzuRepositoryImpl(IGraphRepository):
                         "profile_state": row["profile_state"],
                         "friend_count": row["friend_count"],
                         "friend_count_status": row["friend_count_status"],
-                        "prior_pool_link_count": row["prior_pool_link_count"],
-                        "root_closeness_score": row["root_closeness_score"],
-                        "last_scored_crawl_id": row["last_scored_crawl_id"],
                         "friend_list_status": row["friend_list_status"],
-                        "depth_min": row["depth_min"],
                     }
                 )
                 conn.execute(
                     """
                     MATCH (u:SteamUser {steam_id: $steam_id})
                     MATCH (p:Project {id: $project_id})
-                    MERGE (u)-[:IN_PROJECT]->(p)
+                    MERGE (u)-[membership:IN_PROJECT]->(p)
+                    SET membership.depth_min = CASE
+                            WHEN membership.depth_min IS NULL OR $depth_min < membership.depth_min THEN $depth_min
+                            ELSE membership.depth_min
+                        END,
+                        membership.prior_pool_link_count = CASE
+                            WHEN $prior_pool_link_count > coalesce(membership.prior_pool_link_count, 0) THEN $prior_pool_link_count
+                            ELSE coalesce(membership.prior_pool_link_count, 0)
+                        END,
+                        membership.root_closeness_score = CASE
+                            WHEN $root_closeness_score > coalesce(membership.root_closeness_score, 0.0) THEN $root_closeness_score
+                            ELSE coalesce(membership.root_closeness_score, 0.0)
+                        END,
+                        membership.last_scored_crawl_id = CASE
+                            WHEN $last_scored_crawl_id = '' THEN coalesce(membership.last_scored_crawl_id, '')
+                            ELSE $last_scored_crawl_id
+                        END,
+                        membership.note = coalesce(membership.note, ''),
+                        membership.tags = coalesce(membership.tags, CAST([] AS STRING[])),
+                        membership.category = coalesce(membership.category, '')
                     """,
-                    {"steam_id": row["steam_id"], "project_id": project_id},
+                    {
+                        "steam_id": row["steam_id"],
+                        "project_id": project_id,
+                        "depth_min": row["depth_min"],
+                        "prior_pool_link_count": row["prior_pool_link_count"],
+                        "root_closeness_score": row["root_closeness_score"],
+                        "last_scored_crawl_id": row["last_scored_crawl_id"],
+                    },
                 )
             conn.execute("COMMIT")
         except Exception:
@@ -582,10 +644,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         conn.execute(
             """
             MERGE (u:SteamUser {steam_id: $steam_id})
-            ON CREATE SET u.first_seen_at = $now,
-                          u.note = '',
-                          u.tags = CAST([] AS STRING[]),
-                          u.category = ''
+            ON CREATE SET u.first_seen_at = $now
             SET u.friend_list_status = $status,
                 u.project_id = CASE
                     WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
@@ -620,7 +679,13 @@ class KuzuRepositoryImpl(IGraphRepository):
             """
             MATCH (u:SteamUser {steam_id: $steam_id})
             MATCH (p:Project {id: $project_id})
-            MERGE (u)-[:IN_PROJECT]->(p)
+            MERGE (u)-[membership:IN_PROJECT]->(p)
+            SET membership.note = coalesce(membership.note, ''),
+                membership.tags = coalesce(membership.tags, CAST([] AS STRING[])),
+                membership.category = coalesce(membership.category, ''),
+                membership.prior_pool_link_count = coalesce(membership.prior_pool_link_count, 0),
+                membership.root_closeness_score = coalesce(membership.root_closeness_score, 0.0),
+                membership.last_scored_crawl_id = coalesce(membership.last_scored_crawl_id, '')
             """,
             {"steam_id": steam_id, "project_id": project_id},
         )
@@ -686,8 +751,20 @@ class KuzuRepositoryImpl(IGraphRepository):
                     MATCH (a:SteamUser {steam_id: $from_id})
                     MATCH (b:SteamUser {steam_id: $to_id})
                     MATCH (p:Project {id: $project_id})
-                    MERGE (a)-[:IN_PROJECT]->(p)
-                    MERGE (b)-[:IN_PROJECT]->(p)
+                    MERGE (a)-[a_membership:IN_PROJECT]->(p)
+                    MERGE (b)-[b_membership:IN_PROJECT]->(p)
+                    SET a_membership.note = coalesce(a_membership.note, ''),
+                        a_membership.tags = coalesce(a_membership.tags, CAST([] AS STRING[])),
+                        a_membership.category = coalesce(a_membership.category, ''),
+                        a_membership.prior_pool_link_count = coalesce(a_membership.prior_pool_link_count, 0),
+                        a_membership.root_closeness_score = coalesce(a_membership.root_closeness_score, 0.0),
+                        a_membership.last_scored_crawl_id = coalesce(a_membership.last_scored_crawl_id, ''),
+                        b_membership.note = coalesce(b_membership.note, ''),
+                        b_membership.tags = coalesce(b_membership.tags, CAST([] AS STRING[])),
+                        b_membership.category = coalesce(b_membership.category, ''),
+                        b_membership.prior_pool_link_count = coalesce(b_membership.prior_pool_link_count, 0),
+                        b_membership.root_closeness_score = coalesce(b_membership.root_closeness_score, 0.0),
+                        b_membership.last_scored_crawl_id = coalesce(b_membership.last_scored_crawl_id, '')
                     """,
                     {"from_id": from_id, "to_id": to_id, "project_id": project_id},
                 )
@@ -706,6 +783,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         note: str | None = None,
         tags: list[str] | None = None,
         category: str | None = None,
+        project_id: str = "default",
     ) -> None:
         fields: dict[str, Any] = {}
         if note is not None:
@@ -716,24 +794,29 @@ class KuzuRepositoryImpl(IGraphRepository):
             fields["category"] = category
         if not fields:
             return
-        assignments = ", ".join(f"u.{key} = ${key}" for key in fields)
+        assignments = ", ".join(f"membership.{key} = ${key}" for key in fields)
         conn = self._get_conn()
         conn.execute(
-            f"MATCH (u:SteamUser {{steam_id: $steam_id}}) SET {assignments}, u.last_seen_at = $now",
-            {"steam_id": steam_id, "now": utc_now_iso(), **fields}
+            f"""
+            MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+            WHERE u.steam_id = $steam_id AND p.id = $project_id
+            SET {assignments}
+            """,
+            {"steam_id": steam_id, "project_id": project_id, **fields},
         )
 
-    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
+    def bulk_patch_users(
+        self, patches: Iterable[dict[str, Any]], project_id: str = "default"
+    ) -> None:
         conn = self._get_conn()
         try:
             conn.execute("BEGIN TRANSACTION")
-            now = utc_now_iso()
             for patch in patches:
                 steam_id = patch.get("steam_id")
                 note = patch.get("note")
                 tags = patch.get("tags")
                 category = patch.get("category")
-                
+
                 fields: dict[str, Any] = {}
                 if note is not None:
                     fields["note"] = note
@@ -743,11 +826,15 @@ class KuzuRepositoryImpl(IGraphRepository):
                     fields["category"] = category
                 if not fields:
                     continue
-                
-                assignments = ", ".join(f"u.{key} = ${key}" for key in fields)
+
+                assignments = ", ".join(f"membership.{key} = ${key}" for key in fields)
                 conn.execute(
-                    f"MATCH (u:SteamUser {{steam_id: $steam_id}}) SET {assignments}, u.last_seen_at = $now",
-                    {"steam_id": steam_id, "now": now, **fields}
+                    f"""
+                    MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+                    WHERE u.steam_id = $steam_id AND p.id = $project_id
+                    SET {assignments}
+                    """,
+                    {"steam_id": steam_id, "project_id": project_id, **fields},
                 )
             conn.execute("COMMIT")
         except Exception:
@@ -782,21 +869,44 @@ class KuzuRepositoryImpl(IGraphRepository):
             out[row[0]] = row[1]
         return {k: v for k, v in out.items() if v > 0}
 
-    def _graph_node(self, data: dict[str, Any], degree: int) -> GraphNode:
+    @staticmethod
+    def _project_metadata(
+        conn: kuzu.Connection, steam_ids: list[str], project_id: str
+    ) -> dict[str, dict[str, Any]]:
+        if not steam_ids:
+            return {}
+        result = conn.execute(
+            """
+            MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+            WHERE u.steam_id IN $steam_ids AND p.id = $project_id
+            RETURN u.steam_id, membership
+            """,
+            {"steam_ids": steam_ids, "project_id": project_id},
+        )
+        metadata: dict[str, dict[str, Any]] = {}
+        while result.has_next():
+            steam_id, membership = result.get_next()
+            metadata[steam_id] = membership if isinstance(membership, dict) else {}
+        return metadata
+
+    def _graph_node(
+        self, data: dict[str, Any], degree: int, metadata: dict[str, Any] | None = None
+    ) -> GraphNode:
+        member = metadata or {}
         return GraphNode(
             id=data.get("steam_id", ""),
             label=data.get("persona_name") or data.get("steam_id", "Unknown"),
-            depth=data.get("depth_min"),
+            depth=member.get("depth_min"),
             avatar=data.get("avatar_full") or data.get("avatar_medium") or data.get("avatar") or "",
             profile_url=data.get("profile_url") or "",
-            note=data.get("note") or "",
-            tags=data.get("tags") or [],
-            category=data.get("category") or "",
+            note=member.get("note") or "",
+            tags=member.get("tags") or [],
+            category=member.get("category") or "",
             degree=degree,
             friend_count=data.get("friend_count"),
             friend_count_status=data.get("friend_count_status") or "unknown",
-            prior_pool_link_count=data.get("prior_pool_link_count") or 0,
-            root_closeness_score=data.get("root_closeness_score") or 0,
+            prior_pool_link_count=member.get("prior_pool_link_count") or 0,
+            root_closeness_score=member.get("root_closeness_score") or 0,
             root_route_count=data.get("root_route_count") or 0,
             root_route_total_hops=data.get("root_route_total_hops") or 0,
             root_friend_circle_score=data.get("root_friend_circle_score") or 0,
@@ -941,22 +1051,22 @@ class KuzuRepositoryImpl(IGraphRepository):
         # Kùzu depth clamp
         depth = max(0, min(depth, 4))
         limit = max(1, min(limit, 100000))
-        filters = []
-        params: dict[str, Any] = {"project_ids": self._visible_project_ids(project_id)}
+        filters = ["p.id = $project_id"]
+        params: dict[str, Any] = {
+            "project_id": project_id,
+            "project_ids": self._visible_project_ids(project_id),
+        }
         requested_depth: int | None = depth
         traversal_depth_reached: int | None = None
         root_found: bool | None = None
         depth_incomplete = False
 
-        if not root:
-            filters.append("p.id = $project_id")
-            params["project_id"] = project_id
         if query:
             params["query"] = query.lower()
             filters.append("(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)")
         if category:
             params["category"] = category
-            filters.append("coalesce(n.category, '') = $category")
+            filters.append("coalesce(membership.category, '') = $category")
         if friend_count_min is not None:
             params["friend_count_min"] = friend_count_min
             filters.append("coalesce(n.friend_count, -1) >= $friend_count_min")
@@ -965,16 +1075,15 @@ class KuzuRepositoryImpl(IGraphRepository):
             filters.append("coalesce(n.friend_count, -1) <= $friend_count_max")
         if prior_pool_min_links:
             params["prior_pool_min_links"] = prior_pool_min_links
-            filters.append("coalesce(n.prior_pool_link_count, 0) >= $prior_pool_min_links")
+            filters.append("coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links")
 
-        where = "WHERE " + " AND ".join(filters) if filters else ""
-        root_filter = " AND " + " AND ".join(filters) if filters else ""
+        where = "WHERE " + " AND ".join(filters)
         sort_map = {
-            "depth": "coalesce(n.depth_min, 999)",
+            "depth": "coalesce(membership.depth_min, 999)",
             "degree": "degree",
             "friend_count": "coalesce(n.friend_count, -1)",
-            "prior_pool_links": "coalesce(n.prior_pool_link_count, 0)",
-            "closeness": "coalesce(n.root_closeness_score, 0)",
+            "prior_pool_links": "coalesce(membership.prior_pool_link_count, 0)",
+            "closeness": "coalesce(membership.root_closeness_score, 0)",
         }
         order_expr = sort_map.get(sort_by, sort_map["depth"])
         direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
@@ -994,12 +1103,11 @@ class KuzuRepositoryImpl(IGraphRepository):
                 )
             params["reachable_ids"] = reachable_ids
             node_query = f"""
-            MATCH (n:SteamUser)
-            WHERE n.steam_id IN $reachable_ids
-            {root_filter}
+            MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+            {where} AND n.steam_id IN $reachable_ids
             OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN $project_ids
-            WITH n, count(DISTINCT rel) AS degree
-            RETURN n, degree
+            WITH n, membership, count(DISTINCT rel) AS degree
+            RETURN n, membership, degree
             ORDER BY {order_expr} {direction}, degree DESC
             LIMIT $limit
             """
@@ -1007,12 +1115,12 @@ class KuzuRepositoryImpl(IGraphRepository):
         else:
             params["limit"] = limit + 1
             node_query = f"""
-            MATCH (n:SteamUser)-[:IN_PROJECT]->(p:Project)
+            MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
             {where}
             OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-()
             WHERE coalesce(rel.project_id, '') IN $project_ids
-            WITH n, count(DISTINCT rel) AS degree
-            RETURN n, degree
+            WITH n, membership, count(DISTINCT rel) AS degree
+            RETURN n, membership, degree
             ORDER BY {order_expr} {direction}, degree DESC
             LIMIT $limit
             """
@@ -1023,7 +1131,10 @@ class KuzuRepositoryImpl(IGraphRepository):
             records.append(res_nodes.get_next())
         limited = len(records) > limit
         records = records[:limit]
-        nodes = [self._graph_node(_parse_node(rec[0]), rec[1]) for rec in records]
+        nodes = [
+            self._graph_node(_parse_node(rec[0]), rec[2], rec[1])
+            for rec in records
+        ]
         if root and nodes:
             root_metrics = self._root_friend_circle_metrics(
                 conn,
@@ -1088,6 +1199,9 @@ class KuzuRepositoryImpl(IGraphRepository):
         res = conn.execute(
             f"""
             WITH $project_ids AS project_ids, $from_id AS fid, $to_id AS tid
+            MATCH (a:SteamUser {{steam_id: fid}})-[:IN_PROJECT]->(project:Project)
+            MATCH (b:SteamUser {{steam_id: tid}})-[:IN_PROJECT]->(project)
+            WHERE project.id = $project_id
             MATCH p=(a:SteamUser {{steam_id: fid}})-[:STEAM_FRIEND*..{max_depth}]-(b:SteamUser {{steam_id: tid}})
             WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN project_ids)
             RETURN nodes(p)
@@ -1097,6 +1211,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             {
                 "from_id": from_id,
                 "to_id": to_id,
+                "project_id": project_id,
                 "project_ids": self._visible_project_ids(project_id),
             }
         )
@@ -1104,10 +1219,16 @@ class KuzuRepositoryImpl(IGraphRepository):
             return GraphResponse(nodes=[], edges=[])
 
         path_nodes = res.get_next()[0]
+        parsed_nodes = [_parse_node(raw_node) for raw_node in path_nodes]
+        metadata = self._project_metadata(
+            conn,
+            [node.get("steam_id", "") for node in parsed_nodes],
+            project_id,
+        )
         nodes = []
-        for raw_node in path_nodes:
-            node_dict = _parse_node(raw_node)
-            nodes.append(self._graph_node(node_dict, 0))
+        for node_dict in parsed_nodes:
+            steam_id = node_dict.get("steam_id", "")
+            nodes.append(self._graph_node(node_dict, 0, metadata.get(steam_id)))
 
         edges = []
         for index in range(len(nodes) - 1):
@@ -1132,25 +1253,29 @@ class KuzuRepositoryImpl(IGraphRepository):
         res = conn.execute(
             f"""
             WITH $project_ids AS project_ids, $root AS root_id
-            MATCH (root:SteamUser {{steam_id: root_id}})
+            MATCH (root:SteamUser {{steam_id: root_id}})-[:IN_PROJECT]->(project:Project)
+            WHERE project.id = $project_id
             MATCH p=(root)-[:STEAM_FRIEND*2..{max_depth}]-(candidate:SteamUser)
             WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN project_ids)
-            WITH root, candidate, min(length(p)) AS depth, project_ids
+            WITH root, candidate, min(length(p)) AS depth, project, project_ids
+            MATCH (candidate)-[candidate_membership:IN_PROJECT]->(project)
             WHERE candidate.steam_id <> root.steam_id
               AND NOT EXISTS {{
                 MATCH (root)-[direct:STEAM_FRIEND]-(candidate)
                 WHERE coalesce(direct.project_id, '') IN project_ids
               }}
             MATCH (candidate)-[evidence_rel:STEAM_FRIEND]-(evidence:SteamUser)
+            MATCH (evidence)-[evidence_membership:IN_PROJECT]->(project)
             WHERE coalesce(evidence_rel.project_id, '') IN project_ids
               AND (
-                coalesce(evidence.depth_min, 999) < coalesce(candidate.depth_min, 999)
+                coalesce(evidence_membership.depth_min, 999) < coalesce(candidate_membership.depth_min, 999)
                 OR EXISTS {{
                   MATCH (root)-[root_rel:STEAM_FRIEND]-(evidence)
                   WHERE coalesce(root_rel.project_id, '') IN project_ids
                 }}
               )
             WITH candidate,
+                 candidate_membership,
                  depth,
                  collect(DISTINCT evidence) AS all_evidence,
                  count(DISTINCT evidence) AS mutual_count,
@@ -1158,8 +1283,9 @@ class KuzuRepositoryImpl(IGraphRepository):
             WHERE mutual_count >= $min_mutual
             OPTIONAL MATCH (candidate)-[rel:STEAM_FRIEND]-()
             WHERE coalesce(rel.project_id, '') IN project_ids
-            WITH candidate, depth, all_evidence AS evidence_nodes, mutual_count, count(DISTINCT rel) AS degree
+            WITH candidate, candidate_membership, depth, all_evidence AS evidence_nodes, mutual_count, count(DISTINCT rel) AS degree
             RETURN candidate,
+                   candidate_membership,
                    depth,
                    evidence_nodes,
                    mutual_count,
@@ -1170,31 +1296,48 @@ class KuzuRepositoryImpl(IGraphRepository):
             """,
             {
                 "root": root,
+                "project_id": project_id,
                 "project_ids": self._visible_project_ids(project_id),
                 "min_mutual": min_mutual,
                 "limit": limit
             }
         )
 
-        candidates = []
+        rows = []
         while res.has_next():
-            row = res.get_next()
+            rows.append(res.get_next())
+        evidence_ids = [
+            _parse_node(evidence).get("steam_id", "")
+            for row in rows
+            for evidence in row[3][:6]
+        ]
+        evidence_metadata = self._project_metadata(conn, evidence_ids, project_id)
+
+        candidates = []
+        for row in rows:
             node_dict = _parse_node(row[0])
-            node = self._graph_node(node_dict, row[4])
+            node = self._graph_node(node_dict, row[5], row[1])
             evidence_list = []
-            for ev in row[2][:6]:
-                evidence_list.append(self._graph_node(_parse_node(ev), 0))
+            for ev in row[3][:6]:
+                evidence = _parse_node(ev)
+                evidence_list.append(
+                    self._graph_node(
+                        evidence,
+                        0,
+                        evidence_metadata.get(evidence.get("steam_id", "")),
+                    )
+                )
             candidates.append(
                 FriendCircleCandidate(
                     steam_id=node.id,
                     label=node.label,
-                    depth=row[1],
+                    depth=row[2],
                     avatar=node.avatar,
                     profile_url=node.profile_url,
                     degree=node.degree,
                     friend_count=node.friend_count,
-                    mutual_count=row[3],
-                    score=round(float(row[5] or 0.0), 2),
+                    mutual_count=row[4],
+                    score=round(float(row[6] or 0.0), 2),
                     evidence=evidence_list,
                 )
             )
@@ -1204,20 +1347,26 @@ class KuzuRepositoryImpl(IGraphRepository):
         conn = self._get_conn()
         res = conn.execute(
             """
-            MATCH (n:SteamUser)-[r:STEAM_FRIEND]-()
+            MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+            WHERE p.id = $project_id
+            OPTIONAL MATCH (n)-[r:STEAM_FRIEND]-()
             WHERE coalesce(r.project_id, '') IN $project_ids
-            WITH n, count(DISTINCT r) AS degree
-            RETURN n, degree
+            WITH n, membership, count(DISTINCT r) AS degree
+            RETURN n, membership, degree
             ORDER BY degree DESC
             LIMIT $limit
             """,
-            {"project_ids": self._visible_project_ids(project_id), "limit": limit}
+            {
+                "project_id": project_id,
+                "project_ids": self._visible_project_ids(project_id),
+                "limit": limit,
+            }
         )
         nodes = []
         while res.has_next():
             row = res.get_next()
             node_dict = _parse_node(row[0])
-            nodes.append(self._graph_node(node_dict, row[1]))
+            nodes.append(self._graph_node(node_dict, row[2], row[1]))
         return nodes
 
     def get_db_stats(self, project_id: str = "default") -> DbStats:
@@ -1287,15 +1436,22 @@ class KuzuRepositoryImpl(IGraphRepository):
         conn = self._get_conn()
         res_nodes = conn.execute(
             """
-            MATCH (n:SteamUser)-[:IN_PROJECT]->(p:Project)
+            MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
             WHERE p.id = $project_id
-            RETURN n
+            RETURN n, membership
+            ORDER BY membership.depth_min, n.persona_name
             """,
             {"project_id": project_id}
         )
         nodes = []
         while res_nodes.has_next():
-            nodes.append(_parse_node(res_nodes.get_next()[0]))
+            row = res_nodes.get_next()
+            node = _parse_node(row[0])
+            membership = row[1] if isinstance(row[1], dict) else {}
+            for key in _PROJECT_MEMBER_PROPERTY_TYPES:
+                node[key] = membership.get(key)
+            node["project_id"] = project_id
+            nodes.append(node)
 
         res_edges = conn.execute(
             """

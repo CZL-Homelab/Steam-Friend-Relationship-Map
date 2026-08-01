@@ -180,10 +180,13 @@ class UnavailableRepository(IGraphRepository):
         note: str | None = None,
         tags: list[str] | None = None,
         category: str | None = None,
+        project_id: str = "default",
     ) -> None:
         self._raise()
 
-    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
+    def bulk_patch_users(
+        self, patches: Iterable[dict[str, Any]], project_id: str = "default"
+    ) -> None:
         self._raise()
 
     def count_inner_layer_links(
@@ -733,7 +736,13 @@ def create_app(
 
     @app.patch("/api/users/{steam_id}")
     async def patch_user(steam_id: str, payload: UserPatch) -> dict[str, bool]:
-        repo.patch_user(steam_id, note=payload.note, tags=payload.tags, category=payload.category)
+        repo.patch_user(
+            steam_id,
+            note=payload.note,
+            tags=payload.tags,
+            category=payload.category,
+            project_id=settings.active_project,
+        )
         return {"ok": True}
 
     @app.get("/api/path", response_model=GraphResponse)

@@ -8,8 +8,9 @@ from steam_friend_relationship_map.neo4j_repo import Neo4jRepositoryImpl
 
 
 class _FakeResult:
-    def __init__(self, query: str, driver: "_FakeDriver") -> None:
+    def __init__(self, query: str, params: dict[str, Any], driver: "_FakeDriver") -> None:
         self.query = query
+        self.params = params
         self.driver = driver
 
     def consume(self) -> None:
@@ -17,7 +18,8 @@ class _FakeResult:
 
     def single(self) -> dict[str, Any] | None:
         if "RETURN m.id AS id" in self.query:
-            return {"id": "project-membership-v1"} if self.driver.migration_applied else None
+            migration_id = str(self.params["id"])
+            return {"id": migration_id} if migration_id in self.driver.migrations else None
         if "RETURN p" in self.query:
             return {"p": {"id": "project-a"}}
         if "AS count" in self.query:
@@ -43,14 +45,14 @@ class _FakeSession:
         assert placeholders <= set(params), f"Missing Cypher params {placeholders - set(params)} for query: {query}"
         self.driver.queries.append(query)
         if "MERGE (m:SchemaMigration" in query:
-            self.driver.migration_applied = True
-        return _FakeResult(query, self.driver)
+            self.driver.migrations.add(str(params["id"]))
+        return _FakeResult(query, params, self.driver)
 
 
 class _FakeDriver:
     def __init__(self) -> None:
         self.queries: list[str] = []
-        self.migration_applied = False
+        self.migrations: set[str] = set()
 
     def session(self) -> _FakeSession:
         return _FakeSession(self)
@@ -85,6 +87,8 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
         project_id="project-a",
     )
     repo.upsert_relationships([edge], "project-a")
+    repo.patch_user("1", note="one", category="friend", project_id="project-a")
+    repo.bulk_patch_users([{"steam_id": "2", "tags": ["two"]}], project_id="project-a")
     repo.count_inner_layer_links(["2"], ["1"], "project-a")
     repo.get_graph(root=None, depth=2, limit=20, project_id="project-a")
     repo.get_graph(root="1", depth=2, limit=20, project_id="project-a")
@@ -95,8 +99,10 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
     repo.export_graph("project-a")
     assert repo.delete_project("project-a")
 
-    assert driver.migration_applied
+    assert driver.migrations == {"project-membership-v1", "project-member-metadata-v2"}
     assert any("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
+    assert any("membership.note" in query for query in driver.queries)
+    assert any("coalesce(membership.category" in query for query in driver.queries)
     assert any("NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries)
 
 
