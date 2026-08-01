@@ -88,17 +88,26 @@ class SteamClient:
         return available_keys[start:] + available_keys[:start]
 
     async def __aenter__(self) -> "SteamClient":
-        if self._client is None:
-            self._client = self._create_http_client()
+        self._ensure_http_client()
         return self
 
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
-        if self._client is not None and self._owns_client:
-            await self._client.aclose()
+        client = self._client
+        owns_client = self._owns_client
         self._client = None
+        self._owns_client = True
+        if client is not None and owns_client:
+            await client.aclose()
+
+    def _ensure_http_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            client = self._create_http_client()
+            self._client = client
+            self._owns_client = True
+        return self._client
 
     def _create_http_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -185,9 +194,7 @@ class SteamClient:
             raise SteamApiError("缺少 STEAM_API_KEY")
         if not request_keys:
             raise SteamApiError("所有已配置的 Steam API Key 均已被拒绝", 403)
-        if self._client is None:
-            self._client = self._create_http_client()
-            self._owns_client = True
+        http_client = self._ensure_http_client()
 
         url = f"{self.base_url}{path}"
         last_error: Exception | None = None
@@ -209,7 +216,7 @@ class SteamClient:
                     await self.rate_limiter.wait()
                 if current_key in self._disabled_api_keys:
                     continue
-                response = await self._client.get(
+                response = await http_client.get(
                     url,
                     params={**request_params, "key": current_key},
                 )

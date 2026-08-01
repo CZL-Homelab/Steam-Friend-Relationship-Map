@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -60,6 +61,66 @@ async def test_steam_client_creates_owned_client_with_explicit_proxy() -> None:
         proxy=proxy_url,
         trust_env=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_reenter_after_external_client_creates_and_closes_owned_client() -> None:
+    external_client = AsyncMock()
+    replacement_client = AsyncMock()
+    client = SteamClient("key", client=external_client)
+
+    await client.aclose()
+    with patch.object(
+        client,
+        "_create_http_client",
+        return_value=replacement_client,
+    ):
+        async with client:
+            assert client._client is replacement_client
+            assert client._owns_client is True
+
+    external_client.aclose.assert_not_awaited()
+    replacement_client.aclose.assert_awaited_once_with()
+    assert client._client is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_only_closes_owned_client_once() -> None:
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    owned_client = AsyncMock()
+
+    async def delayed_close() -> None:
+        close_started.set()
+        await release_close.wait()
+
+    owned_client.aclose.side_effect = delayed_close
+    client = SteamClient("key")
+    client._client = owned_client
+
+    first_close = asyncio.create_task(client.aclose())
+    await close_started.wait()
+    second_close = asyncio.create_task(client.aclose())
+    await asyncio.wait_for(second_close, timeout=1)
+    release_close.set()
+    await first_close
+
+    owned_client.aclose.assert_awaited_once_with()
+    assert client._client is None
+
+
+@pytest.mark.asyncio
+async def test_failed_close_detaches_client_before_propagating_error() -> None:
+    failed_client = AsyncMock()
+    failed_client.aclose.side_effect = RuntimeError("close failed")
+    client = SteamClient("key")
+    client._client = failed_client
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await client.aclose()
+
+    assert client._client is None
+    assert client._owns_client is True
 
 
 def test_steam_client_rejects_invalid_proxy_url() -> None:
