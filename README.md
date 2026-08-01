@@ -34,7 +34,7 @@
 
 ---
 
-这是一个本地运行的 Steam 好友关系图谱工具。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层向下抓取公开好友关系，写入本机 Neo4j Desktop 数据库，并在本地 Web GUI 中展示头像、昵称、Steam 主页、备注、关系线、中心节点和最短路径。
+这是一个本地运行的 Steam 好友关系图谱工具。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层向下抓取公开好友关系，支持写入本地轻量级嵌入式图数据库 Kùzu（默认，免安装）或外部 Neo4j Desktop 数据库（可选），并在本地 Web GUI 中展示头像、昵称、Steam 主页、备注、关系线、中心节点和最短路径。
 
 ## 这个工具是做什么的？
 
@@ -44,7 +44,7 @@
 - 自动生成好友关系图，不需要手动画线。
 - 每个节点可以显示头像、昵称、Steam 主页、备注、标签和分类。
 - 支持查询两个人之间的最短关系路径。
-- 支持在本项目 GUI 中查看，也可以用 Neo4j Bloom 做更专业的大图分析。
+- 支持在本项目 GUI 中查看，也可以用 Kùzu Explorer 或 Neo4j Bloom 做更专业的大图分析。
 
 本项目只使用公开 Steam Web API，不读取 Cookie，不接入 Steam 登录态，不尝试绕过隐私设置。
 
@@ -56,36 +56,41 @@
 | ----------------- | -------------------------------------------------------- |
 | Steam 账号        | 用来申请 Steam Web API Key                               |
 | Steam Web API Key | 用来调用公开 Steam Web API，建议通过网页保存到系统凭据库 |
-| Neo4j Desktop (可选) | 若选用 Neo4j 引擎，则用来运行本地数据库并使用 Bloom 探索；若使用默认的 Kùzu 引擎则免安装 |
+| Kùzu 嵌入式图数据库 (默认) | **免安装**，在应用运行进程内由 Python 直接拉起，数据保存在 `./data/graph_kuzu` |
+| Neo4j Desktop (可选) | 若选用 Neo4j 引擎，则用来运行本地数据库并使用 Bloom 探索 |
 | uv                | 用来管理 Python 环境和依赖                               |
 | Python 3.12+      | 项目运行环境，`uv` 会自动使用/管理                       |
 
 推荐先只抓 1 层或 2 层。Steam 好友网络会指数增长，3-4 层可能很快接近或超过上限。
 
-## Neo4j Desktop 还有用吗？
+## 数据库引擎选择：Kùzu 还是 Neo4j？
 
-有用，而且当前项目里它不是多余组件。
+本项目采用**图数据库“双引擎”架构**，默认使用 Kùzu 嵌入式图数据库，同时也支持外部 Neo4j 数据库。
 
-本项目自己的 Web GUI 负责日常操作：配置连接、启动抓取、看卡片式人物信息、编辑备注、查最短路径。Neo4j Desktop 负责运行本地图数据库、保存所有节点和关系，并提供 Neo4j Bloom 这种更专业的图谱探索视图。
+- **Kùzu 嵌入式数据库（默认）**：
+  - **优势**：**免去任何数据库软件的安装**，解压即用。它直接作为 Python 的一个包（嵌入式进程内）运行，内存与磁盘开销极低。数据默认保存在本地目录 `./data/graph_kuzu` 下。
+  - **可视化**：支持通过本项目自带的 Web GUI 进行日常关系图谱查看、搜索和路径查询；如果需要更底层的 Cypher 数据调试，可使用 `kuzu-explorer` 容器（见后文说明）。
+- **Neo4j Desktop（可选）**：
+  - **优势**：支持使用 Neo4j Bloom 等外部成熟的图探索生态和算法包，适合更大规模的社交分析和专业图探索。
+  - **配合使用**：本项目自己的 Web GUI 负责“抓取和日常操作”（如看卡片式人物信息、编辑备注、查最短路径）；Neo4j Desktop/Bloom 则更适合大图谱的高级分析。
 
-简单说：
-
-- 本项目 GUI：更适合“抓取和日常操作”。
-- Neo4j Desktop：更适合“本地数据库管理和长期存储”。
-- Neo4j Bloom：更适合“大图谱探索、路径分析、图数据库视角检查”。
-
-以后如果你想换成 Neo4j Aura 或远程 Neo4j，也可以改 `.env` 里的连接地址。但当前本地使用场景下，推荐继续保留 Neo4j Desktop。
+以后如果你想换成 Neo4j Aura 或远程 Neo4j，也可以改 `.env` 里的连接地址。但为了快速上手，建议直接使用默认的 Kùzu 引擎。
 
 ## 架构
 
 ```text
-Steam Web API
-    ↓
-FastAPI + BFS 抓取器
-    ↓
-Neo4j Desktop 本地数据库
-    ↓
-本项目 Web GUI / Neo4j Bloom
+       Steam Web API
+             ↓
+     FastAPI + BFS 抓取器
+       /             \
+   (默认)             (可选)
+   Kùzu 引擎          Neo4j 引擎
+ (本地嵌入式存储)    (外部图数据库)
+       \             /
+              ↓
+       本项目 Web GUI (Cytoscape.js)
+              ↓
+  (针对 Neo4j 可选) Neo4j Bloom / (针对 Kùzu) Kùzu Explorer
 ```
 
 核心能力：
@@ -94,7 +99,21 @@ Neo4j Desktop 本地数据库
 - 使用公开 Steam Web API，不读取 Cookie，不绕过隐私设置。
 - 抓取深度限制为 1-4 层，最大用户数限制为 10000。
 - 自动写入 `SteamUser` 节点和 `STEAM_FRIEND` 关系。
+- Kùzu 使用每批 500 行的事务化写入，批量保存用户、项目元数据和好友关系，减少大型抓取任务的数据库往返。Kùzu writes users, project metadata, and friend relationships in transactional batches of 500 rows to reduce database round trips during large crawls.
+- 抓取器会按请求批次批量读写 Kùzu 或 Neo4j 好友列表缓存，并自动忽略不完整的旧缓存后重新抓取。The crawler reads and writes Kùzu or Neo4j friend-list caches in request-sized batches and refetches incomplete legacy cache entries.
+- 抓取进度、错误数和私密用户数按请求批次合并写入，暂停与完成、停止、失败等终态仍会立即持久化。Crawl progress and counters are coalesced per request batch while pause and terminal states remain immediately durable.
+- 项目列表使用固定次数的独立聚合查询统计成员、关系和抓取任务，避免随项目数量增长的 N+1 查询和 Neo4j 笛卡尔中间结果。Project listings use a fixed set of independent aggregate queries, avoiding per-project N+1 reads and Neo4j Cartesian intermediates.
+- 多项目通过显式 `IN_PROJECT` 成员关系隔离；同一 Steam 用户可安全出现在多个项目，删除一个项目不会删除其他项目仍在使用的用户。
+- 备注、标签、分类、Root 层数、内层连接数和紧密度分数也存放在 `IN_PROJECT` 上；同一用户在不同项目中可拥有完全独立的视图数据和分析指标。
+- 旧版仅使用 `project_id` 的数据库会在启动时自动执行一次幂等成员关系迁移，无需手工转换。
+- 配置、密钥、项目切换和抓取任务创建使用统一的运行时互斥保护；切换或配置重载失败时会恢复原状态，避免后台任务继续使用已关闭的数据库或 HTTP 客户端。
+- CSV 导出包含项目、备注、标签、层数和评分等完整字段，使用 UTF-8 BOM，并转义电子表格公式前缀；JSON 导出保持原始结构。
 - 图谱界面支持中文 / English 切换。
+- 图谱、统计、项目、路径和分析请求采用“最新请求生效”协调器；新请求会取消同类旧请求，项目切换会清空旧项目视图，避免迟到响应覆盖当前界面。Graph, statistics, project, path, and analysis reads use latest-request-wins coordination, preventing late responses from overwriting the current project view.
+- Kùzu 的 Root 图谱、最短路径和朋友圈分析均使用最多 4 层的分层 BFS，不枚举可变长度路径组合，避免密集图耗尽 Buffer Pool。Kùzu root graphs, shortest paths, and friend-circle analysis use bounded layer-by-layer BFS instead of variable-length path enumeration to protect the buffer pool on dense graphs.
+- 应用启动时会把上一次进程异常退出遗留的等待中、运行中或暂停中的抓取记录标记为已停止，避免界面长期显示不存在的后台任务。On startup, orphaned pending, running, or paused crawls from a previous process are marked stopped so the UI never reports a background task that no longer exists.
+- 抓取任务的完成、取消、强停和失败状态使用统一终态快照；错误信息脱敏后落库，终态写入失败会自动重试且不会产生未处理的后台任务异常。Crawl completion, cancellation, forced stop, and failure share one terminal snapshot; errors are redacted before persistence, and terminal writes retry without leaking unhandled task exceptions.
+- 图谱重复刷新或切换项目时会主动取消旧的分块渲染计时器并停止旧 Cytoscape 布局，避免后台布局和动画累积。Repeated graph refreshes and project switches cancel stale chunk timers and stop prior Cytoscape layouts so background layout work cannot accumulate.
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
 
 ## 安全提醒：Public 仓库不要提交这些内容
@@ -136,13 +155,18 @@ main (生产分支)
 
 1. 从 `dev-base` 创建功能分支 `dev-N`
 2. 开发完成后 PR 到 `dev-base`
-3. 当 `dev-base` 积累足够功能后，从 `dev-base` 创建 `security-check-before-main`
-4. 在 `security-check-before-main` 上执行：
+3. 当 `dev-base` 积累足够功能后，从最新 `dev-base` 创建独立审计分支，例如 `dev/fix/security-audit-YYYY-MM-DD`
+4. 在独立审计分支上执行：
    - 安全审计（参考 `SECURITY.md` 中的审计报告格式）
    - 修复发现的安全问题
    - 代码注释规整化
    - 更新 `SECURITY.md` 审计报告
-5. 提交 `security-check-before-main`，由**其他人** review 后合并到 `main`
+5. 通过 PR 将审计分支以 merge commit 合入 `security-check-before-main`
+6. `security-check-before-main` 由**其他人**最终 review 后合并到 `main`
+
+质量工作流会在 Windows 与 Ubuntu 上运行完整测试，并检查 Ruff、Bandit、依赖漏洞、前端语法、i18n JSON 和仓库密钥。审计或集成分支不得绕过失败的质量门禁。
+
+After `dev-base` is integrated, create a dedicated audit branch from its latest commit, complete the security and cleanup work there, and merge it into `security-check-before-main` through a reviewed merge-commit PR. The permanent quality workflow runs the full test suite on Windows and Ubuntu together with Ruff, Bandit, dependency, frontend, i18n, and secret checks. Failed gates must not be bypassed.
 
 ### Commit 规范
 
@@ -230,14 +254,16 @@ NEO4J_USER=neo4j                       # 用户名
 
 ## 网页端安全配置说明
 
-当前版本推荐在网页端填写 Steam API Key 和 Neo4j 密码。保存后它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。
+当前版本推荐在网页端填写 Steam API Key、Steam 代理 URL 和 Neo4j 密码。保存后它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。
 
 安全策略：
 
 - 前端输入框使用密码框。
 - 保存后输入框会清空。
-- API 只返回“已配置/未配置”，不会回显 Steam API Key 或 Neo4j 密码原文。
+- API 只返回“已配置/未配置”，不会回显 Steam API Key、代理 URL 或 Neo4j 密码原文。
+- Steam 代理支持 `http://`、`https://`、`socks5://` 和 `socks5h://`；包含账号密码的代理 URL 同样保存在系统凭据库并进入日志脱敏列表。
 - `.env` 只建议保存非敏感配置，例如 Neo4j 地址、用户名、端口和默认抓取参数。
+- `.env` 中的 `STEAM_PROXY_URL` 可作为兼容回退；若 URL 包含认证信息，仍建议迁移到网页端安全存储。
 - 旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍然兼容读取，但网页会提示建议迁移到安全存储。
 - 如果你需要真正的浏览器到后端传输层加密，应启用本地 HTTPS；普通 localhost HTTP 不应被描述为“全链路加密”。
 
@@ -267,29 +293,36 @@ cd Steam-Friend-Relationship-Map
 
 如果你把项目放在了其他位置，请换成自己的路径。
 
-### 第 3 步：创建 `.env` 配置文件
+### 第 3 步：初始化 `.env` 配置文件
 
-先复制模板：
+为了让项目正确启动，你需要创建 `.env` 配置文件。现在项目支持**交互式自动初始化**：
 
-```powershell
-Copy-Item .env.example .env
-```
+1. **自动引导**：直接在终端中启动项目：
+   ```bash
+   uv run steam-friend-map
+   ```
+   如果系统检测到本地没有 `.env` 文件，会自动在控制台中引导你输入希望运行 Web UI 的本地端口（例如 `8000`）。完成后会自动基于 `.env.example` 生成 `.env` 配置文件。
 
-然后打开 `.env`。刚创建出来大概是这样：
+2. **显式初始化/重新配置**：如果你想重新配置或显式运行初始化命令，可以附加 `--init` 参数：
+   ```bash
+   uv run steam-friend-map --init
+   ```
 
-```env
-STEAM_API_KEY=
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=
-APP_HOST=127.0.0.1
-APP_PORT=8000
-DEFAULT_MAX_DEPTH=2
-DEFAULT_MAX_NODES=2000
-DEFAULT_DELAY_MS=300
-```
+3. **手动复制（备用）**：你也可以像以前一样手动复制模板：
+   - Windows (PowerShell):
+     ```powershell
+     Copy-Item .env.example .env
+     ```
+   - Linux/macOS:
+     ```bash
+     cp .env.example .env
+     ```
+   刚生成的 `.env` 文件大约如下，你可以在其中通过修改 `APP_PORT` 来配置 Web UI 的本地端口：
+   ```env
+   APP_PORT=8000
+   ```
 
-这个模板不包含 Steam API Key 和 Neo4j 密码。敏感信息建议稍后在网页端“安全配置”区域填写。
+这个配置文件不推荐包含 Steam API Key 和 Neo4j 密码等敏感信息。敏感信息建议稍后在 Web UI 启动后的网页端“安全配置”区域填写，系统会自动安全保存。
 
 ### 第 4 步：获取 Steam Web API Key
 
@@ -329,7 +362,7 @@ Steam Web API Key 用来访问公开 Steam API。没有 Key 时无法抓取好�
 
 如果你已经用旧版方式写进 `.env`，项目仍会兼容读取，但建议迁移到网页端安全配置。
 
-### 第 6 步：准备 Neo4j Desktop
+### 第 6 步：准备 Neo4j Desktop（若使用默认的 Kùzu 引擎，可直接跳过第 6、7 步）
 
 1. 打开 Neo4j Desktop。
 2. 创建一个 Project，或者使用已有 Project。
@@ -352,7 +385,7 @@ neo4j
 
 这个工具会通过 Bolt 连接 Neo4j Desktop，把 Steam 用户和好友关系写进去。
 
-### 第 7 步：填写 Neo4j 非敏感连接信息
+### 第 7 步：填写 Neo4j 非敏感连接信息（若使用默认的 Kùzu 引擎，可直接跳过第 6、7 步）
 
 继续编辑 `.env`：
 
@@ -365,9 +398,29 @@ NEO4J_USER=neo4j
 
 ### 第 8 步：检查完整 `.env`
 
-最终 `.env` 应该类似这样：
+最终的 `.env` 配置文件会根据你选择的引擎而有所不同。
+
+#### 方案 A：使用 Kùzu 嵌入式数据库（默认推荐，免安装）
+
+如果你想使用 Kùzu 作为底层图数据库，你的 `.env` 应当如下：
 
 ```env
+GRAPH_DB_ENGINE=kuzu
+KUZU_DB_PATH=./data/graph_kuzu         # 本地数据存储路径
+KUZU_BUFFER_POOL_SIZE_GB=1             # Kùzu 内存缓冲池大小限制
+APP_HOST=127.0.0.1
+APP_PORT=8000
+DEFAULT_MAX_DEPTH=1
+DEFAULT_MAX_NODES=200
+DEFAULT_DELAY_MS=500
+```
+
+#### 方案 B：使用 Neo4j Desktop 数据库（可选）
+
+如果你想使用 Neo4j 作为底层图数据库，你的 `.env` 应当如下：
+
+```env
+GRAPH_DB_ENGINE=neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 APP_HOST=127.0.0.1
@@ -377,19 +430,22 @@ DEFAULT_MAX_NODES=200
 DEFAULT_DELAY_MS=500
 ```
 
-每一项含义：
+每一项配置的含义：
 
-| 配置项              | 含义                               |
-| ------------------- | ---------------------------------- |
-| `NEO4J_URI`         | Neo4j Bolt 连接地址                |
-| `NEO4J_USER`        | Neo4j 用户名，通常是 `neo4j`       |
-| `APP_HOST`          | 本地服务监听地址，默认 `127.0.0.1` |
-| `APP_PORT`          | 本地服务端口，默认 `8000`          |
-| `DEFAULT_MAX_DEPTH` | 默认抓取层数，建议先用 `1` 或 `2`  |
-| `DEFAULT_MAX_NODES` | 默认最大节点数                     |
-| `DEFAULT_DELAY_MS`  | Steam API 请求间隔，单位毫秒       |
+| 配置项 | 含义 |
+| :--- | :--- |
+| `GRAPH_DB_ENGINE` | 激活的图数据库引擎类型，可选 `kuzu` 或 `neo4j` |
+| `KUZU_DB_PATH` | Kùzu 数据库文件的本地存储路径 |
+| `KUZU_BUFFER_POOL_SIZE_GB` | 限制 Kùzu 占用物理内存的最大缓冲池大小 (GB) |
+| `NEO4J_URI` | Neo4j Bolt 连接地址 |
+| `NEO4J_USER` | Neo4j 用户名，通常是 `neo4j` |
+| `APP_HOST` | 本地服务监听地址，默认 `127.0.0.1` |
+| `APP_PORT` | 本地服务端口，默认 `8000` |
+| `DEFAULT_MAX_DEPTH` | 默认抓取层数，建议先用 `1` 或 `2` |
+| `DEFAULT_MAX_NODES` | 默认最大节点数 |
+| `DEFAULT_DELAY_MS` | Steam API 请求间隔，单位毫秒 |
 
-Steam API Key 和 Neo4j 密码不在这个表里，因为它们属于敏感信息，建议在网页端保存到系统凭据库。
+Steam API Key 和 Neo4j 密码不在该配置文件中，因为它们属于敏感信息，建议在网页端保存到系统凭据库中。
 
 ### 第 9 步：安装依赖
 
@@ -399,11 +455,13 @@ Steam API Key 和 Neo4j 密码不在这个表里，因为它们属于敏感信�
 uv sync
 ```
 
-它会创建虚拟环境并安装 FastAPI、Neo4j Driver、httpx 等依赖。
+它会创建虚拟环境并自动安装 FastAPI、Kùzu 数据库驱动、Neo4j Driver、httpx 等所有项目依赖。
 
 ### 第 10 步：启动本地应用
 
-确认 Neo4j Desktop 数据库已经 Start，然后运行：
+如果您使用的是 Neo4j 引擎，请确认 Neo4j Desktop 数据库已经 Start 运行；如果使用默认的 Kùzu 引擎，则无需启动任何外部数据库。
+
+在终端中运行：
 
 ```powershell
 uv run steam-friend-map
@@ -414,6 +472,14 @@ uv run steam-friend-map
 ```text
 http://127.0.0.1:8000
 ```
+
+可用健康接口确认应用和图数据库都已就绪：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+```
+
+图数据库可用时返回 HTTP 200；不可用时返回 HTTP 503 和已脱敏的错误信息。服务退出会先停止后台抓取任务，再依次关闭 Steam HTTP 客户端和数据库，避免遗留 Kuzu 文件锁。
 
 ## 第一次成功运行检查清单
 
@@ -433,11 +499,12 @@ http://127.0.0.1:8000
 
 第一次建议用很保守的设置：
 
-| 项目     | 建议           |
-| -------- | -------------- |
-| Depth    | `1`            |
-| Nodes    | `200` 或 `500` |
-| Delay ms | `300`          |
+| 项目                | 建议           |
+| ------------------- | -------------- |
+| Depth               | `1`            |
+| Nodes               | `200` 或 `500` |
+| Delay ms            | `300`          |
+| Concurrent requests | `4`            |
 
 操作步骤：
 
@@ -458,6 +525,8 @@ http://127.0.0.1:8000
 9. 点击一个节点，右侧会显示头像、昵称、主页链接、备注、标签和分类。
 
 确认 1 层正常后，再尝试 2 层。不要一上来就抓 4 层。
+
+“并发请求数”限制同时等待 Steam 响应的请求数量，范围为 `1-16`。建议从 `4` 开始；若频繁遇到 HTTP 429，可降低并发或增大 Delay ms，程序也会按 Steam 的 `Retry-After` 自动退避。
 
 ### 扫描前筛选怎么用？
 
@@ -653,9 +722,17 @@ This project is a local Steam friend graph crawler and Neo4j visualizer. The Web
    http://127.0.0.1:8000
    ```
 
+   Check readiness at `http://127.0.0.1:8000/api/health`. It returns HTTP 503 when the graph database is unavailable. Shutdown stops background crawls before closing the Steam HTTP client and database.
+
 8. Use the Secure Settings panel to save your Steam API Key and Neo4j password into the system credential store.
 
 The app only uses public Steam Web API data. Private friend lists are marked as inaccessible and skipped. Pre-scan filters can limit candidates by public friend count or by links to the prior user pool; post-scan filters and Friend Circle Analysis work only on data already stored in your local Neo4j database.
+
+Project membership is represented by explicit `IN_PROJECT` relationships. Notes, tags, categories, Root depth, prior-pool link counts, and closeness scores are stored on that membership, so one Steam user can have independent annotations and analysis metrics in different projects. Legacy node metadata is migrated idempotently on startup.
+
+Runtime mutations are serialized with crawl creation. Settings, secrets, and project switches roll back when persistence or runtime reload fails, preventing a background crawl from retaining a closed database or HTTP client.
+
+CSV exports include project annotations and analysis fields, use a UTF-8 BOM, and escape spreadsheet formula prefixes. JSON exports retain the original graph structure.
 
 System Logs / Dev Logs redact API keys, passwords, Cookie, Authorization, and common `password=` / `key=` values before showing them in the browser. SteamIDs, notes, screenshots, and relationship context may still be personal data, so review logs before sharing.
 

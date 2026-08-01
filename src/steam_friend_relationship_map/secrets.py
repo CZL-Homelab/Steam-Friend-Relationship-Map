@@ -3,9 +3,8 @@ from __future__ import annotations
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
 
-
 SERVICE_NAME = "steam-friend-relationship-map"
-ALLOWED_SECRET_NAMES = {"steam_api_key", "neo4j_password"}
+ALLOWED_SECRET_NAMES = {"steam_api_key", "steam_proxy_url", "neo4j_password"}
 
 
 class SecretStorageError(RuntimeError):

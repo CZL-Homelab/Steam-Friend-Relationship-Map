@@ -10,12 +10,41 @@ from .models import (
     ExportResponse,
     FriendCircleAnalysisResponse,
     FriendEdge,
+    FriendListCacheUpdate,
     GraphNode,
     GraphResponse,
+    PotentialFriendsResponse,
     ProjectCreate,
     ProjectListResponse,
     SteamUserRecord,
 )
+
+CRAWL_RUN_UPDATE_FIELDS = frozenset(
+    {
+        "status",
+        "finished_at",
+        "nodes_discovered",
+        "edges_discovered",
+        "private_count",
+        "error_count",
+        "message",
+        "current_depth",
+        "current_steam_id",
+        "queue_size",
+        "expanded_count",
+        "progress_percent",
+        "last_event",
+        "filtered_count",
+        "friend_count_filtered_count",
+        "prior_pool_filtered_count",
+    }
+)
+
+
+def validate_crawl_run_update_fields(fields: dict[str, Any]) -> None:
+    unknown = sorted(set(fields) - CRAWL_RUN_UPDATE_FIELDS)
+    if unknown:
+        raise ValueError(f"Unsupported crawl run update fields: {', '.join(unknown)}")
 
 
 class IGraphRepository(ABC):
@@ -35,6 +64,10 @@ class IGraphRepository(ABC):
     def ensure_schema(self) -> None:
         """初始化图数据库的约束、Schema和必要索引。"""
         pass
+
+    def recover_interrupted_crawls(self) -> int:
+        """Mark crawl records left active by a previous process as stopped."""
+        return 0
 
     @abstractmethod
     def list_projects(self) -> ProjectListResponse:
@@ -89,12 +122,37 @@ class IGraphRepository(ABC):
         """更新用户的关系抓取状态及好友关联，并建立好友关系边。"""
         pass
 
+    def mark_friend_list_statuses(
+        self, updates: Iterable[FriendListCacheUpdate], project_id: str
+    ) -> None:
+        """批量写回好友列表缓存；默认逐条回退以兼容外部仓储实现。"""
+        for update in updates:
+            self.mark_friend_list_status(
+                update.steam_id,
+                update.status,
+                friend_count=update.friend_count,
+                friend_count_status=update.friend_count_status or "unknown",
+                friend_ids=update.friend_ids or [],
+                project_id=project_id,
+            )
+
     @abstractmethod
     def get_cached_friend_list(
         self, steam_id: str, valid_days: int, project_id: str
     ) -> tuple[str, list[str]] | None:
         """获取处于有效期内的本地好友列表缓存，若失效或不存在则返回 None。"""
         pass
+
+    def get_cached_friend_lists(
+        self, steam_ids: Iterable[str], valid_days: int, project_id: str
+    ) -> dict[str, tuple[str, list[str]]]:
+        """批量读取好友列表缓存；默认逐条回退以兼容外部仓储实现。"""
+        cached_lists: dict[str, tuple[str, list[str]]] = {}
+        for steam_id in dict.fromkeys(steam_ids):
+            cached = self.get_cached_friend_list(steam_id, valid_days, project_id)
+            if cached is not None:
+                cached_lists[steam_id] = cached
+        return cached_lists
 
     @abstractmethod
     def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
@@ -109,13 +167,16 @@ class IGraphRepository(ABC):
         note: str | None = None,
         tags: list[str] | None = None,
         category: str | None = None,
+        project_id: str = "default",
     ) -> None:
-        """局部更新用户节点属性（备注、标签、分类）。"""
+        """局部更新用户在指定项目中的备注、标签和分类。"""
         pass
 
     @abstractmethod
-    def bulk_patch_users(self, patches: Iterable[dict[str, Any]]) -> None:
-        """批量局部更新用户节点属性（备注、标签、分类）。"""
+    def bulk_patch_users(
+        self, patches: Iterable[dict[str, Any]], project_id: str = "default"
+    ) -> None:
+        """批量更新用户在指定项目中的备注、标签和分类。"""
         pass
 
     @abstractmethod
@@ -161,6 +222,18 @@ class IGraphRepository(ABC):
         project_id: str = "default",
     ) -> FriendCircleAnalysisResponse:
         """分析并获取用户的“朋友圈推荐”候选人列表（二度/三度潜在人脉社区）。"""
+        pass
+
+    @abstractmethod
+    def get_potential_friends(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> PotentialFriendsResponse:
+        """分析并获取二度/三度潜在好友推荐列表（基于 Jaccard 相似度）。"""
         pass
 
     @abstractmethod
