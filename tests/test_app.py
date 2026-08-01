@@ -235,6 +235,77 @@ def test_app_starts_when_repository_is_unavailable() -> None:
     assert "Graph database is unavailable" in projects_response.json()["detail"]
 
 
+def test_settings_remain_available_when_unrelated_env_value_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "APP_PORT=not-a-number\nSTEAM_API_KEY=environment-key\n",
+        encoding="utf-8",
+    )
+    for env_key in app_module.SECRET_ENV_KEYS.values():
+        monkeypatch.delenv(env_key, raising=False)
+    monkeypatch.setattr(app_module, "ENV_PATH", env_path)
+    monkeypatch.setattr(app_module, "get_settings", lambda: Settings(app_port=8000))
+
+    app = create_app(
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        app_module,
+        "Settings",
+        MagicMock(side_effect=AssertionError("full settings must not be reloaded")),
+    )
+
+    response = TestClient(app).get("/api/settings")
+
+    assert response.status_code == 200
+    assert response.json()["app_port"] == 8000
+    assert response.json()["steam_api_key_configured"] is True
+    assert response.json()["steam_api_key_from_env"] is True
+
+
+def test_settings_fall_back_to_process_environment_when_env_file_cannot_be_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import app as app_module
+
+    monkeypatch.setenv("STEAM_PROXY_URL", "http://127.0.0.1:8080")
+    monkeypatch.delenv("STEAM_API_KEY", raising=False)
+    monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
+    monkeypatch.setattr(app_module, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(app_module, "get_settings", lambda: Settings())
+    monkeypatch.setattr(
+        app_module,
+        "dotenv_values",
+        MagicMock(side_effect=OSError("permission denied")),
+    )
+
+    app = create_app(
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    assert response.json()["steam_proxy_configured"] is True
+    assert response.json()["steam_proxy_from_env"] is True
+    assert "环境配置暂时无法读取" in response.json()["message"]
+    assert any(
+        entry["source"] == "settings" and "permission denied" in entry["message"]
+        for entry in client.get("/api/logs").json()
+    )
+
+
 def test_user_patch_endpoint() -> None:
     class PatchTrackingRepo(FakeRepo):
         def __init__(self) -> None:

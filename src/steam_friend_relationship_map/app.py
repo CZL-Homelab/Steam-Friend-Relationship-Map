@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import re
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
 
-from dotenv import set_key
+from dotenv import dotenv_values, set_key
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -72,6 +73,11 @@ ENV_KEYS = {
     "default_cache_valid_days": "DEFAULT_CACHE_VALID_DAYS",
     "active_project": "ACTIVE_PROJECT",
 }
+SECRET_ENV_KEYS = {
+    "steam_api_key": "STEAM_API_KEY",
+    "steam_proxy_url": "STEAM_PROXY_URL",
+    "neo4j_password": "NEO4J_PASSWORD",
+}
 CSV_EXPORT_FIELDS = (
     "type",
     "project_id",
@@ -95,6 +101,24 @@ CSV_EXPORT_CHUNK_SIZE = 64 * 1024
 
 def sanitize_env_value(value: object) -> str:
     return str(value).replace("\n", "").replace("\r", "")
+
+
+def read_secret_environment_values(path: Path) -> tuple[dict[str, str], str]:
+    """Read secret presence without validating unrelated runtime settings."""
+    file_values: dict[str, str | None] = {}
+    error = ""
+    try:
+        file_values = dict(dotenv_values(path, encoding="utf-8"))
+    except Exception as exc:
+        error = str(exc)
+
+    values: dict[str, str] = {}
+    for field, env_key in SECRET_ENV_KEYS.items():
+        raw_value = (
+            os.environ[env_key] if env_key in os.environ else file_values.get(env_key)
+        )
+        values[field] = "" if raw_value is None else str(raw_value)
+    return values, error
 
 
 def csv_safe_cell(value: object) -> str:
@@ -706,7 +730,19 @@ def create_app(
 
     async def public_settings(message: str = "") -> PublicSettings:
         current_settings = settings
-        non_secret_settings = current_settings if provided_settings else await asyncio.to_thread(Settings)
+        if provided_settings:
+            environment_secrets = {
+                field: str(getattr(current_settings, field)) for field in SECRET_ENV_KEYS
+            }
+        else:
+            environment_secrets, env_read_error = await asyncio.to_thread(
+                read_secret_environment_values,
+                ENV_PATH,
+            )
+            if env_read_error:
+                detail = log_buffer.redact(env_read_error)
+                log_buffer.append("warn", "settings", f"环境配置读取失败: {detail}")
+                message = message or f"环境配置暂时无法读取，已显示当前运行配置：{detail}"
 
         def load_secrets() -> tuple[str, str, str]:
             return (
@@ -737,12 +773,17 @@ def create_app(
             default_delay_ms=current_settings.default_delay_ms,
             default_cache_valid_days=current_settings.default_cache_valid_days,
             active_project=current_settings.active_project,
-            steam_api_key_configured=bool(steam_secret or non_secret_settings.steam_api_key),
-            steam_proxy_configured=bool(proxy_secret or non_secret_settings.steam_proxy_url),
-            neo4j_password_configured=bool(neo4j_secret or non_secret_settings.neo4j_password),
-            steam_api_key_from_env=not bool(steam_secret) and bool(non_secret_settings.steam_api_key),
-            steam_proxy_from_env=not bool(proxy_secret) and bool(non_secret_settings.steam_proxy_url),
-            neo4j_password_from_env=not bool(neo4j_secret) and bool(non_secret_settings.neo4j_password),
+            steam_api_key_configured=bool(steam_secret or environment_secrets["steam_api_key"]),
+            steam_proxy_configured=bool(proxy_secret or environment_secrets["steam_proxy_url"]),
+            neo4j_password_configured=bool(
+                neo4j_secret or environment_secrets["neo4j_password"]
+            ),
+            steam_api_key_from_env=not bool(steam_secret)
+            and bool(environment_secrets["steam_api_key"]),
+            steam_proxy_from_env=not bool(proxy_secret)
+            and bool(environment_secrets["steam_proxy_url"]),
+            neo4j_password_from_env=not bool(neo4j_secret)
+            and bool(environment_secrets["neo4j_password"]),
             secure_store_available=secure_store_available,
             message=message,
         )
