@@ -18,6 +18,8 @@ const FALLBACK_ZH = {
   "profile.empty": "选择一个节点",
   "profile.steamProfile": "Steam 主页",
   "connection.notTested": "尚未测试",
+  "connection.configuredNotTested": "已配置，尚未测试",
+  "connection.steamKeyMissing": "未配置 Steam API Key",
   "status.idle": "空闲",
   "status.unknown": "未知",
   "toast.rootRequired": "请输入 Root URL",
@@ -282,6 +284,10 @@ function setConnectionDetail(id, message, ok = null) {
   if (currentLang === "en") {
     if (message === "Steam API Key 可用") {
       translatedMessage = "Steam API Key is valid";
+    } else if (message === "已配置，尚未测试") {
+      translatedMessage = "Configured, not tested";
+    } else if (message === "未配置 Steam API Key") {
+      translatedMessage = "Steam API Key is not configured";
     } else if (message === "Kùzu 连接正常") {
       translatedMessage = "Kùzu connection is normal";
     } else if (message === "Neo4j 连接正常") {
@@ -292,6 +298,10 @@ function setConnectionDetail(id, message, ok = null) {
   } else {
     if (message === "Steam API Key is valid") {
       translatedMessage = "Steam API Key 可用";
+    } else if (message === "Configured, not tested") {
+      translatedMessage = "已配置，尚未测试";
+    } else if (message === "Steam API Key is not configured") {
+      translatedMessage = "未配置 Steam API Key";
     } else if (message === "Kùzu connection is normal") {
       translatedMessage = "Kùzu 连接正常";
     } else if (message === "Neo4j connection is normal") {
@@ -329,7 +339,7 @@ async function api(path, options = {}) {
     });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail || response.statusText);
+      throw new Error(detail.detail || detail.database_message || response.statusText);
     }
     return response.json();
   } catch (error) {
@@ -894,6 +904,11 @@ async function loadSettings() {
     $("dbStatusLabel").textContent = engine === "kuzu" ? "Kùzu" : "Neo4j";
   }
   $("steamSecretState").textContent = secretLabel(settings.steam_api_key_configured, settings.steam_api_key_from_env);
+  setStatus("steamStatus", "idle");
+  setConnectionDetail(
+    "steamStatusDetail",
+    t(settings.steam_api_key_configured ? "connection.configuredNotTested" : "connection.steamKeyMissing"),
+  );
   $("steamProxyState").textContent = secretLabel(settings.steam_proxy_configured, settings.steam_proxy_from_env);
   $("clearSteamProxy").disabled = !settings.steam_proxy_configured || settings.steam_proxy_from_env;
   $("neo4jSecretState").textContent = secretLabel(settings.neo4j_password_configured, settings.neo4j_password_from_env);
@@ -904,6 +919,22 @@ async function loadSettings() {
     const label = activeProjName === "default" ? t("project.defaultName") : escapeHtml(activeProjName);
     $("projectList").innerHTML = `<div class="project-item active" data-project-id="${escapeHtml(activeProjName)}"><span>${label}</span><span class="project-meta">${t("project.loadFailed")}</span></div>`;
   });
+}
+
+async function loadHealth() {
+  setStatus("neo4jStatus", "testing");
+  setConnectionDetail("neo4jStatusDetail", t("status.testing"));
+  try {
+    const health = await api("/api/health");
+    setStatus("neo4jStatus", "ok");
+    setConnectionDetail("neo4jStatusDetail", health.database_message, true);
+    return health;
+  } catch (error) {
+    setStatus("neo4jStatus", "failed");
+    setConnectionDetail("neo4jStatusDetail", error.message, false);
+    appendSystemLog("warn", "health", error.message);
+    return null;
+  }
 }
 
 async function saveSettings() {
@@ -2106,7 +2137,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initHapticFeedback();
   $("pathResult").dataset.state = "empty";
   loadSettings()
-    .then(() => testSettings({ silent: true }))
+    .then(() => loadHealth())
     .catch((error) => appendSystemLog("error", "settings", error.message));
   loadGraph().catch(() => {});
   loadDbStats().catch((error) => appendSystemLog("error", "db", error.message));

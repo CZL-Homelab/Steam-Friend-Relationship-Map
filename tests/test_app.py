@@ -272,6 +272,27 @@ def test_secret_api_does_not_echo_secret() -> None:
     assert "super-secret" not in response.text
 
 
+def test_public_settings_reports_explicit_runtime_secrets_without_echoing_them() -> None:
+    api_key = "runtime-steam-key"
+    password = "runtime-neo4j-password"
+    app = create_app(
+        settings=Settings(steam_api_key=api_key, neo4j_password=password),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["steam_api_key_configured"] is True
+    assert body["neo4j_password_configured"] is True
+    assert api_key not in response.text
+    assert password not in response.text
+
+
 def test_secret_api_rejects_unknown_secret_name() -> None:
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
     client = TestClient(app)

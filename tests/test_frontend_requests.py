@@ -182,6 +182,10 @@ def test_application_reports_missing_frontend_dependencies_before_initializing_g
     db_poll_start = source.index("function scheduleDbStatsPoll()")
     db_poll_end = source.index("function startDbStatsPolling()", db_poll_start)
     assert "setInterval" not in source[db_poll_start:db_poll_end]
+    startup_end = source.index("// ── Apple Ecosystem", startup)
+    startup_source = source[startup:startup_end]
+    assert "loadHealth()" in startup_source
+    assert "testSettings(" not in startup_source
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")

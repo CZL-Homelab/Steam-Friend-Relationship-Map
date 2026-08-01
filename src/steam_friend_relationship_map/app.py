@@ -254,6 +254,7 @@ def create_app(
 ) -> FastAPI:
     provided_repo = repo
     provided_steam = steam
+    provided_settings = settings is not None
     settings = settings or get_settings()
     secret_store = secret_store or SecretStore()
     log_buffer = AppLogBuffer()
@@ -374,7 +375,7 @@ def create_app(
         app.state.manager = manager
 
     def public_settings(message: str = "") -> PublicSettings:
-        raw = Settings()
+        non_secret_settings = settings if provided_settings else Settings()
         try:
             steam_secret = secret_store.get("steam_api_key")
             proxy_secret = secret_store.get("steam_proxy_url")
@@ -399,12 +400,12 @@ def create_app(
             default_delay_ms=settings.default_delay_ms,
             default_cache_valid_days=settings.default_cache_valid_days,
             active_project=settings.active_project,
-            steam_api_key_configured=bool(steam_secret or raw.steam_api_key),
-            steam_proxy_configured=bool(proxy_secret or raw.steam_proxy_url),
-            neo4j_password_configured=bool(neo4j_secret or raw.neo4j_password),
-            steam_api_key_from_env=not bool(steam_secret) and bool(raw.steam_api_key),
-            steam_proxy_from_env=not bool(proxy_secret) and bool(raw.steam_proxy_url),
-            neo4j_password_from_env=not bool(neo4j_secret) and bool(raw.neo4j_password),
+            steam_api_key_configured=bool(steam_secret or non_secret_settings.steam_api_key),
+            steam_proxy_configured=bool(proxy_secret or non_secret_settings.steam_proxy_url),
+            neo4j_password_configured=bool(neo4j_secret or non_secret_settings.neo4j_password),
+            steam_api_key_from_env=not bool(steam_secret) and bool(non_secret_settings.steam_api_key),
+            steam_proxy_from_env=not bool(proxy_secret) and bool(non_secret_settings.steam_proxy_url),
+            neo4j_password_from_env=not bool(neo4j_secret) and bool(non_secret_settings.neo4j_password),
             secure_store_available=secure_store_available,
             message=message,
         )
