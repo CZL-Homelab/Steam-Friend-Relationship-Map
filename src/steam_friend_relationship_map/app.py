@@ -286,6 +286,19 @@ def create_app(
     manager = CrawlManager(repo, steam, log_buffer, project_id=settings.active_project)
     runtime_mutation_lock = asyncio.Lock()
 
+    async def call_repository(
+        method_name: str,
+        *args: Any,
+        project_scoped: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run synchronous repository work off-loop while guarding runtime swaps."""
+        async with runtime_mutation_lock:
+            if project_scoped:
+                kwargs["project_id"] = settings.active_project
+            method = getattr(repo, method_name)
+            return await asyncio.to_thread(method, *args, **kwargs)
+
     @asynccontextmanager
     async def runtime_mutation_guard() -> AsyncIterator[None]:
         async with runtime_mutation_lock:
@@ -505,7 +518,7 @@ def create_app(
     @app.get("/api/health", response_model=HealthResponse)
     async def health(response: Response) -> HealthResponse:
         try:
-            database_message = repo.test_connection()
+            database_message = await call_repository("test_connection")
             health_status = "ok"
         except Exception as exc:
             response.status_code = 503
@@ -642,8 +655,10 @@ def create_app(
             steam_reason, steam_message = classify_steam_test_error(exc)
             log_buffer.append("warn", "settings", f"Steam 连接测试失败: {steam_message}")
         try:
-            repo.ensure_schema()
-            neo4j_message = repo.test_connection()
+            async with runtime_mutation_lock:
+                current_repo = repo
+                await asyncio.to_thread(current_repo.ensure_schema)
+                neo4j_message = await asyncio.to_thread(current_repo.test_connection)
             neo4j_ok = True
             neo4j_reason = "ok"
         except Exception as exc:
@@ -663,7 +678,7 @@ def create_app(
     @app.get("/api/projects", response_model=ProjectListResponse)
     async def list_projects() -> ProjectListResponse:
         try:
-            result = repo.list_projects()
+            result = await call_repository("list_projects")
             result.active_project_id = settings.active_project
             return result
         except Exception as exc:
@@ -672,7 +687,8 @@ def create_app(
 
     @app.post("/api/projects", response_model=ProjectInfo)
     async def create_project(payload: ProjectCreate) -> ProjectInfo:
-        pid = repo.create_project(payload)
+        async with runtime_mutation_guard():
+            pid = await asyncio.to_thread(repo.create_project, payload)
         log_buffer.append("info", "project", f"项目已创建: {payload.name} ({pid})")
         return ProjectInfo(id=pid, name=payload.name, created_at=utc_now_iso())
 
@@ -681,7 +697,7 @@ def create_app(
         async with runtime_mutation_guard():
             if project_id == "default":
                 raise HTTPException(status_code=400, detail="无法删除默认项目")
-            ok = repo.delete_project(project_id)
+            ok = await asyncio.to_thread(repo.delete_project, project_id)
             if not ok:
                 raise HTTPException(status_code=404, detail="项目不存在")
             log_buffer.append("warn", "project", f"项目已删除: {project_id}")
@@ -697,8 +713,12 @@ def create_app(
             pid = sanitize_env_value(payload.project_id).strip()
             previous_project_id = settings.active_project
             created_project = False
-            if not repo.project_exists(pid):
-                repo.create_project(ProjectCreate(name=pid), project_id=pid)
+            if not await asyncio.to_thread(repo.project_exists, pid):
+                await asyncio.to_thread(
+                    repo.create_project,
+                    ProjectCreate(name=pid),
+                    project_id=pid,
+                )
                 created_project = True
                 log_buffer.append("info", "project", f"项目已自动创建: {pid}")
             ENV_PATH.touch(exist_ok=True)
@@ -718,7 +738,7 @@ def create_app(
                     rollback_errors.append(str(rollback_exc))
                 if created_project:
                     try:
-                        repo.delete_project(pid)
+                        await asyncio.to_thread(repo.delete_project, pid)
                     except Exception as rollback_exc:
                         rollback_errors.append(str(rollback_exc))
                 clear_settings_cache()
@@ -732,7 +752,7 @@ def create_app(
                 raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             log_buffer.append("info", "project", f"已切换到项目: {pid}")
             try:
-                result = repo.list_projects()
+                result = await asyncio.to_thread(repo.list_projects)
                 result.active_project_id = pid
                 return result
             except Exception as exc:
@@ -757,7 +777,7 @@ def create_app(
 
     @app.get("/api/crawls/{run_id}", response_model=CrawlRun)
     async def get_crawl(run_id: str) -> CrawlRun:
-        run = repo.get_crawl_run(run_id)
+        run = await call_repository("get_crawl_run", run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Crawl run not found")
         return run
@@ -800,7 +820,8 @@ def create_app(
         try:
             if friend_count_min is not None and friend_count_max is not None and friend_count_min > friend_count_max:
                 raise HTTPException(status_code=400, detail="friend_count_min must be <= friend_count_max")
-            return repo.get_graph(
+            return await call_repository(
+                "get_graph",
                 root=root or None,
                 depth=depth,
                 limit=limit,
@@ -811,7 +832,7 @@ def create_app(
                 prior_pool_min_links=prior_pool_min_links,
                 sort_by=sort_by,
                 sort_dir=sort_dir,
-                project_id=settings.active_project,
+                project_scoped=True,
             )
         except HTTPException:
             raise
@@ -822,19 +843,20 @@ def create_app(
     @app.get("/api/db/stats", response_model=DbStats)
     async def db_stats() -> DbStats:
         try:
-            return repo.get_db_stats(project_id=settings.active_project)
+            return await call_repository("get_db_stats", project_scoped=True)
         except Exception as exc:
             log_buffer.append("error", "db", f"数据库状态读取失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.patch("/api/users/{steam_id}")
     async def patch_user(steam_id: str, payload: UserPatch) -> dict[str, bool]:
-        repo.patch_user(
+        await call_repository(
+            "patch_user",
             steam_id,
             note=payload.note,
             tags=payload.tags,
             category=payload.category,
-            project_id=settings.active_project,
+            project_scoped=True,
         )
         return {"ok": True}
 
@@ -844,12 +866,18 @@ def create_app(
         to_id: Annotated[str, Query(alias="to")],
         max_depth: Annotated[int, Query(ge=1, le=4)] = 4,
     ) -> GraphResponse:
-        return repo.get_shortest_path(from_id, to_id, max_depth, project_id=settings.active_project)
+        return await call_repository(
+            "get_shortest_path",
+            from_id,
+            to_id,
+            max_depth,
+            project_scoped=True,
+        )
 
     @app.get("/api/stats/top-degree", response_model=list[GraphNode])
     async def top_degree(limit: Annotated[int, Query(ge=1, le=50)] = 12) -> list[GraphNode]:
         try:
-            return repo.get_top_degree(limit, project_id=settings.active_project)
+            return await call_repository("get_top_degree", limit, project_scoped=True)
         except Exception as exc:
             log_buffer.append("error", "stats", f"Top degree read failed: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
@@ -862,7 +890,14 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
     ) -> FriendCircleAnalysisResponse:
         try:
-            return repo.get_friend_circle_analysis(root=root, max_depth=max_depth, min_mutual=min_mutual, limit=limit, project_id=settings.active_project)
+            return await call_repository(
+                "get_friend_circle_analysis",
+                root=root,
+                max_depth=max_depth,
+                min_mutual=min_mutual,
+                limit=limit,
+                project_scoped=True,
+            )
         except Exception as exc:
             log_buffer.append("error", "analysis", f"朋友圈分析失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
@@ -873,7 +908,7 @@ def create_app(
         resolution: Annotated[float, Query(gt=0, le=5)] = 1.0,
     ) -> NetworkAnalysisResponse:
         try:
-            exported = repo.export_graph(project_id=settings.active_project)
+            exported = await call_repository("export_graph", project_scoped=True)
             return await asyncio.to_thread(
                 analyze_network,
                 exported,
@@ -893,7 +928,7 @@ def create_app(
         if export_format not in {"json", "csv"}:
             raise HTTPException(status_code=400, detail="format must be json or csv")
         try:
-            data = repo.export_graph(project_id=settings.active_project)
+            data = await call_repository("export_graph", project_scoped=True)
         except Exception as exc:
             log_buffer.append("error", "export", f"图谱导出失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import threading
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -828,12 +830,17 @@ def test_app_endpoints_blocked_during_crawl() -> None:
     assert resp.status_code == 400
     assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
 
-    # 4. Test delete project
+    # 4. Test create project
+    resp = client.post("/api/projects", json={"name": "test-project"})
+    assert resp.status_code == 400
+    assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
+
+    # 5. Test delete project
     resp = client.delete("/api/projects/test-project")
     assert resp.status_code == 400
     assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
 
-    # 5. Test switch project
+    # 6. Test switch project
     resp = client.post("/api/projects/switch", json={"name": "test-project"})
     assert resp.status_code == 400
     assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
@@ -897,6 +904,59 @@ async def test_runtime_mutation_waits_for_crawl_creation() -> None:
     assert crawl_response.status_code == 200
     assert settings_response.status_code == 400
     assert "当前有活跃的抓取任务在运行" in settings_response.json()["detail"]
+
+
+async def test_heavy_repository_query_runs_off_loop_and_guards_runtime_access() -> None:
+    class BlockingGraphRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.query_thread_id: int | None = None
+
+        def get_graph(self, **kwargs: object) -> GraphResponse:
+            self.query_thread_id = threading.get_ident()
+            self.started.set()
+            self.release.wait(timeout=2)
+            return super().get_graph(**kwargs)
+
+    repo = BlockingGraphRepo()
+    app = create_app(
+        settings=Settings(),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    transport = ASGITransport(app=app)
+    event_loop_thread_id = threading.get_ident()
+    safety_release = threading.Timer(1, repo.release.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            graph_request = asyncio.create_task(client.get("/api/graph"))
+            deadline = time.monotonic() + 0.5
+            while not repo.started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert repo.started.is_set()
+
+            health_request = asyncio.create_task(client.get("/api/health"))
+            await asyncio.sleep(0.05)
+            assert not health_request.done()
+
+            logs_started = time.monotonic()
+            logs_response = await asyncio.wait_for(client.get("/api/logs"), timeout=0.25)
+            assert time.monotonic() - logs_started < 0.25
+            assert logs_response.status_code == 200
+
+            repo.release.set()
+            graph_response, health_response = await asyncio.gather(graph_request, health_request)
+    finally:
+        repo.release.set()
+        safety_release.cancel()
+
+    assert graph_response.status_code == 200
+    assert health_response.status_code == 200
+    assert repo.query_thread_id != event_loop_thread_id
 
 
 def test_project_switch_rolls_back_auto_created_project_on_reload_failure(
