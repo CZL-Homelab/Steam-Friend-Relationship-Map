@@ -180,8 +180,20 @@ class CrawlManager:
     ) -> list[FriendListLookup]:
         lookups: dict[str, FriendListLookup] = {}
         api_ids: list[str] = []
+        batch_loader = getattr(self.repo, "get_cached_friend_lists", None)
+        if callable(batch_loader):
+            cached_lists = batch_loader(steam_ids, cache_valid_days, self.project_id)
+        else:
+            cached_lists = {}
+            for steam_id in dict.fromkeys(steam_ids):
+                cached = self.repo.get_cached_friend_list(
+                    steam_id, cache_valid_days, self.project_id
+                )
+                if cached is not None:
+                    cached_lists[steam_id] = cached
+
         for steam_id in steam_ids:
-            cached = self.repo.get_cached_friend_list(steam_id, cache_valid_days, self.project_id)
+            cached = cached_lists.get(steam_id)
             if cached is None:
                 api_ids.append(steam_id)
                 continue

@@ -427,33 +427,51 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 now=utc_now_iso(),
             ).consume()
 
-    def get_cached_friend_list(self, steam_id: str, valid_days: int, project_id: str) -> tuple[str, list[str]] | None:
-        if valid_days <= 0:
-            return None
-        cutoff_time = (datetime.now(UTC) - timedelta(days=valid_days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    def get_cached_friend_list(
+        self, steam_id: str, valid_days: int, project_id: str
+    ) -> tuple[str, list[str]] | None:
+        return self.get_cached_friend_lists([steam_id], valid_days, project_id).get(steam_id)
+
+    def get_cached_friend_lists(
+        self, steam_ids: Iterable[str], valid_days: int, project_id: str
+    ) -> dict[str, tuple[str, list[str]]]:
+        unique_ids = list(dict.fromkeys(steam_ids))
+        if valid_days <= 0 or not unique_ids:
+            return {}
+        cutoff_time = (
+            (datetime.now(UTC) - timedelta(days=valid_days))
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         with self.driver.session() as session:
-            record = session.run(
+            records = session.run(
                 """
-                MATCH (u:SteamUser {steam_id: $steam_id})
-                WHERE u.friend_list_fetched_at >= $cutoff_time
-                RETURN u.friend_list_status AS status, u.friend_ids AS friend_ids
+                MATCH (u:SteamUser)
+                WHERE u.steam_id IN $steam_ids
+                  AND u.friend_list_fetched_at >= $cutoff_time
+                RETURN u.steam_id AS steam_id,
+                       u.friend_list_status AS status,
+                       u.friend_ids AS friend_ids
                 """,
-                steam_id=steam_id,
+                steam_ids=unique_ids,
                 cutoff_time=cutoff_time,
-            ).single()
-            if not record:
-                return None
-            status = record["status"] or "unknown"
-            if status == "unknown":
-                return None
-            if status != "public":
-                return status, []
-            
-            friend_ids = record["friend_ids"]
-            if friend_ids is None:
-                # 兼容旧版本数据：若没有保存的完整好友列表属性，视为缓存失效，触发重新抓取以进行自愈
-                return None
-            return status, list(friend_ids)
+            )
+            cached_lists: dict[str, tuple[str, list[str]]] = {}
+            for record in records:
+                steam_id = record["steam_id"]
+                status = record["status"] or "unknown"
+                if status == "unknown":
+                    continue
+                if status != "public":
+                    cached_lists[steam_id] = (status, [])
+                    continue
+                friend_ids = record["friend_ids"]
+                if friend_ids is None:
+                    # Older rows did not persist the complete list; refetch them to self-heal.
+                    continue
+                cached_lists[steam_id] = (status, list(friend_ids))
+            return cached_lists
 
     def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         rows = [edge.model_dump(mode="json") for edge in edges]

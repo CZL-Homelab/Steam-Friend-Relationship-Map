@@ -129,7 +129,9 @@ def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert retrieved2.nodes_discovered == 10
 
 
-def test_kuzu_friend_list_cache_round_trip(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+def test_kuzu_friend_list_cache_round_trip(
+    temp_kuzu_repo: KuzuRepositoryImpl, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
     repo.mark_friend_list_status(
@@ -140,12 +142,52 @@ def test_kuzu_friend_list_cache_round_trip(temp_kuzu_repo: KuzuRepositoryImpl) -
         friend_ids=["2", "3"],
         project_id="default",
     )
+    repo.mark_friend_list_status(
+        "2",
+        "private",
+        friend_count=None,
+        friend_count_status="private",
+        friend_ids=["stale"],
+        project_id="default",
+    )
+    repo.mark_friend_list_status(
+        "3",
+        "unknown",
+        friend_count=None,
+        friend_count_status="unknown",
+        friend_ids=[],
+        project_id="default",
+    )
+    repo.mark_friend_list_status(
+        "4",
+        "public",
+        friend_count=None,
+        friend_count_status="public",
+        friend_ids=[],
+        project_id="default",
+    )
+    connection = repo._get_conn()
+    connection.execute("MATCH (u:SteamUser {steam_id: '4'}) SET u.friend_ids = NULL")
 
     assert repo.get_cached_friend_list("1", valid_days=14, project_id="default") == (
         "public",
         ["2", "3"],
     )
     assert repo.get_cached_friend_list("1", valid_days=0, project_id="default") is None
+
+    counting = CountingConnection(connection)
+    monkeypatch.setattr(repo, "_get_conn", lambda: counting)
+    cached = repo.get_cached_friend_lists(
+        ["1", "2", "3", "4", "missing", "1"],
+        valid_days=14,
+        project_id="default",
+    )
+    assert cached == {"1": ("public", ["2", "3"]), "2": ("private", [])}
+    assert sum("u.steam_id IN $steam_ids" in query for query in counting.queries) == 1
+
+    counting.queries.clear()
+    assert repo.get_cached_friend_lists(["1", "2"], valid_days=0, project_id="default") == {}
+    assert counting.queries == []
 
 
 def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:

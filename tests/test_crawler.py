@@ -112,6 +112,35 @@ class CachedFakeRepo(FakeRepo):
         return self.cached_lists.get(steam_id) if valid_days > 0 else None
 
 
+class BatchCachedFakeRepo(CachedFakeRepo):
+    def __init__(self, cached_lists: dict[str, tuple[str, list[str]]]) -> None:
+        super().__init__(cached_lists)
+        self.batch_calls = 0
+
+    def get_cached_friend_list(
+        self,
+        steam_id: str,
+        valid_days: int,
+        project_id: str = "default",
+    ) -> tuple[str, list[str]] | None:
+        raise AssertionError("batch cache lookup should not use the singular method")
+
+    def get_cached_friend_lists(
+        self,
+        steam_ids: list[str],
+        valid_days: int,
+        project_id: str = "default",
+    ) -> dict[str, tuple[str, list[str]]]:
+        self.batch_calls += 1
+        if valid_days <= 0:
+            return {}
+        return {
+            steam_id: self.cached_lists[steam_id]
+            for steam_id in dict.fromkeys(steam_ids)
+            if steam_id in self.cached_lists
+        }
+
+
 class HangingSteam(FakeSteam):
     def __init__(self) -> None:
         super().__init__()
@@ -160,6 +189,32 @@ async def test_crawl_uses_cached_friend_lists_without_api_requests() -> None:
     assert repo.runs[run.id].status == CrawlStatus.completed
     assert set(repo.users) == {"root", "a"}
     assert steam.peak_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_crawl_reads_each_friend_cache_batch_with_one_repository_call() -> None:
+    steam = TrackingSteam({"missing": ["friend"]})
+    repo = BatchCachedFakeRepo(
+        {
+            "cached": ("public", ["known"]),
+            "private": ("private", []),
+        }
+    )
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    lookups = await manager._load_friend_list_batch(
+        ["cached", "private", "missing"], cache_valid_days=14
+    )
+
+    assert repo.batch_calls == 1
+    assert [(lookup.steam_id, lookup.source, lookup.status) for lookup in lookups] == [
+        ("cached", "cache", "public"),
+        ("private", "cache", "private"),
+        ("missing", "api", "public"),
+    ]
+    assert lookups[0].friend_ids == ("known",)
+    assert lookups[2].friend_ids == ("friend",)
+    assert steam.peak_requests == 1
 
 
 @pytest.mark.asyncio

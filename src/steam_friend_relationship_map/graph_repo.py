@@ -96,6 +96,17 @@ class IGraphRepository(ABC):
         """获取处于有效期内的本地好友列表缓存，若失效或不存在则返回 None。"""
         pass
 
+    def get_cached_friend_lists(
+        self, steam_ids: Iterable[str], valid_days: int, project_id: str
+    ) -> dict[str, tuple[str, list[str]]]:
+        """批量读取好友列表缓存；默认逐条回退以兼容外部仓储实现。"""
+        cached_lists: dict[str, tuple[str, list[str]]] = {}
+        for steam_id in dict.fromkeys(steam_ids):
+            cached = self.get_cached_friend_list(steam_id, valid_days, project_id)
+            if cached is not None:
+                cached_lists[steam_id] = cached
+        return cached_lists
+
     @abstractmethod
     def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         """批量更新或保存好友关系边。"""

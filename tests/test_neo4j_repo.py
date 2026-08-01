@@ -27,6 +27,8 @@ class _FakeResult:
         return None
 
     def __iter__(self):  # type: ignore[no-untyped-def]
+        if "u.steam_id AS steam_id" in self.query:
+            return iter(self.driver.cache_records)
         return iter(())
 
 
@@ -44,6 +46,7 @@ class _FakeSession:
         placeholders = set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", query))
         assert placeholders <= set(params), f"Missing Cypher params {placeholders - set(params)} for query: {query}"
         self.driver.queries.append(query)
+        self.driver.query_params.append(params)
         if "MERGE (m:SchemaMigration" in query:
             self.driver.migrations.add(str(params["id"]))
         return _FakeResult(query, params, self.driver)
@@ -52,6 +55,8 @@ class _FakeSession:
 class _FakeDriver:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        self.query_params: list[dict[str, Any]] = []
+        self.cache_records: list[dict[str, Any]] = []
         self.migrations: set[str] = set()
 
     def session(self) -> _FakeSession:
@@ -115,3 +120,42 @@ def test_neo4j_project_membership_migration_is_idempotent() -> None:
 
     assert first_migration_query_count == 1
     assert sum("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries) == 1
+
+
+def test_neo4j_batches_friend_cache_reads_and_ignores_incomplete_rows() -> None:
+    repo, driver = _repo()
+    driver.cache_records = [
+        {"steam_id": "public", "status": "public", "friend_ids": ["a", "b"]},
+        {"steam_id": "private", "status": "private", "friend_ids": ["stale"]},
+        {"steam_id": "unknown", "status": "unknown", "friend_ids": []},
+        {"steam_id": "legacy", "status": "public", "friend_ids": None},
+    ]
+
+    cached = repo.get_cached_friend_lists(
+        ["public", "private", "unknown", "legacy", "missing", "public"],
+        valid_days=14,
+        project_id="project-a",
+    )
+
+    assert cached == {
+        "public": ("public", ["a", "b"]),
+        "private": ("private", []),
+    }
+    cache_queries = [
+        (query, params)
+        for query, params in zip(driver.queries, driver.query_params, strict=True)
+        if "u.steam_id IN $steam_ids" in query
+    ]
+    assert len(cache_queries) == 1
+    assert cache_queries[0][1]["steam_ids"] == [
+        "public",
+        "private",
+        "unknown",
+        "legacy",
+        "missing",
+    ]
+
+    driver.queries.clear()
+    driver.query_params.clear()
+    assert repo.get_cached_friend_lists(["public"], 0, "project-a") == {}
+    assert driver.queries == []

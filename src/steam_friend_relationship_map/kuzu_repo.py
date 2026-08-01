@@ -673,8 +673,14 @@ class KuzuRepositoryImpl(IGraphRepository):
     def get_cached_friend_list(
         self, steam_id: str, valid_days: int, project_id: str
     ) -> tuple[str, list[str]] | None:
-        if valid_days <= 0:
-            return None
+        return self.get_cached_friend_lists([steam_id], valid_days, project_id).get(steam_id)
+
+    def get_cached_friend_lists(
+        self, steam_ids: Iterable[str], valid_days: int, project_id: str
+    ) -> dict[str, tuple[str, list[str]]]:
+        unique_ids = list(dict.fromkeys(steam_ids))
+        if valid_days <= 0 or not unique_ids:
+            return {}
         cutoff_time = (
             (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=valid_days))
             .replace(microsecond=0)
@@ -685,15 +691,24 @@ class KuzuRepositoryImpl(IGraphRepository):
         res = conn.execute(
             """
             MATCH (u:SteamUser)
-            WHERE u.steam_id = $steam_id AND u.friend_list_fetched_at >= $cutoff_time
-            RETURN u.friend_list_status, u.friend_ids
+            WHERE u.steam_id IN $steam_ids AND u.friend_list_fetched_at >= $cutoff_time
+            RETURN u.steam_id, u.friend_list_status, u.friend_ids
             """,
-            {"steam_id": steam_id, "cutoff_time": cutoff_time}
+            {"steam_ids": unique_ids, "cutoff_time": cutoff_time}
         )
-        if not res.has_next():
-            return None
-        row = res.get_next()
-        return row[0], row[1]
+        cached_lists: dict[str, tuple[str, list[str]]] = {}
+        while res.has_next():
+            steam_id, raw_status, raw_friend_ids = res.get_next()
+            status = raw_status or "unknown"
+            if status == "unknown":
+                continue
+            if status != "public":
+                cached_lists[steam_id] = (status, [])
+                continue
+            if raw_friend_ids is None:
+                continue
+            cached_lists[steam_id] = (status, list(raw_friend_ids))
+        return cached_lists
 
     def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         normalized: dict[tuple[str, str], dict[str, Any]] = {}
