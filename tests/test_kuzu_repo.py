@@ -582,6 +582,7 @@ def test_kuzu_relationships_are_isolated_by_project(temp_kuzu_repo: KuzuReposito
 
 def test_kuzu_shared_users_and_isolated_members_survive_other_project_deletion(
     temp_kuzu_repo: KuzuRepositoryImpl,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
@@ -612,6 +613,26 @@ def test_kuzu_shared_users_and_isolated_members_survive_other_project_deletion(
         [FriendEdge(from_id="shared", to_id="b-only", crawl_id="b-run", source_depth=0)],
         "project-b",
     )
+    repo.start_crawl_run(
+        CrawlRun(
+            id="a-run",
+            root_steam_id="shared",
+            max_depth=1,
+            max_nodes=10,
+            status=CrawlStatus.completed,
+        ),
+        "project-a",
+    )
+    repo.start_crawl_run(
+        CrawlRun(
+            id="b-run",
+            root_steam_id="shared",
+            max_depth=1,
+            max_nodes=10,
+            status=CrawlStatus.completed,
+        ),
+        "project-b",
+    )
 
     project_a = repo.get_graph(root=None, depth=1, limit=20, project_id="project-a")
     project_b = repo.get_graph(root=None, depth=1, limit=20, project_id="project-b")
@@ -619,9 +640,21 @@ def test_kuzu_shared_users_and_isolated_members_survive_other_project_deletion(
     assert {node.id for node in project_b.nodes} == {"shared", "b-only", "b-isolated"}
     assert repo.get_db_stats("project-a").steam_users == 3
     assert repo.get_db_stats("project-b").steam_users == 3
-    project_counts = {project.id: project.steam_users for project in repo.list_projects().projects}
-    assert project_counts["project-a"] == 3
-    assert project_counts["project-b"] == 3
+    connection = repo._get_conn()
+    counting = CountingConnection(connection)
+    monkeypatch.setattr(repo, "_get_conn", lambda: counting)
+    projects = {project.id: project for project in repo.list_projects().projects}
+    assert len(counting.queries) == 4
+    assert (
+        projects["project-a"].steam_users,
+        projects["project-a"].relationships,
+        projects["project-a"].crawl_runs,
+    ) == (3, 1, 1)
+    assert (
+        projects["project-b"].steam_users,
+        projects["project-b"].relationships,
+        projects["project-b"].crawl_runs,
+    ) == (3, 1, 1)
     assert {node["steam_id"] for node in repo.export_graph("project-a").nodes} == {
         "shared",
         "a-only",

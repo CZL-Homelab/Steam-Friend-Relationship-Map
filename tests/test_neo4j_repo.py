@@ -33,6 +33,14 @@ class _FakeResult:
     def __iter__(self):  # type: ignore[no-untyped-def]
         if "u.steam_id AS steam_id" in self.query:
             return iter(self.driver.cache_records)
+        if "RETURN p.id AS id" in self.query:
+            return iter(self.driver.project_records)
+        if "AS user_count" in self.query:
+            return iter(self.driver.project_user_counts)
+        if "AS relationship_count" in self.query:
+            return iter(self.driver.project_relationship_counts)
+        if "AS crawl_count" in self.query:
+            return iter(self.driver.project_crawl_counts)
         return iter(())
 
 
@@ -61,6 +69,10 @@ class _FakeDriver:
         self.queries: list[str] = []
         self.query_params: list[dict[str, Any]] = []
         self.cache_records: list[dict[str, Any]] = []
+        self.project_records: list[dict[str, Any]] = []
+        self.project_user_counts: list[dict[str, Any]] = []
+        self.project_relationship_counts: list[dict[str, Any]] = []
+        self.project_crawl_counts: list[dict[str, Any]] = []
         self.migrations: set[str] = set()
 
     def session(self) -> _FakeSession:
@@ -188,3 +200,39 @@ def test_neo4j_batches_friend_cache_updates() -> None:
     assert len(batch_queries) == 2
     assert len(batch_queries[0][1]["updates"]) == 1000
     assert len(batch_queries[1][1]["updates"]) == 1
+
+
+def test_neo4j_lists_projects_with_fixed_aggregation_queries() -> None:
+    repo, driver = _repo()
+    driver.project_records = [
+        {"id": "project-a", "name": "Project A", "created_at": "2026-01-02T00:00:00Z"},
+        {"id": "default", "name": "Default", "created_at": "2026-01-01T00:00:00Z"},
+    ]
+    driver.project_user_counts = [
+        {"project_id": "project-a", "user_count": 3},
+        {"project_id": "default", "user_count": 2},
+    ]
+    driver.project_relationship_counts = [
+        {"project_id": "project-a", "relationship_count": 2},
+        {"project_id": "default", "relationship_count": 1},
+    ]
+    driver.project_crawl_counts = [
+        {"project_id": "project-a", "crawl_count": 4},
+    ]
+
+    projects = {project.id: project for project in repo.list_projects().projects}
+
+    assert len(driver.queries) == 4
+    assert all("OPTIONAL MATCH" not in query for query in driver.queries)
+    assert any("count(DISTINCT r)" in query for query in driver.queries)
+    assert any("THEN 'default'" in query for query in driver.queries)
+    assert (
+        projects["project-a"].steam_users,
+        projects["project-a"].relationships,
+        projects["project-a"].crawl_runs,
+    ) == (3, 2, 4)
+    assert (
+        projects["default"].steam_users,
+        projects["default"].relationships,
+        projects["default"].crawl_runs,
+    ) == (2, 1, 0)

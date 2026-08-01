@@ -221,22 +221,45 @@ class Neo4jRepositoryImpl(IGraphRepository):
 
     def list_projects(self) -> ProjectListResponse:
         with self.driver.session() as session:
-            records = list(session.run(
+            project_records = list(session.run(
                 """
                 MATCH (p:Project)
-                OPTIONAL MATCH (u:SteamUser)-[:IN_PROJECT]->(p)
-                OPTIONAL MATCH ()-[r:STEAM_FRIEND]-()
-                WHERE coalesce(r.project_id, '') = p.id
-                   OR (p.id = 'default' AND coalesce(r.project_id, '') = '')
-                OPTIONAL MATCH (c:CrawlRun {project_id: p.id})
-                RETURN p,
-                       count(DISTINCT u) AS user_count,
-                       count(DISTINCT r) AS rel_count,
-                       count(DISTINCT c) AS crawl_count
+                RETURN p.id AS id, p.name AS name, p.created_at AS created_at
                 ORDER BY p.created_at DESC
                 """
             ))
-        if not records:
+            if project_records:
+                user_records = list(session.run(
+                    """
+                    MATCH (:SteamUser)-[:IN_PROJECT]->(p:Project)
+                    RETURN p.id AS project_id, count(*) AS user_count
+                    """
+                ))
+                relationship_records = list(session.run(
+                    """
+                    MATCH ()-[r:STEAM_FRIEND]-()
+                    WITH CASE
+                        WHEN coalesce(r.project_id, '') = '' THEN 'default'
+                        ELSE r.project_id
+                    END AS project_id, r
+                    RETURN project_id, count(DISTINCT r) AS relationship_count
+                    """
+                ))
+                crawl_records = list(session.run(
+                    """
+                    MATCH (c:CrawlRun)
+                    WITH CASE
+                        WHEN coalesce(c.project_id, '') = '' THEN 'default'
+                        ELSE c.project_id
+                    END AS project_id
+                    RETURN project_id, count(*) AS crawl_count
+                    """
+                ))
+            else:
+                user_records = []
+                relationship_records = []
+                crawl_records = []
+        if not project_records:
             # 首次启动：确保默认项目和 schema 存在
             self.ensure_schema()
             self.ensure_default_project()
@@ -244,17 +267,29 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 projects=[ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())],
                 active_project_id="",
             )
-        projects = []
-        for record in records:
-            p = dict(record["p"])
-            projects.append(ProjectInfo(
-                id=p.get("id", ""),
-                name=p.get("name", ""),
-                created_at=p.get("created_at", ""),
-                steam_users=record["user_count"] or 0,
-                relationships=record["rel_count"] or 0,
-                crawl_runs=record["crawl_count"] or 0,
-            ))
+        user_counts = {
+            record["project_id"]: int(record["user_count"] or 0)
+            for record in user_records
+        }
+        relationship_counts = {
+            record["project_id"]: int(record["relationship_count"] or 0)
+            for record in relationship_records
+        }
+        crawl_counts = {
+            record["project_id"]: int(record["crawl_count"] or 0)
+            for record in crawl_records
+        }
+        projects = [
+            ProjectInfo(
+                id=record["id"],
+                name=record["name"] or "",
+                created_at=record["created_at"] or "",
+                steam_users=user_counts.get(record["id"], 0),
+                relationships=relationship_counts.get(record["id"], 0),
+                crawl_runs=crawl_counts.get(record["id"], 0),
+            )
+            for record in project_records
+        ]
         return ProjectListResponse(projects=projects, active_project_id="")
 
     # ── Data operations (project-scoped) ──────────────────────────────

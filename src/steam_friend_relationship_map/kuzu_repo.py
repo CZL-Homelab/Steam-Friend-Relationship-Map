@@ -405,40 +405,70 @@ class KuzuRepositoryImpl(IGraphRepository):
             ORDER BY p.created_at DESC
             """
         )
-        projects = []
+        project_rows: list[tuple[str, str, str]] = []
         while res.has_next():
-            row = res.get_next()
-            project_ids = self._visible_project_ids(row[0])
-            user_count = self._scalar_count(
-                conn,
-                "MATCH (:SteamUser)-[:IN_PROJECT]->(p:Project) WHERE p.id = $project_id RETURN count(*)",
-                {"project_id": row[0]},
-            )
-            relationship_count = self._scalar_count(
-                conn,
-                "MATCH ()-[r:STEAM_FRIEND]->() WHERE coalesce(r.project_id, '') IN $project_ids RETURN count(r)",
-                {"project_ids": project_ids},
-            )
-            crawl_count = self._scalar_count(
-                conn,
-                "MATCH (c:CrawlRun) WHERE coalesce(c.project_id, '') IN $project_ids RETURN count(c)",
-                {"project_ids": project_ids},
-            )
-            projects.append(ProjectInfo(
-                id=row[0],
-                name=row[1],
-                created_at=row[2],
-                steam_users=user_count,
-                relationships=relationship_count,
-                crawl_runs=crawl_count,
-            ))
-        if not projects:
+            project_id, name, created_at = res.get_next()
+            project_rows.append((project_id, name, created_at))
+        if not project_rows:
             self.ensure_schema()
             self.ensure_default_project()
             return ProjectListResponse(
                 projects=[ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())],
                 active_project_id=""
             )
+
+        user_counts: dict[str, int] = {}
+        user_res = conn.execute(
+            """
+            MATCH (:SteamUser)-[:IN_PROJECT]->(p:Project)
+            RETURN p.id, count(*)
+            """
+        )
+        while user_res.has_next():
+            project_id, count = user_res.get_next()
+            user_counts[project_id] = int(count or 0)
+
+        relationship_counts: dict[str, int] = {}
+        relationship_res = conn.execute(
+            """
+            MATCH ()-[r:STEAM_FRIEND]->()
+            WITH CASE
+                WHEN coalesce(r.project_id, '') = '' THEN 'default'
+                ELSE r.project_id
+            END AS project_id
+            RETURN project_id, count(*)
+            """
+        )
+        while relationship_res.has_next():
+            project_id, count = relationship_res.get_next()
+            relationship_counts[project_id] = int(count or 0)
+
+        crawl_counts: dict[str, int] = {}
+        crawl_res = conn.execute(
+            """
+            MATCH (c:CrawlRun)
+            WITH CASE
+                WHEN coalesce(c.project_id, '') = '' THEN 'default'
+                ELSE c.project_id
+            END AS project_id
+            RETURN project_id, count(*)
+            """
+        )
+        while crawl_res.has_next():
+            project_id, count = crawl_res.get_next()
+            crawl_counts[project_id] = int(count or 0)
+
+        projects = [
+            ProjectInfo(
+                id=project_id,
+                name=name,
+                created_at=created_at,
+                steam_users=user_counts.get(project_id, 0),
+                relationships=relationship_counts.get(project_id, 0),
+                crawl_runs=crawl_counts.get(project_id, 0),
+            )
+            for project_id, name, created_at in project_rows
+        ]
         return ProjectListResponse(projects=projects, active_project_id="")
 
     def get_crawl_run(self, run_id: str) -> CrawlRun | None:
