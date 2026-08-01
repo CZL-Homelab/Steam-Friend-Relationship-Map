@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from steam_friend_relationship_map.crawler import CrawlManager
+from steam_friend_relationship_map.logs import AppLogBuffer
 from steam_friend_relationship_map.models import (
     CrawlCreate,
     CrawlRun,
@@ -187,6 +188,71 @@ class PrivateBatchSteam(FakeSteam):
                 friend_ids=[f"private-{index}" for index in range(6)],
             )
         return FriendListResult(steam_id=steam_id, friend_ids=[], private=True)
+
+
+class SummaryFailureSteam(FakeSteam):
+    async def get_player_summaries(self, steam_ids: list[str]) -> list[SteamUserRecord]:
+        raise RuntimeError("request failed api_key=0123456789abcdef0123456789abcdef")
+
+
+class TerminalWriteFailRepo(FakeRepo):
+    def __init__(self) -> None:
+        super().__init__()
+        self.terminal_attempts = 0
+
+    def update_crawl_run(self, run_id: str, **fields: object) -> None:
+        if fields.get("status") in {
+            CrawlStatus.completed.value,
+            CrawlStatus.cancelled.value,
+            CrawlStatus.stopped.value,
+            CrawlStatus.failed.value,
+        }:
+            self.terminal_attempts += 1
+            raise RuntimeError("database unavailable")
+        super().update_crawl_run(run_id, **fields)
+
+
+@pytest.mark.asyncio
+async def test_crawl_failure_persists_redacted_terminal_snapshot() -> None:
+    repo = FakeRepo()
+    logs = AppLogBuffer()
+    manager = CrawlManager(repo, SummaryFailureSteam(), logs)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+    )
+    await manager.controls[run.id].task
+
+    finished = repo.runs[run.id]
+    assert finished.status == CrawlStatus.failed
+    assert "0123456789abcdef" not in finished.message
+    assert "[REDACTED]" in finished.message
+    assert finished.nodes_discovered == 0
+    assert finished.edges_discovered == 0
+    assert finished.expanded_count == 0
+    assert finished.queue_size == 0
+    assert finished.error_count == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_terminal_write_failure_is_retried_and_contained() -> None:
+    repo = TerminalWriteFailRepo()
+    logs = AppLogBuffer()
+    steam = SummaryFailureSteam()
+    manager = CrawlManager(repo, steam, logs)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+    )
+    await manager.controls[run.id].task
+
+    assert repo.terminal_attempts == 2
+    assert repo.runs[run.id].status == CrawlStatus.running
+    assert steam.rate_limiter is None
+    assert any(
+        row.source == "crawl:failed-persist" and "已重试" in row.message
+        for row in logs.list()
+    )
 
 
 @pytest.mark.asyncio
@@ -543,6 +609,10 @@ async def test_crawl_auth_error_circuit_breaker() -> None:
     assert finished.status == CrawlStatus.failed
     assert "认证失败连续超过 5 次" in finished.message
     assert finished.error_count >= 5
+    assert finished.nodes_discovered == 11
+    assert finished.edges_discovered == 10
+    assert finished.expanded_count == 7
+    assert finished.queue_size == 0
     assert steam.calls == 7
     error_only_updates = [
         update for update in repo.run_updates if set(update) == {"error_count"}

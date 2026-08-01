@@ -269,6 +269,56 @@ class CrawlManager:
                 project_id=self.project_id,
             )
 
+    def _persist_terminal_run(
+        self,
+        run: CrawlRun,
+        *,
+        status: CrawlStatus,
+        message: str,
+        nodes_discovered: int,
+        edges_discovered: int,
+        private_count: int,
+        error_count: int,
+        filtered_count: int,
+        friend_count_filtered_count: int,
+        prior_pool_filtered_count: int,
+        expanded_count: int,
+    ) -> bool:
+        fields = {
+            "status": status.value,
+            "finished_at": utc_now_iso(),
+            "nodes_discovered": nodes_discovered,
+            "edges_discovered": edges_discovered,
+            "private_count": private_count,
+            "error_count": error_count,
+            "filtered_count": filtered_count,
+            "friend_count_filtered_count": friend_count_filtered_count,
+            "prior_pool_filtered_count": prior_pool_filtered_count,
+            "progress_percent": (
+                100
+                if status == CrawlStatus.completed
+                else self._progress(nodes_discovered, run.max_nodes, False)
+            ),
+            "queue_size": 0,
+            "expanded_count": expanded_count,
+            "message": message,
+            "last_event": message,
+        }
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                self.repo.update_crawl_run(run.id, **fields)
+                return True
+            except Exception as exc:
+                last_error = exc
+        if self.logs is not None and last_error is not None:
+            self.logs.append(
+                "error",
+                f"crawl:{status.value}-persist",
+                f"抓取终态写入失败（已重试）: {last_error}",
+            )
+        return False
+
     async def _run_crawl(self, run: CrawlRun, payload: CrawlCreate, control: CrawlControl) -> None:
         def on_delay_change(old_d: float, new_d: float, reason: str):
             reason_cn = "请求成功" if reason == "success" else "发生重试/受限"
@@ -325,10 +375,10 @@ class CrawlManager:
                 # ── 强制中断：立即停止，数据保留 ──
                 if control.force_stop:
                     event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
-                    self.repo.update_crawl_run(
-                        run.id,
-                        status=CrawlStatus.stopped.value,
-                        finished_at=utc_now_iso(),
+                    self._persist_terminal_run(
+                        run,
+                        status=CrawlStatus.stopped,
+                        message=event.message,
                         nodes_discovered=nodes_discovered,
                         edges_discovered=edges_discovered,
                         private_count=private_count,
@@ -336,18 +386,17 @@ class CrawlManager:
                         filtered_count=filtered_count,
                         friend_count_filtered_count=friend_count_filtered_count,
                         prior_pool_filtered_count=prior_pool_filtered_count,
-                        message=event.message,
-                        last_event=event.message,
+                        expanded_count=len(expanded),
                     )
                     return
 
                 # ── 优雅停止：完成当前层 ──
                 if control.cancel:
                     event = self.append_event(run.id, "warn", "cancelled", "用户停止扫描，完成当前层后停止（数据保留）")
-                    self.repo.update_crawl_run(
-                        run.id,
-                        status=CrawlStatus.cancelled.value,
-                        finished_at=utc_now_iso(),
+                    self._persist_terminal_run(
+                        run,
+                        status=CrawlStatus.cancelled,
+                        message=event.message,
                         nodes_discovered=nodes_discovered,
                         edges_discovered=edges_discovered,
                         private_count=private_count,
@@ -355,8 +404,7 @@ class CrawlManager:
                         filtered_count=filtered_count,
                         friend_count_filtered_count=friend_count_filtered_count,
                         prior_pool_filtered_count=prior_pool_filtered_count,
-                        message=event.message,
-                        last_event=event.message,
+                        expanded_count=len(expanded),
                     )
                     return
 
@@ -453,19 +501,18 @@ class CrawlManager:
                 # ── 内层循环后再次检查强制中断 ──
                 if control.force_stop:
                     event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
-                    self.repo.update_crawl_run(
-                        run.id,
-                        status=CrawlStatus.stopped.value,
-                        finished_at=utc_now_iso(),
-                        nodes_discovered=len(discovered),
+                    self._persist_terminal_run(
+                        run,
+                        status=CrawlStatus.stopped,
+                        message=event.message,
+                        nodes_discovered=nodes_discovered,
                         edges_discovered=edges_discovered,
                         private_count=private_count,
                         error_count=error_count,
                         filtered_count=filtered_count,
                         friend_count_filtered_count=friend_count_filtered_count,
                         prior_pool_filtered_count=prior_pool_filtered_count,
-                        message=event.message,
-                        last_event=event.message,
+                        expanded_count=len(expanded),
                     )
                     return
 
@@ -653,19 +700,18 @@ class CrawlManager:
 
                 if control.force_stop:
                     event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
-                    self.repo.update_crawl_run(
-                        run.id,
-                        status=CrawlStatus.stopped.value,
-                        finished_at=utc_now_iso(),
-                        nodes_discovered=len(discovered),
+                    self._persist_terminal_run(
+                        run,
+                        status=CrawlStatus.stopped,
+                        message=event.message,
+                        nodes_discovered=nodes_discovered,
                         edges_discovered=edges_discovered,
                         private_count=private_count,
                         error_count=error_count,
                         filtered_count=filtered_count,
                         friend_count_filtered_count=friend_count_filtered_count,
                         prior_pool_filtered_count=prior_pool_filtered_count,
-                        message=event.message,
-                        last_event=event.message,
+                        expanded_count=len(expanded),
                     )
                     return
 
@@ -696,59 +742,51 @@ class CrawlManager:
 
             event = self.append_event(
                 run.id, "info", "completed",
-                f"抓取完成! 节点{len(discovered)} 关系{edges_discovered} 私密{private_count} 错误{error_count} 筛选{filtered_count}",
+                f"抓取完成! 节点{nodes_discovered} 关系{edges_discovered} 私密{private_count} 错误{error_count} 筛选{filtered_count}",
             )
-            self.repo.update_crawl_run(
-                run.id,
-                status=CrawlStatus.completed.value,
-                finished_at=utc_now_iso(),
-                nodes_discovered=len(discovered),
+            self._persist_terminal_run(
+                run,
+                status=CrawlStatus.completed,
+                message=event.message,
+                nodes_discovered=nodes_discovered,
                 edges_discovered=edges_discovered,
                 private_count=private_count,
                 error_count=error_count,
                 filtered_count=filtered_count,
                 friend_count_filtered_count=friend_count_filtered_count,
                 prior_pool_filtered_count=prior_pool_filtered_count,
-                progress_percent=100,
-                queue_size=0,
                 expanded_count=len(expanded),
-                message=event.message,
-                last_event=event.message,
             )
         except asyncio.CancelledError:
             event = self.append_event(run.id, "warn", "stopped", "应用关闭，抓取任务已停止")
-            try:
-                self.repo.update_crawl_run(
-                    run.id,
-                    status=CrawlStatus.stopped.value,
-                    finished_at=utc_now_iso(),
-                    nodes_discovered=nodes_discovered,
-                    edges_discovered=edges_discovered,
-                    private_count=private_count,
-                    error_count=error_count,
-                    filtered_count=filtered_count,
-                    friend_count_filtered_count=friend_count_filtered_count,
-                    prior_pool_filtered_count=prior_pool_filtered_count,
-                    message=event.message,
-                    last_event=event.message,
-                )
-            except Exception as exc:
-                if self.logs is not None:
-                    self.logs.append("error", "crawl:shutdown", f"抓取停止状态写入失败: {exc}")
+            self._persist_terminal_run(
+                run,
+                status=CrawlStatus.stopped,
+                message=event.message,
+                nodes_discovered=nodes_discovered,
+                edges_discovered=edges_discovered,
+                private_count=private_count,
+                error_count=error_count,
+                filtered_count=filtered_count,
+                friend_count_filtered_count=friend_count_filtered_count,
+                prior_pool_filtered_count=prior_pool_filtered_count,
+                expanded_count=len(expanded),
+            )
             raise
         except Exception as exc:
             event = self.append_event(run.id, "error", "failed", str(exc))
-            self.repo.update_crawl_run(
-                run.id,
-                status=CrawlStatus.failed.value,
-                finished_at=utc_now_iso(),
+            self._persist_terminal_run(
+                run,
+                status=CrawlStatus.failed,
+                message=event.message,
+                nodes_discovered=nodes_discovered,
+                edges_discovered=edges_discovered,
                 private_count=private_count,
                 error_count=error_count + 1,
                 filtered_count=filtered_count,
                 friend_count_filtered_count=friend_count_filtered_count,
                 prior_pool_filtered_count=prior_pool_filtered_count,
-                message=str(exc),
-                last_event=event.message,
+                expanded_count=len(expanded),
             )
         finally:
             self.steam.rate_limiter = None
