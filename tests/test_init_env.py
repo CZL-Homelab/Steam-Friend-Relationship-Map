@@ -75,16 +75,12 @@ def test_get_settings_keeps_secrets_that_succeed_when_one_keyring_read_fails(
         ("active_project", ""),
     ],
 )
-def test_settings_rejects_values_that_cannot_start_safely(
-    field: str, value: object
-) -> None:
+def test_settings_rejects_values_that_cannot_start_safely(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         Settings(**{field: value})
 
 
-def test_init_env_non_interactive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_init_env_non_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Set up cwd to be tmp_path
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
 
@@ -146,9 +142,7 @@ def test_init_env_interactive_invalid_then_valid(
     assert input_mock.call_count == 3
 
 
-def test_init_env_with_example_template(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_init_env_with_example_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Set up cwd to be tmp_path
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
 
@@ -191,10 +185,7 @@ def test_init_env_preserves_existing_file_when_atomic_replace_fails(
     with pytest.raises(RuntimeError, match="无法安全写入"):
         init_env(force=True)
 
-    assert (
-        env_file.read_text(encoding="utf-8")
-        == "APP_PORT=8123\nACTIVE_PROJECT=existing\n"
-    )
+    assert env_file.read_text(encoding="utf-8") == "APP_PORT=8123\nACTIVE_PROJECT=existing\n"
     assert list(tmp_path.glob("..env.*.tmp")) == []
 
 

@@ -61,9 +61,7 @@ class AdaptiveRateLimiter:
         change: tuple[float, float, str] | None = None
         async with self.lock:
             old_delay = self.current_delay_ms
-            adaptive_delay = max(
-                self.backoff_floor_ms, old_delay * self.increase_factor
-            )
+            adaptive_delay = max(self.backoff_floor_ms, old_delay * self.increase_factor)
             new_delay = min(self.max_delay_ms, adaptive_delay)
             requested_delay = max(new_delay, max(0.0, retry_after_ms or 0.0))
             loop = asyncio.get_running_loop()

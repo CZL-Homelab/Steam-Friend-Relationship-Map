@@ -7,7 +7,7 @@ from threading import Lock
 
 from .models import AppLog, utc_now_iso
 
-SECRET_TOKEN = "[REDACTED]"
+SECRET_TOKEN = "[REDACTED]"  # nosec B105 - output placeholder, not a credential
 
 
 class AppLogBuffer:
@@ -82,9 +82,7 @@ class AppLogHandler(logging.Handler):
         self.register_buffer(buffer)
 
     def _live_buffers(self) -> list[AppLogBuffer]:
-        live = [
-            buffer for reference in self._buffers if (buffer := reference()) is not None
-        ]
+        live = [buffer for reference in self._buffers if (buffer := reference()) is not None]
         self._buffers = [weakref.ref(buffer) for buffer in live]
         return live
 
@@ -100,21 +98,13 @@ class AppLogHandler(logging.Handler):
 
     def register_buffer(self, buffer: AppLogBuffer) -> None:
         with self.lock:
-            live = [
-                candidate
-                for candidate in self._live_buffers()
-                if candidate is not buffer
-            ]
+            live = [candidate for candidate in self._live_buffers() if candidate is not buffer]
             live.append(buffer)
             self._buffers = [weakref.ref(candidate) for candidate in live]
 
     def unregister_buffer(self, buffer: AppLogBuffer) -> None:
         with self.lock:
-            live = [
-                candidate
-                for candidate in self._live_buffers()
-                if candidate is not buffer
-            ]
+            live = [candidate for candidate in self._live_buffers() if candidate is not buffer]
             self._buffers = [weakref.ref(candidate) for candidate in live]
 
     def emit(self, record: logging.LogRecord) -> None:

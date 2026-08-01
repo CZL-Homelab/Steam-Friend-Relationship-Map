@@ -37,9 +37,7 @@ class FakeSteam:
     async def get_friend_list(self, steam_id: str) -> FriendListResult:
         if steam_id == "private":
             return FriendListResult(steam_id=steam_id, friend_ids=[], private=True)
-        return FriendListResult(
-            steam_id=steam_id, friend_ids=self.friend_graph.get(steam_id, [])
-        )
+        return FriendListResult(steam_id=steam_id, friend_ids=self.friend_graph.get(steam_id, []))
 
 
 class FakeRepo:
@@ -63,18 +61,14 @@ class FakeRepo:
         data.update(fields)
         self.runs[run_id] = CrawlRun(**data)
 
-    def upsert_users(
-        self, users: list[SteamUserRecord], project_id: str = "default"
-    ) -> None:
+    def upsert_users(self, users: list[SteamUserRecord], project_id: str = "default") -> None:
         for user in users:
             self.users[user.steam_id] = user
 
     def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
         self.statuses[steam_id] = status
 
-    def upsert_relationships(
-        self, edges: list[FriendEdge], project_id: str = "default"
-    ) -> None:
+    def upsert_relationships(self, edges: list[FriendEdge], project_id: str = "default") -> None:
         for edge in edges:
             self.edges.add(tuple(sorted((edge.from_id, edge.to_id))))
 
@@ -172,9 +166,7 @@ class BatchStatusFakeRepo(FakeRepo):
         self.status_batches: list[list[str]] = []
 
     def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
-        raise AssertionError(
-            "batch status persistence should not use the singular method"
-        )
+        raise AssertionError("batch status persistence should not use the singular method")
 
     def mark_friend_list_statuses(
         self,
@@ -280,15 +272,12 @@ async def test_crawl_terminal_write_failure_is_retried_and_contained() -> None:
     assert repo.runs[run.id].status == CrawlStatus.running
     assert steam.rate_limiter is None
     assert any(
-        row.source == "crawl:failed-persist" and "已重试" in row.message
-        for row in logs.list()
+        row.source == "crawl:failed-persist" and "已重试" in row.message for row in logs.list()
     )
 
 
 @pytest.mark.asyncio
-async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs() -> (
-    None
-):
+async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs() -> None:
     steam = HangingSteam()
     repo = FakeRepo()
     manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
@@ -470,9 +459,7 @@ async def test_terminal_write_is_serialized_after_pending_pause() -> None:
         pause_task = asyncio.create_task(manager.pause(run.id))
         while not repo.pause_started.is_set():
             await asyncio.sleep(0.005)
-        terminal_task = asyncio.create_task(
-            manager._persist_terminal_run(run, **terminal_kwargs)
-        )
+        terminal_task = asyncio.create_task(manager._persist_terminal_run(run, **terminal_kwargs))
         await asyncio.sleep(0.05)
         assert not terminal_task.done()
 
@@ -493,9 +480,7 @@ async def test_terminal_write_is_serialized_after_pending_pause() -> None:
 
 
 def test_crawler_repository_calls_use_async_wrapper() -> None:
-    source = Path("src/steam_friend_relationship_map/crawler.py").read_text(
-        encoding="utf-8"
-    )
+    source = Path("src/steam_friend_relationship_map/crawler.py").read_text(encoding="utf-8")
 
     assert "self.repo." not in source
 
@@ -589,9 +574,7 @@ async def test_crawl_bounds_concurrent_layer_expansion() -> None:
 @pytest.mark.asyncio
 async def test_crawl_persists_expansion_progress_once_per_request_batch() -> None:
     friend_ids = [f"friend-{index:02d}" for index in range(12)]
-    steam = TrackingSteam(
-        {"root": friend_ids, **{steam_id: [] for steam_id in friend_ids}}
-    )
+    steam = TrackingSteam({"root": friend_ids, **{steam_id: [] for steam_id in friend_ids}})
     repo = FakeRepo()
     manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
 
@@ -606,9 +589,7 @@ async def test_crawl_persists_expansion_progress_once_per_request_batch() -> Non
     )
     await manager.controls[run.id].task
 
-    progress_updates = [
-        update for update in repo.run_updates if "current_steam_id" in update
-    ]
+    progress_updates = [update for update in repo.run_updates if "current_steam_id" in update]
     assert len(progress_updates) == 4
     assert progress_updates[-1]["queue_size"] == 0
     assert progress_updates[-1]["expanded_count"] == 13
@@ -729,9 +710,7 @@ async def test_crawl_filters_by_friend_count() -> None:
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
     run = await manager.create_crawl(
-        CrawlCreate(
-            root_url="root", max_depth=1, max_nodes=10, delay_ms=0, friend_count_min=3
-        )
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, friend_count_min=3)
     )
     await manager.controls[run.id].task
 
@@ -867,7 +846,5 @@ async def test_crawl_auth_error_circuit_breaker() -> None:
     assert finished.expanded_count == 7
     assert finished.queue_size == 0
     assert steam.calls == 7
-    error_only_updates = [
-        update for update in repo.run_updates if set(update) == {"error_count"}
-    ]
+    error_only_updates = [update for update in repo.run_updates if set(update) == {"error_count"}]
     assert error_only_updates == [{"error_count": 3}]

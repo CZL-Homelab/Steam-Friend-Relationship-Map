@@ -19,6 +19,33 @@ from .models import (
     SteamUserRecord,
 )
 
+CRAWL_RUN_UPDATE_FIELDS = frozenset(
+    {
+        "status",
+        "finished_at",
+        "nodes_discovered",
+        "edges_discovered",
+        "private_count",
+        "error_count",
+        "message",
+        "current_depth",
+        "current_steam_id",
+        "queue_size",
+        "expanded_count",
+        "progress_percent",
+        "last_event",
+        "filtered_count",
+        "friend_count_filtered_count",
+        "prior_pool_filtered_count",
+    }
+)
+
+
+def validate_crawl_run_update_fields(fields: dict[str, Any]) -> None:
+    unknown = sorted(set(fields) - CRAWL_RUN_UPDATE_FIELDS)
+    if unknown:
+        raise ValueError(f"Unsupported crawl run update fields: {', '.join(unknown)}")
+
 
 class IGraphRepository(ABC):
     """图数据库抽象中间层接口。"""
@@ -48,9 +75,7 @@ class IGraphRepository(ABC):
         pass
 
     @abstractmethod
-    def create_project(
-        self, payload: ProjectCreate, project_id: str | None = None
-    ) -> str:
+    def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
         """创建新项目，返回项目 ID。"""
         pass
 
@@ -130,9 +155,7 @@ class IGraphRepository(ABC):
         return cached_lists
 
     @abstractmethod
-    def upsert_relationships(
-        self, edges: Iterable[FriendEdge], project_id: str
-    ) -> None:
+    def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         """批量更新或保存好友关系边。"""
         pass
 
@@ -214,9 +237,7 @@ class IGraphRepository(ABC):
         pass
 
     @abstractmethod
-    def get_top_degree(
-        self, limit: int = 12, project_id: str = "default"
-    ) -> list[GraphNode]:
+    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
         """获取当前项目中连接数最多的 Top 节点列表。"""
         pass
 

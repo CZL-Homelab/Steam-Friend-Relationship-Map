@@ -181,9 +181,7 @@ def test_kuzu_potential_friends_are_project_isolated(
     )
     repo.upsert_relationships(
         [
-            FriendEdge(
-                from_id="root", to_id="mutual", crawl_id="run-b", source_depth=0
-            ),
+            FriendEdge(from_id="root", to_id="mutual", crawl_id="run-b", source_depth=0),
             FriendEdge(
                 from_id="mutual",
                 to_id="candidate",

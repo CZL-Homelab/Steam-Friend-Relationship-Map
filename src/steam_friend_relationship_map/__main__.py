@@ -57,9 +57,7 @@ def init_env(force: bool = False) -> None:
                         if port_str.isdigit() and 1024 <= int(port_str) <= 65535:
                             default_port = int(port_str)
         except Exception as e:
-            print(
-                f"警告：读取 .env.example 中的 APP_PORT 失败，将使用默认端口 {default_port}: {e}"
-            )
+            print(f"警告：读取 .env.example 中的 APP_PORT 失败，将使用默认端口 {default_port}: {e}")
 
     port = default_port
     if is_interactive:
@@ -70,9 +68,7 @@ def init_env(force: bool = False) -> None:
 
         while True:
             try:
-                prompt_msg = (
-                    f"请输入 Web UI 的本地端口 (APP_PORT) [默认: {default_port}]: "
-                )
+                prompt_msg = f"请输入 Web UI 的本地端口 (APP_PORT) [默认: {default_port}]: "
                 user_input = input(prompt_msg).strip()
                 if not user_input:
                     port = default_port

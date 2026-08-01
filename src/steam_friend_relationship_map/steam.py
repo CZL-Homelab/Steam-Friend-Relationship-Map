@@ -65,9 +65,7 @@ class SteamClient:
         self.rate_limiter = rate_limiter
         # Parse potential multiple keys separated by whitespace, commas, or semicolons
         keys = list(
-            dict.fromkeys(
-                key.strip() for key in re.split(r"[\s,;]+", api_key) if key.strip()
-            )
+            dict.fromkeys(key.strip() for key in re.split(r"[\s,;]+", api_key) if key.strip())
         )
         self.api_keys = keys if keys else [""]
         self._key_index = 0
@@ -119,22 +117,14 @@ class SteamClient:
         if STEAM_ID_RE.match(raw):
             return raw
 
-        parsed = urlparse(
-            raw if "://" in raw else f"https://steamcommunity.com/id/{raw}"
-        )
+        parsed = urlparse(raw if "://" in raw else f"https://steamcommunity.com/id/{raw}")
         parts = [part for part in parsed.path.split("/") if part]
-        if (
-            len(parts) >= 2
-            and parts[0].lower() == "profiles"
-            and STEAM_ID_RE.match(parts[1])
-        ):
+        if len(parts) >= 2 and parts[0].lower() == "profiles" and STEAM_ID_RE.match(parts[1]):
             return parts[1]
         if len(parts) >= 2 and parts[0].lower() == "id":
             return await self.resolve_vanity_url(parts[1])
 
-        raise SteamApiError(
-            "请输入 Steam 64 位 ID、/profiles/<id> 或 /id/<vanity> 主页 URL"
-        )
+        raise SteamApiError("请输入 Steam 64 位 ID、/profiles/<id> 或 /id/<vanity> 主页 URL")
 
     async def resolve_vanity_url(self, vanity: str) -> str:
         data = await self._get_json(
@@ -193,14 +183,10 @@ class SteamClient:
         friends = data.get("friendslist", {}).get("friends", [])
         return FriendListResult(
             steam_id=steam_id,
-            friend_ids=[
-                str(item["steamid"]) for item in friends if item.get("steamid")
-            ],
+            friend_ids=[str(item["steamid"]) for item in friends if item.get("steamid")],
         )
 
-    async def _get_json(
-        self, path: str, params: dict[str, str], retries: int = 3
-    ) -> dict:
+    async def _get_json(self, path: str, params: dict[str, str], retries: int = 3) -> dict:
         # 安全注意事项：Steam Web API 要求 api_key 作为 URL 查询参数传递（GET ?key=...）。
         # 虽然通过 HTTPS 加密传输，但 key 会出现在服务器访问日志和可能的中间代理日志中。
         # 应用层日志已通过 AppLogBuffer.redact() 脱敏处理。
@@ -219,9 +205,7 @@ class SteamClient:
         friend_list_request = "/getfriendlist/" in path.lower()
         request_params = {key: value for key, value in params.items() if key != "key"}
         while transient_failures < transient_limit:
-            request_keys = [
-                key for key in request_keys if key not in self._disabled_api_keys
-            ]
+            request_keys = [key for key in request_keys if key not in self._disabled_api_keys]
             if not request_keys:
                 raise SteamApiError("所有已配置的 Steam API Key 均已被拒绝", 403)
             key_cursor %= len(request_keys)
@@ -245,9 +229,7 @@ class SteamClient:
                     if self.rate_limiter:
                         await self.rate_limiter.report_backoff(
                             retry_after_ms=(
-                                retry_after * 1000.0
-                                if retry_after is not None
-                                else None
+                                retry_after * 1000.0 if retry_after is not None else None
                             )
                         )
                     transient_failures += 1
@@ -257,7 +239,10 @@ class SteamClient:
                             1.2 * (2 ** (transient_failures - 1)),
                             retry_after or 0.0,
                         )
-                        await asyncio.sleep(delay + random.uniform(0.1, 0.5 * delay))
+                        # Retry jitter is scheduling noise, not cryptographic randomness.
+                        await asyncio.sleep(
+                            delay + random.uniform(0.1, 0.5 * delay)  # nosec B311
+                        )
                         continue
                     raise SteamApiError(
                         f"Steam API 请求失败: HTTP {response.status_code}",
@@ -280,7 +265,10 @@ class SteamClient:
                 if transient_failures < transient_limit:
                     key_cursor = (key_cursor + 1) % len(request_keys)
                     delay = 1.2 * (2 ** (transient_failures - 1))
-                    await asyncio.sleep(delay + random.uniform(0.1, 0.5 * delay))
+                    # Retry jitter is scheduling noise, not cryptographic randomness.
+                    await asyncio.sleep(
+                        delay + random.uniform(0.1, 0.5 * delay)  # nosec B311
+                    )
                     continue
                 break
         raise SteamApiError(f"Steam API 请求失败: {last_error}")

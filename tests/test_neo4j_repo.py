@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import pytest
+
 from steam_friend_relationship_map.models import (
     FriendEdge,
     FriendListCacheUpdate,
@@ -12,9 +14,7 @@ from steam_friend_relationship_map.neo4j_repo import Neo4jRepositoryImpl
 
 
 class _FakeResult:
-    def __init__(
-        self, query: str, params: dict[str, Any], driver: "_FakeDriver"
-    ) -> None:
+    def __init__(self, query: str, params: dict[str, Any], driver: "_FakeDriver") -> None:
         self.query = query
         self.params = params
         self.driver = driver
@@ -25,9 +25,7 @@ class _FakeResult:
     def single(self) -> dict[str, Any] | None:
         if "RETURN m.id AS id" in self.query:
             migration_id = str(self.params["id"])
-            return (
-                {"id": migration_id} if migration_id in self.driver.migrations else None
-            )
+            return {"id": migration_id} if migration_id in self.driver.migrations else None
         if "RETURN p" in self.query:
             return {"p": {"id": "project-a"}}
         if "c.status IN $statuses" in self.query and "AS count" in self.query:
@@ -147,8 +145,7 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
     assert any("membership.note" in query for query in driver.queries)
     assert any("coalesce(membership.category" in query for query in driver.queries)
     assert any(
-        "NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query
-        for query in driver.queries
+        "NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries
     )
     assert driver.execute_write_calls == 1
     assert len(driver.transaction_queries) == 5
@@ -184,6 +181,15 @@ def test_neo4j_recovers_crawls_interrupted_by_restart() -> None:
     assert params["status"] == "stopped"
     assert params["message"] == "应用重启前抓取未正常结束"
     assert params["finished_at"]
+
+
+def test_neo4j_rejects_dynamic_crawl_run_field_names() -> None:
+    repo, driver = _repo()
+
+    with pytest.raises(ValueError, match="Unsupported crawl run update fields"):
+        repo.update_crawl_run("run-1", **{"status = 'failed'": "ignored"})
+
+    assert driver.queries == []
 
 
 def test_neo4j_batches_friend_cache_reads_and_ignores_incomplete_rows() -> None:

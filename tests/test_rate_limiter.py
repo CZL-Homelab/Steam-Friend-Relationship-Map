@@ -18,9 +18,7 @@ async def test_rate_limiter_starts_immediately_then_spaces_requests() -> None:
             "steam_friend_relationship_map.rate_limiter.asyncio.get_running_loop",
             return_value=loop,
         ),
-        patch(
-            "steam_friend_relationship_map.rate_limiter.asyncio.sleep", new=AsyncMock()
-        ) as sleep,
+        patch("steam_friend_relationship_map.rate_limiter.asyncio.sleep", new=AsyncMock()) as sleep,
     ):
         await limiter.wait()
         sleep.assert_not_awaited()

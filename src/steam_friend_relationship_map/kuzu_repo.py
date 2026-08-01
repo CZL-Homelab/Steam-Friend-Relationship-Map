@@ -10,7 +10,7 @@ from typing import Any
 
 import kuzu
 
-from .graph_repo import IGraphRepository
+from .graph_repo import IGraphRepository, validate_crawl_run_update_fields
 from .models import (
     CrawlRun,
     CrawlStatus,
@@ -61,9 +61,7 @@ def _recovery_backup_hint(db_path: str, error_detail: str) -> str:
         ]
         if not candidates or not active_path.is_file() or not wal_path.is_file():
             return ""
-        backup_path = max(
-            candidates, key=lambda path: (path.stat().st_size, path.stat().st_mtime)
-        )
+        backup_path = max(candidates, key=lambda path: (path.stat().st_size, path.stat().st_mtime))
         active_size = active_path.stat().st_size
         backup_size = backup_path.stat().st_size
     except OSError:
@@ -110,14 +108,17 @@ def _execute_discard(
     parameters: dict[str, Any] | None = None,
 ) -> None:
     """Execute a statement and promptly release its unused Kuzu result."""
-    result = (
-        conn.execute(query, parameters)
-        if parameters is not None
-        else conn.execute(query)
-    )
+    result = conn.execute(query, parameters) if parameters is not None else conn.execute(query)
     close = getattr(result, "close", None)
     if callable(close):
         close()
+
+
+def _rollback_after_error(conn: kuzu.Connection) -> None:
+    try:
+        _execute_discard(conn, "ROLLBACK")
+    except Exception:
+        logger.warning("Kuzu transaction rollback failed", exc_info=True)
 
 
 class KuzuRepositoryImpl(IGraphRepository):
@@ -153,9 +154,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                     "Kuzu database is already in use. Stop other steam-friend-map/uvicorn "
                     "processes that are using this database, or choose a different KUZU_DB_PATH."
                 )
-            elif any(
-                term in lowered for term in ["buffer pool", "out of memory", "memory"]
-            ):
+            elif any(term in lowered for term in ["buffer pool", "out of memory", "memory"]):
                 hint = (
                     "Kuzu could not open the database because its buffer pool is too small. "
                     "Try lowering the graph query size or increasing KUZU_BUFFER_POOL_SIZE_GB."
@@ -259,8 +258,7 @@ class KuzuRepositoryImpl(IGraphRepository):
     def ensure_schema(self) -> None:
         conn = self._get_conn()
         existing_tables = {
-            row[0]
-            for row in _consume_rows(conn.execute("CALL show_tables() RETURN name"))
+            row[0] for row in _consume_rows(conn.execute("CALL show_tables() RETURN name"))
         }
 
         if "SteamUser" not in existing_tables:
@@ -385,15 +383,11 @@ class KuzuRepositoryImpl(IGraphRepository):
         else:
             existing_properties = {
                 row[0]
-                for row in _consume_rows(
-                    conn.execute("CALL table_info('IN_PROJECT') RETURN name")
-                )
+                for row in _consume_rows(conn.execute("CALL table_info('IN_PROJECT') RETURN name"))
             }
             for name, property_type in _PROJECT_MEMBER_PROPERTY_TYPES.items():
                 if name not in existing_properties:
-                    _execute_discard(
-                        conn, f"ALTER TABLE IN_PROJECT ADD {name} {property_type}"
-                    )
+                    _execute_discard(conn, f"ALTER TABLE IN_PROJECT ADD {name} {property_type}")
 
         self._migrate_project_memberships(conn)
         self._migrate_project_member_metadata(conn)
@@ -423,15 +417,11 @@ class KuzuRepositoryImpl(IGraphRepository):
 
         legacy_project_ids = {"default"}
         for row in _consume_rows(
-            conn.execute(
-                "MATCH (u:SteamUser) RETURN DISTINCT coalesce(u.project_id, '')"
-            )
+            conn.execute("MATCH (u:SteamUser) RETURN DISTINCT coalesce(u.project_id, '')")
         ):
             legacy_project_ids.add(row[0] or "default")
         for row in _iter_rows(
-            conn.execute(
-                "MATCH ()-[r:STEAM_FRIEND]->() RETURN DISTINCT coalesce(r.project_id, '')"
-            )
+            conn.execute("MATCH ()-[r:STEAM_FRIEND]->() RETURN DISTINCT coalesce(r.project_id, '')")
         ):
             legacy_project_ids.add(row[0] or "default")
         for project_id in sorted(legacy_project_ids):
@@ -517,9 +507,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         rows = _consume_rows(conn.execute(query, params))
         return int(rows[0][0] or 0) if rows else 0
 
-    def create_project(
-        self, payload: ProjectCreate, project_id: str | None = None
-    ) -> str:
+    def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
         import uuid
 
         pid = project_id or str(uuid.uuid4())
@@ -578,10 +566,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             _execute_discard(conn, "COMMIT")
             return True
         except Exception:
-            try:
-                _execute_discard(conn, "ROLLBACK")
-            except Exception:
-                pass
+            _rollback_after_error(conn)
             raise
 
     def project_exists(self, project_id: str) -> bool:
@@ -612,9 +597,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             self.ensure_schema()
             self.ensure_default_project()
             return ProjectListResponse(
-                projects=[
-                    ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())
-                ],
+                projects=[ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())],
                 active_project_id="",
             )
 
@@ -758,6 +741,7 @@ class KuzuRepositoryImpl(IGraphRepository):
     def update_crawl_run(self, run_id: str, **fields: Any) -> None:
         if not fields:
             return
+        validate_crawl_run_update_fields(fields)
         assignments = ", ".join(f"r.{key} = ${key}" for key in fields)
         conn = self._get_conn()
         _execute_discard(
@@ -840,10 +824,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                 )
             _execute_discard(conn, "COMMIT")
         except Exception:
-            try:
-                _execute_discard(conn, "ROLLBACK")
-            except Exception:
-                pass
+            _rollback_after_error(conn)
             raise
 
     def mark_friend_list_status(
@@ -924,18 +905,13 @@ class KuzuRepositoryImpl(IGraphRepository):
                 )
             _execute_discard(conn, "COMMIT")
         except Exception:
-            try:
-                _execute_discard(conn, "ROLLBACK")
-            except Exception:
-                pass
+            _rollback_after_error(conn)
             raise
 
     def get_cached_friend_list(
         self, steam_id: str, valid_days: int, project_id: str
     ) -> tuple[str, list[str]] | None:
-        return self.get_cached_friend_lists([steam_id], valid_days, project_id).get(
-            steam_id
-        )
+        return self.get_cached_friend_lists([steam_id], valid_days, project_id).get(steam_id)
 
     def get_cached_friend_lists(
         self, steam_ids: Iterable[str], valid_days: int, project_id: str
@@ -972,9 +948,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             cached_lists[steam_id] = (status, list(raw_friend_ids))
         return cached_lists
 
-    def upsert_relationships(
-        self, edges: Iterable[FriendEdge], project_id: str
-    ) -> None:
+    def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
         normalized: dict[tuple[str, str], dict[str, Any]] = {}
         for edge in edges:
             row = edge.model_dump(mode="json")
@@ -1034,10 +1008,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                 )
             _execute_discard(conn, "COMMIT")
         except Exception:
-            try:
-                _execute_discard(conn, "ROLLBACK")
-            except Exception:
-                pass
+            _rollback_after_error(conn)
             raise
 
     def patch_user(
@@ -1099,11 +1070,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             for signature, rows in grouped.items():
                 assignments = ", ".join(
                     f"membership.{key} = "
-                    + (
-                        f"CAST(row.{key} AS STRING[])"
-                        if key == "tags"
-                        else f"row.{key}"
-                    )
+                    + (f"CAST(row.{key} AS STRING[])" if key == "tags" else f"row.{key}")
                     for key in signature
                 )
                 query = f"""
@@ -1123,10 +1090,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                     )
             _execute_discard(conn, "COMMIT")
         except Exception:
-            try:
-                _execute_discard(conn, "ROLLBACK")
-            except Exception:
-                pass
+            _rollback_after_error(conn)
             raise
 
     def count_inner_layer_links(
@@ -1174,9 +1138,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         return metadata
 
     @staticmethod
-    def _users_by_id(
-        conn: kuzu.Connection, steam_ids: list[str]
-    ) -> dict[str, dict[str, Any]]:
+    def _users_by_id(conn: kuzu.Connection, steam_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not steam_ids:
             return {}
         rows = _consume_rows(
@@ -1186,9 +1148,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             )
         )
         users = [_parse_node(row[0]) for row in rows]
-        return {
-            user.get("steam_id", ""): user for user in users if user.get("steam_id")
-        }
+        return {user.get("steam_id", ""): user for user in users if user.get("steam_id")}
 
     def _graph_node(
         self, data: dict[str, Any], degree: int, metadata: dict[str, Any] | None = None
@@ -1198,10 +1158,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             id=data.get("steam_id", ""),
             label=data.get("persona_name") or data.get("steam_id", "Unknown"),
             depth=member.get("depth_min"),
-            avatar=data.get("avatar_full")
-            or data.get("avatar_medium")
-            or data.get("avatar")
-            or "",
+            avatar=data.get("avatar_full") or data.get("avatar_medium") or data.get("avatar") or "",
             profile_url=data.get("profile_url") or "",
             note=member.get("note") or "",
             tags=member.get("tags") or [],
@@ -1278,9 +1235,7 @@ class KuzuRepositoryImpl(IGraphRepository):
     def _reachable_ids_from_root(
         self, conn: kuzu.Connection, root: str, depth: int, project_id: str
     ) -> tuple[list[str], bool, int, bool]:
-        ordered_ids, _, _, root_found, reached = self._bfs_from_root(
-            conn, root, depth, project_id
-        )
+        ordered_ids, _, _, root_found, reached = self._bfs_from_root(conn, root, depth, project_id)
         return ordered_ids, root_found, reached, bool(root_found and reached < depth)
 
     def _root_friend_circle_metrics(
@@ -1316,9 +1271,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             adjacency.setdefault(source, set()).add(target)
             adjacency.setdefault(target, set()).add(source)
 
-        neighbors_by_id = {
-            steam_id: sorted(neighbors) for steam_id, neighbors in adjacency.items()
-        }
+        neighbors_by_id = {steam_id: sorted(neighbors) for steam_id, neighbors in adjacency.items()}
         metrics: dict[str, tuple[int, int, float]] = {}
         for steam_id in target_ids:
             if steam_id == root:
@@ -1360,10 +1313,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                         continue
                     if remaining_depth <= 1:
                         continue
-                    if (
-                        distance_to_target.get(neighbor, depth + 1)
-                        > remaining_depth - 1
-                    ):
+                    if distance_to_target.get(neighbor, depth + 1) > remaining_depth - 1:
                         continue
                     path.add(neighbor)
                     walk_target(neighbor, remaining_depth - 1, path, next_hops)
@@ -1469,9 +1419,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             filters.append("coalesce(n.friend_count, -1) <= $friend_count_max")
         if prior_pool_min_links:
             params["prior_pool_min_links"] = prior_pool_min_links
-            filters.append(
-                "coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links"
-            )
+            filters.append("coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links")
 
         where = "WHERE " + " AND ".join(filters)
         sort_map = {
@@ -1487,9 +1435,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         conn = self._get_conn()
         root_metrics: dict[str, tuple[int, int, float]] = {}
         root_ids = (
-            sorted(
-                dict.fromkeys(part.strip() for part in root.split(",") if part.strip())
-            )[:5]
+            sorted(dict.fromkeys(part.strip() for part in root.split(",") if part.strip()))[:5]
             if root
             else []
         )
@@ -1549,9 +1495,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         records = _consume_rows(conn.execute(node_query, params))
         limited = len(records) > limit
         records = records[:limit]
-        nodes = [
-            self._graph_node(_parse_node(rec[0]), rec[2], rec[1]) for rec in records
-        ]
+        nodes = [self._graph_node(_parse_node(rec[0]), rec[2], rec[1]) for rec in records]
         for node in nodes:
             node.is_intersection = node.id in intersection_ids
         if root_ids and nodes:
@@ -1596,9 +1540,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         edges = []
         for row in edge_rows:
             edges.append(
-                GraphEdge(
-                    id=f"{row[0]}-{row[1]}", source=row[0], target=row[1], strength=1
-                )
+                GraphEdge(id=f"{row[0]}-{row[1]}", source=row[0], target=row[1], strength=1)
             )
         return GraphResponse(
             nodes=nodes,
@@ -1647,9 +1589,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             source = nodes[index].id
             target = nodes[index + 1].id
             edges.append(
-                GraphEdge(
-                    id=f"{source}-{target}", source=source, target=target, strength=1
-                )
+                GraphEdge(id=f"{source}-{target}", source=source, target=target, strength=1)
             )
         return GraphResponse(nodes=nodes, edges=edges)
 
@@ -1716,19 +1656,14 @@ class KuzuRepositoryImpl(IGraphRepository):
             degree = len(neighbors.get(candidate_id, set()))
             friend_count = node_dict.get("friend_count") or 0
             score = round(
-                mutual_count * 10
-                + degree * 0.2
-                + friend_count / 100.0
-                - candidate_depth * 3,
+                mutual_count * 10 + degree * 0.2 + friend_count / 100.0 - candidate_depth * 3,
                 2,
             )
             ranked.append((score, mutual_count, candidate_id, evidence_ids[:6]))
 
         ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
         ranked = ranked[:limit]
-        evidence_ids = list(
-            dict.fromkeys(evidence_id for row in ranked for evidence_id in row[3])
-        )
+        evidence_ids = list(dict.fromkeys(evidence_id for row in ranked for evidence_id in row[3]))
         evidence_users = self._users_by_id(conn, evidence_ids)
         evidence_metadata = self._project_metadata(conn, evidence_ids, project_id)
 
@@ -1776,15 +1711,11 @@ class KuzuRepositoryImpl(IGraphRepository):
         min_mutual = max(0, min(min_mutual, 10000))
         limit = max(1, min(limit, 100))
         conn = self._get_conn()
-        reachable_ids, depths, _, root_found, _ = self._bfs_from_root(
-            conn, root, 2, project_id
-        )
+        reachable_ids, depths, _, root_found, _ = self._bfs_from_root(conn, root, 2, project_id)
         if not root_found:
             return PotentialFriendsResponse(root=root, candidates=[])
 
-        candidate_ids = sorted(
-            steam_id for steam_id in reachable_ids if depths.get(steam_id) == 2
-        )
+        candidate_ids = sorted(steam_id for steam_id in reachable_ids if depths.get(steam_id) == 2)
         if not candidate_ids:
             return PotentialFriendsResponse(root=root, candidates=[])
 
@@ -1827,9 +1758,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                 users[candidate_id], len(candidate_neighbors), metadata[candidate_id]
             )
             evidence_users = self._users_by_id(conn, evidence_ids[:6])
-            evidence_metadata = self._project_metadata(
-                conn, evidence_ids[:6], project_id
-            )
+            evidence_metadata = self._project_metadata(conn, evidence_ids[:6], project_id)
             ranked.append(
                 PotentialFriendCandidate(
                     steam_id=node.id,
@@ -1862,9 +1791,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         )
         return PotentialFriendsResponse(root=root, candidates=ranked[:limit])
 
-    def get_top_degree(
-        self, limit: int = 12, project_id: str = "default"
-    ) -> list[GraphNode]:
+    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
         conn = self._get_conn()
         nodes = []
         for row in _iter_rows(
@@ -1944,8 +1871,7 @@ class KuzuRepositoryImpl(IGraphRepository):
                 progress_percent=data.get("progress_percent") or 0,
                 last_event=data.get("last_event") or "",
                 filtered_count=data.get("filtered_count") or 0,
-                friend_count_filtered_count=data.get("friend_count_filtered_count")
-                or 0,
+                friend_count_filtered_count=data.get("friend_count_filtered_count") or 0,
                 prior_pool_filtered_count=data.get("prior_pool_filtered_count") or 0,
             )
 

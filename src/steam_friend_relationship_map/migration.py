@@ -109,9 +109,7 @@ def main():
             print("No projects found to migrate.")
             return
 
-        print(
-            f"Found {len(projects_to_migrate)} projects to migrate: {projects_to_migrate}"
-        )
+        print(f"Found {len(projects_to_migrate)} projects to migrate: {projects_to_migrate}")
 
         for pid in projects_to_migrate:
             print(f"\n--- Migrating Project: {pid} ---")
@@ -131,9 +129,7 @@ def main():
             print("Exporting graph data from source...")
             exported = src_repo.export_graph(project_id=pid)
 
-            print(
-                f"Exported {len(exported.nodes)} nodes and {len(exported.edges)} relationships."
-            )
+            print(f"Exported {len(exported.nodes)} nodes and {len(exported.edges)} relationships.")
 
             # Upsert users in target
             if exported.nodes:
