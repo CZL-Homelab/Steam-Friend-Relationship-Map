@@ -1474,16 +1474,27 @@ async function exportFile(format) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ format }),
     });
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) {
+      let message = `${response.status} ${response.statusText}`.trim();
+      try {
+        const payload = await response.json();
+        message = payload.detail || message;
+      } catch {
+        // Keep the HTTP status when the server did not return JSON.
+      }
+      throw new Error(message);
+    }
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
     link.download = `steam_graph.${format}`;
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(url);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   } catch (err) {
-    toast(`Export failed: ${err.message}`);
+    toast(t("toast.exportFailed", { message: err.message }));
     return;
   }
   toast(t(format === "csv" ? "toast.exportCsv" : "toast.exportJson"));

@@ -103,6 +103,7 @@
 - 备注、标签、分类、Root 层数、内层连接数和紧密度分数也存放在 `IN_PROJECT` 上；同一用户在不同项目中可拥有完全独立的视图数据和分析指标。
 - 旧版仅使用 `project_id` 的数据库会在启动时自动执行一次幂等成员关系迁移，无需手工转换。
 - 配置、密钥、项目切换和抓取任务创建使用统一的运行时互斥保护；切换或配置重载失败时会恢复原状态，避免后台任务继续使用已关闭的数据库或 HTTP 客户端。
+- CSV 导出包含项目、备注、标签、层数和评分等完整字段，使用 UTF-8 BOM，并转义电子表格公式前缀；JSON 导出保持原始结构。
 - 图谱界面支持中文 / English 切换。
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
 
@@ -716,6 +717,8 @@ The app only uses public Steam Web API data. Private friend lists are marked as 
 Project membership is represented by explicit `IN_PROJECT` relationships. Notes, tags, categories, Root depth, prior-pool link counts, and closeness scores are stored on that membership, so one Steam user can have independent annotations and analysis metrics in different projects. Legacy node metadata is migrated idempotently on startup.
 
 Runtime mutations are serialized with crawl creation. Settings, secrets, and project switches roll back when persistence or runtime reload fails, preventing a background crawl from retaining a closed database or HTTP client.
+
+CSV exports include project annotations and analysis fields, use a UTF-8 BOM, and escape spreadsheet formula prefixes. JSON exports retain the original graph structure.
 
 System Logs / Dev Logs redact API keys, passwords, Cookie, Authorization, and common `password=` / `key=` values before showing them in the browser. SteamIDs, notes, screenshots, and relationship context may still be personal data, so review logs before sharing.
 

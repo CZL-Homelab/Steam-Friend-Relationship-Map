@@ -242,6 +242,10 @@ class ExportResponse(BaseModel):
     edges: list[dict[str, Any]]
 
 
+class ExportRequest(BaseModel):
+    format: Literal["json", "csv"] = "json"
+
+
 class NetworkMetric(BaseModel):
     id: str
     pagerank: float

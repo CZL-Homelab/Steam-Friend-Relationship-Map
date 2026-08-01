@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import json
 import re
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ from .models import (
     CrawlEvent,
     CrawlRun,
     DbStats,
+    ExportRequest,
     ExportResponse,
     FriendEdge,
     FriendCircleAnalysisResponse,
@@ -72,6 +74,13 @@ ENV_KEYS = {
 
 def sanitize_env_value(value: object) -> str:
     return str(value).replace("\n", "").replace("\r", "")
+
+
+def csv_safe_cell(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{text}"
+    return text
 
 
 def sensitive_setting_values(settings: Settings) -> list[str]:
@@ -863,30 +872,78 @@ def create_app(
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/export", response_model=ExportResponse)
-    async def export_graph(format: str = "json") -> Response | ExportResponse:
-        data = repo.export_graph(project_id=settings.active_project)
-        if format == "json":
-            return data
-        if format != "csv":
+    async def export_graph(
+        payload: ExportRequest | None = None,
+        format: str | None = None,
+    ) -> Response | ExportResponse:
+        export_format = payload.format if payload is not None else (format or "json")
+        if export_format not in {"json", "csv"}:
             raise HTTPException(status_code=400, detail="format must be json or csv")
-        buffer = io.StringIO()
-        writer = csv.DictWriter(buffer, fieldnames=["type", "id", "label", "source", "target", "profile_url", "note", "category"])
+        try:
+            data = repo.export_graph(project_id=settings.active_project)
+        except Exception as exc:
+            log_buffer.append("error", "export", f"图谱导出失败: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+        if export_format == "json":
+            return data
+        fieldnames = [
+            "type",
+            "project_id",
+            "id",
+            "label",
+            "source",
+            "target",
+            "profile_url",
+            "avatar",
+            "note",
+            "tags",
+            "category",
+            "depth",
+            "friend_count",
+            "friend_list_status",
+            "prior_pool_link_count",
+            "root_closeness_score",
+        ]
+        buffer = io.StringIO(newline="")
+        buffer.write("\ufeff")
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
         writer.writeheader()
         for node in data.nodes:
-            writer.writerow(
-                {
-                    "type": "node",
-                    "id": node.get("steam_id", ""),
-                    "label": node.get("persona_name", ""),
-                    "source": "",
-                    "target": "",
-                    "profile_url": node.get("profile_url", ""),
-                    "note": node.get("note", ""),
-                    "category": node.get("category", ""),
-                }
-            )
+            row = {
+                "type": "node",
+                "project_id": node.get("project_id", settings.active_project),
+                "id": node.get("steam_id", ""),
+                "label": node.get("persona_name", ""),
+                "source": "",
+                "target": "",
+                "profile_url": node.get("profile_url", ""),
+                "avatar": node.get("avatar_full") or node.get("avatar_medium") or node.get("avatar", ""),
+                "note": node.get("note", ""),
+                "tags": json.dumps(node.get("tags") or [], ensure_ascii=False),
+                "category": node.get("category", ""),
+                "depth": node.get("depth_min"),
+                "friend_count": node.get("friend_count"),
+                "friend_list_status": node.get("friend_list_status", "unknown"),
+                "prior_pool_link_count": node.get("prior_pool_link_count", 0),
+                "root_closeness_score": node.get("root_closeness_score", 0),
+            }
+            writer.writerow({key: csv_safe_cell(row.get(key)) for key in fieldnames})
         for edge in data.edges:
-            writer.writerow({"type": "edge", "id": "", "label": "", "source": edge["source"], "target": edge["target"], "profile_url": "", "note": "", "category": ""})
-        return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=steam_graph.csv"})
+            row = {
+                "type": "edge",
+                "project_id": settings.active_project,
+                "source": edge["source"],
+                "target": edge["target"],
+            }
+            writer.writerow({key: csv_safe_cell(row.get(key)) for key in fieldnames})
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=steam_graph.csv",
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     return app

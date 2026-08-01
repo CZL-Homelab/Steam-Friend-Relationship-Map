@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -607,6 +609,87 @@ def test_network_analysis_errors_return_json_detail() -> None:
 
     assert response.status_code == 500
     assert response.json()["detail"] == "analysis export failed"
+
+
+def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
+    class ExportRepo(FakeRepo):
+        def export_graph(self, project_id: str = "default") -> ExportResponse:
+            return ExportResponse(
+                nodes=[
+                    {
+                        "steam_id": "=danger-id",
+                        "persona_name": "=HYPERLINK(\"https://example.test\")",
+                        "profile_url": "+https://example.test",
+                        "avatar_full": "https://example.test/avatar.jpg",
+                        "note": "@SUM(1+1)",
+                        "tags": ["=tag", "普通"],
+                        "category": "-malicious",
+                        "depth_min": 2,
+                        "friend_count": 42,
+                        "friend_list_status": "public",
+                        "prior_pool_link_count": 3,
+                        "root_closeness_score": 9.5,
+                        "project_id": project_id,
+                    }
+                ],
+                edges=[{"source": "\tformula", "target": "\rformula"}],
+            )
+
+    app = create_app(
+        settings=Settings(active_project="project-a"),
+        repo=ExportRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.post("/api/export", json={"format": "csv"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.content.startswith(b"\xef\xbb\xbf")
+    rows = list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert len(rows) == 2
+    node, edge = rows
+    assert node["type"] == "node"
+    assert node["project_id"] == "project-a"
+    assert node["id"] == "'=danger-id"
+    assert node["label"].startswith("'=HYPERLINK")
+    assert node["profile_url"] == "'+https://example.test"
+    assert node["note"] == "'@SUM(1+1)"
+    assert node["tags"] == '["=tag", "普通"]'
+    assert node["category"] == "'-malicious"
+    assert node["depth"] == "2"
+    assert node["friend_count"] == "42"
+    assert node["prior_pool_link_count"] == "3"
+    assert node["root_closeness_score"] == "9.5"
+    assert edge["type"] == "edge"
+    assert edge["source"] == "'\tformula"
+    assert edge["target"] == "'\rformula"
+
+
+def test_export_accepts_json_body_and_legacy_query_format() -> None:
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    json_response = client.post("/api/export", json={"format": "json"})
+    csv_response = client.post("/api/export?format=csv")
+    invalid_body = client.post("/api/export", json={"format": "xml"})
+    invalid_query = client.post("/api/export?format=xml")
+
+    assert json_response.status_code == 200
+    assert json_response.json()["nodes"][0]["steam_id"] == "root"
+    assert csv_response.status_code == 200
+    assert csv_response.headers["content-type"].startswith("text/csv")
+    assert invalid_body.status_code == 422
+    assert invalid_query.status_code == 400
 
 
 def test_project_switch_strips_crlf() -> None:
