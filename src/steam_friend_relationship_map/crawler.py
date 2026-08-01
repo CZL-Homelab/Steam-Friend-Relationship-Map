@@ -380,20 +380,24 @@ class CrawlManager:
                             run.id, "info", "expand",
                             f"深度{depth} 第{idx}/{layer_total}个: {current_id} (节点总计{len(discovered)})",
                         )
-                        self.repo.update_crawl_run(
-                            run.id,
-                            current_depth=depth,
-                            current_steam_id=current_id,
-                            queue_size=layer_total - idx,
-                            expanded_count=len(expanded),
-                            nodes_discovered=len(discovered),
-                            progress_percent=self._progress(len(discovered), run.max_nodes, False),
-                        )
+
+                    processed_count = batch_start + len(batch_ids)
+                    self.repo.update_crawl_run(
+                        run.id,
+                        current_depth=depth,
+                        current_steam_id=batch_ids[-1],
+                        queue_size=layer_total - processed_count,
+                        expanded_count=len(expanded),
+                        nodes_discovered=len(discovered),
+                        progress_percent=self._progress(len(discovered), run.max_nodes, False),
+                    )
 
                     lookups = await self._load_friend_list_batch(batch_ids, payload.cache_valid_days)
                     if control.force_stop:
                         break
                     self._persist_api_friend_lists(lookups)
+                    errors_before_batch = error_count
+                    private_before_batch = private_count
 
                     for lookup in lookups:
                         current_id = lookup.steam_id
@@ -403,7 +407,6 @@ class CrawlManager:
                             exc = lookup.error
                             error_count += 1
                             self.append_event(run.id, "error", "friends", f"[API错误] {current_id}: {exc}")
-                            self.repo.update_crawl_run(run.id, error_count=error_count)
                             if exc.status_code in {401, 403}:
                                 consecutive_auth_errors += 1
                                 if consecutive_auth_errors >= 5:
@@ -418,7 +421,6 @@ class CrawlManager:
                         if lookup.status == "private":
                             private_count += 1
                             self.append_event(run.id, "warn", "private", f"[{'缓存' if lookup.source == 'cache' else 'API'}] 私密: {current_id}")
-                            self.repo.update_crawl_run(run.id, private_count=private_count)
                             continue
 
                         friend_ids = list(lookup.friend_ids)
@@ -439,6 +441,13 @@ class CrawlManager:
                             if edge_key not in edges_seen:
                                 candidate_edges[friend_id].append(edge)
 
+                    counter_updates: dict[str, int] = {}
+                    if error_count != errors_before_batch:
+                        counter_updates["error_count"] = error_count
+                    if private_count != private_before_batch:
+                        counter_updates["private_count"] = private_count
+                    if counter_updates:
+                        self.repo.update_crawl_run(run.id, **counter_updates)
 
 
                 # ── 内层循环后再次检查强制中断 ──
@@ -579,7 +588,6 @@ class CrawlManager:
                                 exc = lookup.error
                                 error_count += 1
                                 self.append_event(run.id, "error", "friends", f"[API错误] {friend_id}: {exc}")
-                                self.repo.update_crawl_run(run.id, error_count=error_count)
                                 if exc.status_code in {401, 403}:
                                     consecutive_auth_errors += 1
                                     if consecutive_auth_errors >= 5:

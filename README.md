@@ -101,6 +101,7 @@
 - 自动写入 `SteamUser` 节点和 `STEAM_FRIEND` 关系。
 - Kùzu 使用每批 500 行的事务化写入，批量保存用户、项目元数据和好友关系，减少大型抓取任务的数据库往返。Kùzu writes users, project metadata, and friend relationships in transactional batches of 500 rows to reduce database round trips during large crawls.
 - 抓取器会按请求批次批量读写 Kùzu 或 Neo4j 好友列表缓存，并自动忽略不完整的旧缓存后重新抓取。The crawler reads and writes Kùzu or Neo4j friend-list caches in request-sized batches and refetches incomplete legacy cache entries.
+- 抓取进度、错误数和私密用户数按请求批次合并写入，暂停与完成、停止、失败等终态仍会立即持久化。Crawl progress and counters are coalesced per request batch while pause and terminal states remain immediately durable.
 - 项目列表使用固定次数的独立聚合查询统计成员、关系和抓取任务，避免随项目数量增长的 N+1 查询和 Neo4j 笛卡尔中间结果。Project listings use a fixed set of independent aggregate queries, avoiding per-project N+1 reads and Neo4j Cartesian intermediates.
 - 多项目通过显式 `IN_PROJECT` 成员关系隔离；同一 Steam 用户可安全出现在多个项目，删除一个项目不会删除其他项目仍在使用的用户。
 - 备注、标签、分类、Root 层数、内层连接数和紧密度分数也存放在 `IN_PROJECT` 上；同一用户在不同项目中可拥有完全独立的视图数据和分析指标。

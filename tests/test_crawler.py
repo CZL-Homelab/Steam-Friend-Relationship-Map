@@ -43,6 +43,7 @@ class FakeRepo:
         self.users: dict[str, SteamUserRecord] = {}
         self.edges: set[tuple[str, str]] = set()
         self.statuses: dict[str, str] = {}
+        self.run_updates: list[dict[str, object]] = []
 
     def ensure_schema(self) -> None:
         pass
@@ -51,6 +52,7 @@ class FakeRepo:
         self.runs[run.id] = run
 
     def update_crawl_run(self, run_id: str, **fields: object) -> None:
+        self.run_updates.append(dict(fields))
         run = self.runs[run_id]
         data = run.model_dump()
         data.update(fields)
@@ -177,6 +179,16 @@ class HangingSteam(FakeSteam):
         raise AssertionError("unreachable")
 
 
+class PrivateBatchSteam(FakeSteam):
+    async def get_friend_list(self, steam_id: str) -> FriendListResult:
+        if steam_id == "root":
+            return FriendListResult(
+                steam_id=steam_id,
+                friend_ids=[f"private-{index}" for index in range(6)],
+            )
+        return FriendListResult(steam_id=steam_id, friend_ids=[], private=True)
+
+
 @pytest.mark.asyncio
 async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs() -> None:
     steam = HangingSteam()
@@ -284,6 +296,57 @@ async def test_crawl_bounds_concurrent_layer_expansion() -> None:
     assert repo.runs[run.id].status == CrawlStatus.completed
     assert steam.peak_requests == 3
     assert set(repo.users) == {"root", *friend_ids}
+
+
+@pytest.mark.asyncio
+async def test_crawl_persists_expansion_progress_once_per_request_batch() -> None:
+    friend_ids = [f"friend-{index:02d}" for index in range(12)]
+    steam = TrackingSteam({"root": friend_ids, **{steam_id: [] for steam_id in friend_ids}})
+    repo = FakeRepo()
+    manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=2,
+            max_nodes=20,
+            delay_ms=0,
+            request_concurrency=4,
+        )
+    )
+    await manager.controls[run.id].task
+
+    progress_updates = [
+        update for update in repo.run_updates if "current_steam_id" in update
+    ]
+    assert len(progress_updates) == 4
+    assert progress_updates[-1]["queue_size"] == 0
+    assert progress_updates[-1]["expanded_count"] == 13
+    assert repo.runs[run.id].status == CrawlStatus.completed
+
+
+@pytest.mark.asyncio
+async def test_crawl_coalesces_private_counts_per_request_batch() -> None:
+    repo = FakeRepo()
+    manager = CrawlManager(repo, PrivateBatchSteam())  # type: ignore[arg-type]
+
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=2,
+            max_nodes=10,
+            delay_ms=0,
+            request_concurrency=6,
+        )
+    )
+    await manager.controls[run.id].task
+
+    private_only_updates = [
+        update for update in repo.run_updates if set(update) == {"private_count"}
+    ]
+    assert private_only_updates == [{"private_count": 6}]
+    assert repo.runs[run.id].private_count == 6
+    assert repo.runs[run.id].status == CrawlStatus.completed
 
 
 @pytest.mark.asyncio
@@ -481,3 +544,7 @@ async def test_crawl_auth_error_circuit_breaker() -> None:
     assert "认证失败连续超过 5 次" in finished.message
     assert finished.error_count >= 5
     assert steam.calls == 7
+    error_only_updates = [
+        update for update in repo.run_updates if set(update) == {"error_count"}
+    ]
+    assert error_only_updates == [{"error_count": 3}]
