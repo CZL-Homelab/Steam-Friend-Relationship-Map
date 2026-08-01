@@ -31,6 +31,37 @@ def test_settings_rejects_invalid_proxy_scheme() -> None:
         Settings(steam_proxy_url="ftp://127.0.0.1:21")
 
 
+def test_get_settings_keeps_secrets_that_succeed_when_one_keyring_read_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steam_friend_relationship_map import settings as settings_module
+    from steam_friend_relationship_map.secrets import SecretStorageError
+
+    class PartialSecretStore:
+        def get(self, name: str) -> str:
+            if name == "steam_proxy_url":
+                raise SecretStorageError("proxy credential unavailable")
+            return {
+                "steam_api_key": "steam-key",
+                "neo4j_password": "neo4j-password",
+            }.get(name, "")
+
+    monkeypatch.chdir(tmp_path)
+    for env_key in ("STEAM_API_KEY", "STEAM_PROXY_URL", "NEO4J_PASSWORD"):
+        monkeypatch.delenv(env_key, raising=False)
+    monkeypatch.setattr(settings_module, "SecretStore", PartialSecretStore)
+    settings_module.clear_settings_cache()
+    try:
+        loaded = settings_module.get_settings()
+    finally:
+        settings_module.clear_settings_cache()
+
+    assert loaded.steam_api_key == "steam-key"
+    assert loaded.steam_proxy_url == ""
+    assert loaded.neo4j_password == "neo4j-password"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

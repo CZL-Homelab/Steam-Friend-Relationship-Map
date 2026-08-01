@@ -51,20 +51,13 @@ def get_settings() -> Settings:
     settings = Settings()
     store = SecretStore()
     updates = {}
-    try:
-        steam_api_key = store.get("steam_api_key")
-        steam_proxy_url = store.get("steam_proxy_url")
-        neo4j_password = store.get("neo4j_password")
-    except SecretStorageError:
-        steam_api_key = ""
-        steam_proxy_url = ""
-        neo4j_password = ""
-    if steam_api_key:
-        updates["steam_api_key"] = steam_api_key
-    if steam_proxy_url:
-        updates["steam_proxy_url"] = steam_proxy_url
-    if neo4j_password:
-        updates["neo4j_password"] = neo4j_password
+    for name in ("steam_api_key", "steam_proxy_url", "neo4j_password"):
+        try:
+            value = store.get(name)
+        except SecretStorageError:
+            continue
+        if value:
+            updates[name] = value
     return Settings.model_validate({**settings.model_dump(), **updates})
 
 

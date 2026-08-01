@@ -333,6 +333,35 @@ def test_settings_fall_back_to_process_environment_when_env_file_cannot_be_read(
     )
 
 
+def test_settings_keep_successful_credentials_when_one_keyring_read_fails() -> None:
+    class PartialSecretStore(FakeSecretStore):
+        def get(self, name: str) -> str:
+            if name == "steam_proxy_url":
+                raise SecretStorageError("proxy credential unavailable")
+            return {
+                "steam_api_key": "steam-key",
+                "neo4j_password": "neo4j-password",
+            }.get(name, "")
+
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=PartialSecretStore(),
+    )  # type: ignore[arg-type]
+    client = TestClient(app)
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["steam_api_key_configured"] is True
+    assert body["steam_proxy_configured"] is False
+    assert body["neo4j_password_configured"] is True
+    assert body["secure_store_available"] is False
+    assert "proxy credential unavailable" in body["message"]
+
+
 def test_user_patch_endpoint() -> None:
     class PatchTrackingRepo(FakeRepo):
         def __init__(self) -> None:

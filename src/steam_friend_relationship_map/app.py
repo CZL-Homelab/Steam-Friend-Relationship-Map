@@ -764,22 +764,26 @@ def create_app(
                 log_buffer.append("warn", "settings", f"环境配置读取失败: {detail}")
                 message = message or f"环境配置暂时无法读取，已显示当前运行配置：{detail}"
 
-        def load_secrets() -> tuple[str, str, str]:
-            return (
-                secret_store.get("steam_api_key"),
-                secret_store.get("steam_proxy_url"),
-                secret_store.get("neo4j_password"),
-            )
+        def load_secrets() -> tuple[dict[str, str], list[str]]:
+            values: dict[str, str] = {}
+            errors: list[str] = []
+            for name in SECRET_ENV_KEYS:
+                try:
+                    values[name] = secret_store.get(name)
+                except SecretStorageError as exc:
+                    values[name] = ""
+                    errors.append(f"{name}: {exc}")
+            return values, errors
 
-        try:
-            steam_secret, proxy_secret, neo4j_secret = await asyncio.to_thread(load_secrets)
-            secure_store_available = True
-        except SecretStorageError as exc:
-            steam_secret = ""
-            proxy_secret = ""
-            neo4j_secret = ""
-            secure_store_available = False
-            message = message or str(exc)
+        secret_values, secret_errors = await asyncio.to_thread(load_secrets)
+        steam_secret = secret_values["steam_api_key"]
+        proxy_secret = secret_values["steam_proxy_url"]
+        neo4j_secret = secret_values["neo4j_password"]
+        secure_store_available = not secret_errors
+        if secret_errors:
+            detail = log_buffer.redact("; ".join(secret_errors))
+            log_buffer.append("warn", "settings", f"部分系统凭据读取失败: {detail}")
+            message = message or f"部分系统凭据暂时无法读取：{detail}"
         return PublicSettings(
             graph_db_engine=current_settings.graph_db_engine,
             kuzu_db_path=current_settings.kuzu_db_path,
