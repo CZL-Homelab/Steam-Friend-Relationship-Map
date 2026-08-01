@@ -64,7 +64,7 @@ GitHub Actions uses read-only permissions, concurrency cancellation, and full-SH
 - Ruff `E4/E7/E9/F/I`, Python 3.12, line length 100: passed locally.
 - Bandit recursive source scan: zero findings after five narrowly documented suppressions.
 - pip-audit against exported locked runtime requirements: no known vulnerabilities.
-- pytest: `209 passed`（完整测试 / full suite）。
+- pytest: `210 passed`（完整测试 / full suite）。
 - Node syntax and i18n JSON parse: passed locally.
 - TruffleHog full-history result: recorded from the audit PR quality run before merge.
 - Application lifecycle smoke test with an isolated temporary Kuzu database: HTTP `200`; the existing `data/graph_kuzu` path was not opened or modified.
@@ -79,6 +79,10 @@ GitHub Actions uses read-only permissions, concurrency cancellation, and full-SH
 - `B311` 两处: `random.uniform` 仅用于 HTTP 重试抖动，不生成令牌、密钥或其他安全随机值。
 
 These five false positives are suppressed only on the relevant lines: two non-secret labels, one bind-address comparison, and two retry-jitter calls that do not require cryptographic randomness.
+
+TruffleHog 完整历史首次扫描还发现 2 条 `unverified URI`：均为 `tests/test_app.py` 历史版本中指向 `127.0.0.1` 的显式假代理凭据。它们不属于要求阻断的 verified/unknown，但 Action 的 GitHub 输出模式仍返回 `183`。由于本次交付禁止重写历史，工作流仅排除无法验证的通用 `URI` detector；当前测试夹具已拆分，不再保存凭据 URI 字面量，并由 `tests/test_security_policy.py` 扫描当前源码与文档中的嵌入式 URI 凭据。其他 detector 和完整历史扫描保持启用。
+
+The first full-history TruffleHog run also found two `unverified URI` results, both explicit fake loopback proxy credentials in historical `tests/test_app.py` revisions. They are outside the verified/unknown blocking scope, but GitHub output mode still returned exit `183`. Because history rewriting is prohibited, only the non-verifying generic `URI` detector is excluded. Current fixtures no longer contain credential-URI literals, and `tests/test_security_policy.py` scans the current source and documentation tree for them. All other detectors and full-history scanning remain enabled.
 
 ## 剩余风险 / Residual Risk
 

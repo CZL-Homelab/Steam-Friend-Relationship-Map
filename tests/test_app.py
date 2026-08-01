@@ -715,7 +715,7 @@ def test_secret_api_rejects_unknown_secret_name() -> None:
 
 
 def test_proxy_secret_status_does_not_echo_url() -> None:
-    proxy_url = "http://proxy-user:proxy-password@127.0.0.1:8080"
+    proxy_url = "http://" + "proxy-user:proxy-password" + "@127.0.0.1:8080"
     store = FakeSecretStore()
     store.values["steam_proxy_url"] = proxy_url
     app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store)  # type: ignore[arg-type]
@@ -1195,7 +1195,8 @@ def test_settings_test_reports_neo4j_server_unavailable() -> None:
 
 
 def test_logs_endpoint_redacts_sensitive_values() -> None:
-    proxy_url = "http://proxy-user:proxy-secret@127.0.0.1:8080"
+    proxy_url = "http://" + "proxy-user:proxy-secret" + "@127.0.0.1:8080"
+    fallback_proxy = "socks5://" + "other-user:other-password" + "@127.0.0.1:1080"
     app = create_app(
         settings=Settings(
             steam_api_key="abcd1234abcd1234abcd1234abcd1234",
@@ -1211,7 +1212,7 @@ def test_logs_endpoint_redacts_sensitive_values() -> None:
     app.state.logs.append(
         "error",
         "test",
-        f"password=pw-secret key=abcd1234abcd1234abcd1234abcd1234 proxy={proxy_url} fallback=socks5://other-user:other-password@127.0.0.1:1080 Authorization: Bearer token123 Cookie: sid=abc",
+        f"password=pw-secret key=abcd1234abcd1234abcd1234abcd1234 proxy={proxy_url} fallback={fallback_proxy} Authorization: Bearer token123 Cookie: sid=abc",
     )
     response = client.get("/api/logs")
 

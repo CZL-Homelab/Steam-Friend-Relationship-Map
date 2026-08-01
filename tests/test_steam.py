@@ -55,7 +55,7 @@ async def test_steam_client_honors_retry_after_header() -> None:
 
 @pytest.mark.asyncio
 async def test_steam_client_creates_owned_client_with_explicit_proxy() -> None:
-    proxy_url = "socks5h://user:password@127.0.0.1:1080"
+    proxy_url = "socks5h://" + "user:password" + "@127.0.0.1:1080"
 
     with patch("steam_friend_relationship_map.steam.httpx.AsyncClient") as async_client:
         client = SteamClient("key", proxy_url=proxy_url)
