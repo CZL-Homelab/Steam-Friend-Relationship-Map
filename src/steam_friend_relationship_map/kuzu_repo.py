@@ -39,6 +39,7 @@ _PROJECT_MEMBER_PROPERTY_TYPES = {
     "tags": "STRING[]",
     "category": "STRING",
 }
+_KUZU_WRITE_BATCH_SIZE = 500
 
 
 def _parse_node(row_val: Any) -> dict[str, Any]:
@@ -536,90 +537,69 @@ class KuzuRepositoryImpl(IGraphRepository):
         now = utc_now_iso()
         conn = self._get_conn()
         self._ensure_project_node(conn, project_id)
+        query = """
+            MATCH (p:Project {id: $project_id})
+            UNWIND $rows AS row
+            MERGE (u:SteamUser {steam_id: row.steam_id})
+            ON CREATE SET u.first_seen_at = $now,
+                          u.friend_ids = CAST([] AS STRING[]),
+                          u.friend_list_fetched_at = ''
+            SET u.last_seen_at = $now,
+                u.project_id = CASE
+                    WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
+                    ELSE u.project_id
+                END,
+                u.persona_name = row.persona_name,
+                u.profile_url = row.profile_url,
+                u.avatar = row.avatar,
+                u.avatar_medium = row.avatar_medium,
+                u.avatar_full = row.avatar_full,
+                u.visibility_state = CAST(row.visibility_state AS INT64),
+                u.profile_state = CAST(row.profile_state AS INT64),
+                u.friend_count = CASE
+                    WHEN row.friend_count IS NULL THEN u.friend_count
+                    ELSE CAST(row.friend_count AS INT64)
+                END,
+                u.friend_count_status = CASE
+                    WHEN row.friend_count_status IS NULL OR row.friend_count_status = 'unknown' THEN coalesce(u.friend_count_status, 'unknown')
+                    ELSE row.friend_count_status
+                END,
+                u.friend_list_status = CASE
+                    WHEN row.friend_list_status = 'unknown' THEN coalesce(u.friend_list_status, 'unknown')
+                    WHEN coalesce(u.friend_list_status, 'unknown') = 'private' THEN 'private'
+                    ELSE row.friend_list_status
+                END
+            MERGE (u)-[membership:IN_PROJECT]->(p)
+            SET membership.depth_min = CASE
+                    WHEN membership.depth_min IS NULL OR row.depth_min < membership.depth_min THEN row.depth_min
+                    ELSE membership.depth_min
+                END,
+                membership.prior_pool_link_count = CASE
+                    WHEN row.prior_pool_link_count > coalesce(membership.prior_pool_link_count, 0) THEN row.prior_pool_link_count
+                    ELSE coalesce(membership.prior_pool_link_count, 0)
+                END,
+                membership.root_closeness_score = CASE
+                    WHEN row.root_closeness_score > coalesce(membership.root_closeness_score, 0.0) THEN row.root_closeness_score
+                    ELSE coalesce(membership.root_closeness_score, 0.0)
+                END,
+                membership.last_scored_crawl_id = CASE
+                    WHEN row.last_scored_crawl_id = '' THEN coalesce(membership.last_scored_crawl_id, '')
+                    ELSE row.last_scored_crawl_id
+                END,
+                membership.note = coalesce(membership.note, ''),
+                membership.tags = coalesce(membership.tags, CAST([] AS STRING[])),
+                membership.category = coalesce(membership.category, '')
+        """
         try:
             conn.execute("BEGIN TRANSACTION")
-            for row in rows:
+            for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
                 conn.execute(
-                    """
-                    MERGE (u:SteamUser {steam_id: $steam_id})
-                    ON CREATE SET u.first_seen_at = $now,
-                                  u.friend_ids = CAST([] AS STRING[]),
-                                  u.friend_list_fetched_at = ''
-                    SET u.last_seen_at = $now,
-                        u.project_id = CASE
-                            WHEN u.project_id IS NULL OR u.project_id = '' THEN $project_id
-                            ELSE u.project_id
-                        END,
-                        u.persona_name = $persona_name,
-                        u.profile_url = $profile_url,
-                        u.avatar = $avatar,
-                        u.avatar_medium = $avatar_medium,
-                        u.avatar_full = $avatar_full,
-                        u.visibility_state = $visibility_state,
-                        u.profile_state = $profile_state,
-                        u.friend_count = CASE
-                            WHEN $friend_count IS NULL THEN u.friend_count
-                            ELSE $friend_count
-                        END,
-                        u.friend_count_status = CASE
-                            WHEN $friend_count_status IS NULL OR $friend_count_status = 'unknown' THEN coalesce(u.friend_count_status, 'unknown')
-                            ELSE $friend_count_status
-                        END,
-                        u.friend_list_status = CASE
-                            WHEN $friend_list_status = 'unknown' THEN coalesce(u.friend_list_status, 'unknown')
-                            WHEN coalesce(u.friend_list_status, 'unknown') = 'private' THEN 'private'
-                            ELSE $friend_list_status
-                        END
-                    """,
+                    query,
                     {
-                        "steam_id": row["steam_id"],
                         "now": now,
                         "project_id": project_id,
-                        "persona_name": row["persona_name"],
-                        "profile_url": row["profile_url"],
-                        "avatar": row["avatar"],
-                        "avatar_medium": row["avatar_medium"],
-                        "avatar_full": row["avatar_full"],
-                        "visibility_state": row["visibility_state"],
-                        "profile_state": row["profile_state"],
-                        "friend_count": row["friend_count"],
-                        "friend_count_status": row["friend_count_status"],
-                        "friend_list_status": row["friend_list_status"],
+                        "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
                     }
-                )
-                conn.execute(
-                    """
-                    MATCH (u:SteamUser {steam_id: $steam_id})
-                    MATCH (p:Project {id: $project_id})
-                    MERGE (u)-[membership:IN_PROJECT]->(p)
-                    SET membership.depth_min = CASE
-                            WHEN membership.depth_min IS NULL OR $depth_min < membership.depth_min THEN $depth_min
-                            ELSE membership.depth_min
-                        END,
-                        membership.prior_pool_link_count = CASE
-                            WHEN $prior_pool_link_count > coalesce(membership.prior_pool_link_count, 0) THEN $prior_pool_link_count
-                            ELSE coalesce(membership.prior_pool_link_count, 0)
-                        END,
-                        membership.root_closeness_score = CASE
-                            WHEN $root_closeness_score > coalesce(membership.root_closeness_score, 0.0) THEN $root_closeness_score
-                            ELSE coalesce(membership.root_closeness_score, 0.0)
-                        END,
-                        membership.last_scored_crawl_id = CASE
-                            WHEN $last_scored_crawl_id = '' THEN coalesce(membership.last_scored_crawl_id, '')
-                            ELSE $last_scored_crawl_id
-                        END,
-                        membership.note = coalesce(membership.note, ''),
-                        membership.tags = coalesce(membership.tags, CAST([] AS STRING[])),
-                        membership.category = coalesce(membership.category, '')
-                    """,
-                    {
-                        "steam_id": row["steam_id"],
-                        "project_id": project_id,
-                        "depth_min": row["depth_min"],
-                        "prior_pool_link_count": row["prior_pool_link_count"],
-                        "root_closeness_score": row["root_closeness_score"],
-                        "last_scored_crawl_id": row["last_scored_crawl_id"],
-                    },
                 )
             conn.execute("COMMIT")
         except Exception:
@@ -716,57 +696,61 @@ class KuzuRepositoryImpl(IGraphRepository):
         return row[0], row[1]
 
     def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
-        rows = [edge.model_dump(mode="json") for edge in edges]
+        normalized: dict[tuple[str, str], dict[str, Any]] = {}
+        for edge in edges:
+            row = edge.model_dump(mode="json")
+            from_id = row["from_id"]
+            to_id = row["to_id"]
+            if from_id == to_id:
+                continue
+            if from_id > to_id:
+                from_id, to_id = to_id, from_id
+            normalized.setdefault(
+                (from_id, to_id),
+                {
+                    "from_id": from_id,
+                    "to_id": to_id,
+                    "crawl_id": row["crawl_id"],
+                    "source_depth": row["source_depth"],
+                },
+            )
+        rows = list(normalized.values())
         if not rows:
             return
         conn = self._get_conn()
         self._ensure_project_node(conn, project_id)
+        query = """
+            MATCH (p:Project {id: $project_id})
+            UNWIND $rows AS row
+            MATCH (a:SteamUser {steam_id: row.from_id})
+            MATCH (b:SteamUser {steam_id: row.to_id})
+            MERGE (a)-[r:STEAM_FRIEND {project_id: $project_id}]->(b)
+            ON CREATE SET r.crawl_id = row.crawl_id,
+                          r.source_depth = row.source_depth
+            MERGE (a)-[a_membership:IN_PROJECT]->(p)
+            MERGE (b)-[b_membership:IN_PROJECT]->(p)
+            SET a_membership.note = coalesce(a_membership.note, ''),
+                a_membership.tags = coalesce(a_membership.tags, CAST([] AS STRING[])),
+                a_membership.category = coalesce(a_membership.category, ''),
+                a_membership.prior_pool_link_count = coalesce(a_membership.prior_pool_link_count, 0),
+                a_membership.root_closeness_score = coalesce(a_membership.root_closeness_score, 0.0),
+                a_membership.last_scored_crawl_id = coalesce(a_membership.last_scored_crawl_id, ''),
+                b_membership.note = coalesce(b_membership.note, ''),
+                b_membership.tags = coalesce(b_membership.tags, CAST([] AS STRING[])),
+                b_membership.category = coalesce(b_membership.category, ''),
+                b_membership.prior_pool_link_count = coalesce(b_membership.prior_pool_link_count, 0),
+                b_membership.root_closeness_score = coalesce(b_membership.root_closeness_score, 0.0),
+                b_membership.last_scored_crawl_id = coalesce(b_membership.last_scored_crawl_id, '')
+        """
         try:
             conn.execute("BEGIN TRANSACTION")
-            for row in rows:
-                from_id = row["from_id"]
-                to_id = row["to_id"]
-                if from_id == to_id:
-                    continue
-                if from_id > to_id:
-                    from_id, to_id = to_id, from_id
+            for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
                 conn.execute(
-                    """
-                    MATCH (a:SteamUser {steam_id: $from_id})
-                    MATCH (b:SteamUser {steam_id: $to_id})
-                    MERGE (a)-[r:STEAM_FRIEND {project_id: $project_id}]->(b)
-                    ON CREATE SET r.crawl_id = $crawl_id,
-                                  r.source_depth = $source_depth
-                    """,
+                    query,
                     {
-                        "from_id": from_id,
-                        "to_id": to_id,
-                        "crawl_id": row["crawl_id"],
-                        "source_depth": row["source_depth"],
                         "project_id": project_id,
+                        "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
                     }
-                )
-                conn.execute(
-                    """
-                    MATCH (a:SteamUser {steam_id: $from_id})
-                    MATCH (b:SteamUser {steam_id: $to_id})
-                    MATCH (p:Project {id: $project_id})
-                    MERGE (a)-[a_membership:IN_PROJECT]->(p)
-                    MERGE (b)-[b_membership:IN_PROJECT]->(p)
-                    SET a_membership.note = coalesce(a_membership.note, ''),
-                        a_membership.tags = coalesce(a_membership.tags, CAST([] AS STRING[])),
-                        a_membership.category = coalesce(a_membership.category, ''),
-                        a_membership.prior_pool_link_count = coalesce(a_membership.prior_pool_link_count, 0),
-                        a_membership.root_closeness_score = coalesce(a_membership.root_closeness_score, 0.0),
-                        a_membership.last_scored_crawl_id = coalesce(a_membership.last_scored_crawl_id, ''),
-                        b_membership.note = coalesce(b_membership.note, ''),
-                        b_membership.tags = coalesce(b_membership.tags, CAST([] AS STRING[])),
-                        b_membership.category = coalesce(b_membership.category, ''),
-                        b_membership.prior_pool_link_count = coalesce(b_membership.prior_pool_link_count, 0),
-                        b_membership.root_closeness_score = coalesce(b_membership.root_closeness_score, 0.0),
-                        b_membership.last_scored_crawl_id = coalesce(b_membership.last_scored_crawl_id, '')
-                    """,
-                    {"from_id": from_id, "to_id": to_id, "project_id": project_id},
                 )
             conn.execute("COMMIT")
         except Exception:
@@ -808,34 +792,49 @@ class KuzuRepositoryImpl(IGraphRepository):
     def bulk_patch_users(
         self, patches: Iterable[dict[str, Any]], project_id: str = "default"
     ) -> None:
+        normalized: dict[str, dict[str, Any]] = {}
+        for patch in patches:
+            steam_id = patch.get("steam_id")
+            if not steam_id:
+                continue
+            fields = {
+                key: patch[key]
+                for key in ("note", "tags", "category")
+                if patch.get(key) is not None
+            }
+            if fields:
+                normalized.setdefault(steam_id, {"steam_id": steam_id}).update(fields)
+        if not normalized:
+            return
+
+        grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+        for row in normalized.values():
+            signature = tuple(key for key in ("note", "tags", "category") if key in row)
+            grouped.setdefault(signature, []).append(row)
+
         conn = self._get_conn()
         try:
             conn.execute("BEGIN TRANSACTION")
-            for patch in patches:
-                steam_id = patch.get("steam_id")
-                note = patch.get("note")
-                tags = patch.get("tags")
-                category = patch.get("category")
-
-                fields: dict[str, Any] = {}
-                if note is not None:
-                    fields["note"] = note
-                if tags is not None:
-                    fields["tags"] = tags
-                if category is not None:
-                    fields["category"] = category
-                if not fields:
-                    continue
-
-                assignments = ", ".join(f"membership.{key} = ${key}" for key in fields)
-                conn.execute(
-                    f"""
-                    MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
-                    WHERE u.steam_id = $steam_id AND p.id = $project_id
-                    SET {assignments}
-                    """,
-                    {"steam_id": steam_id, "project_id": project_id, **fields},
+            for signature, rows in grouped.items():
+                assignments = ", ".join(
+                    f"membership.{key} = "
+                    + (f"CAST(row.{key} AS STRING[])" if key == "tags" else f"row.{key}")
+                    for key in signature
                 )
+                query = f"""
+                    UNWIND $rows AS row
+                    MATCH (u:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+                    WHERE u.steam_id = row.steam_id AND p.id = $project_id
+                    SET {assignments}
+                """
+                for offset in range(0, len(rows), _KUZU_WRITE_BATCH_SIZE):
+                    conn.execute(
+                        query,
+                        {
+                            "project_id": project_id,
+                            "rows": rows[offset : offset + _KUZU_WRITE_BATCH_SIZE],
+                        },
+                    )
             conn.execute("COMMIT")
         except Exception:
             try:

@@ -17,6 +17,24 @@ from steam_friend_relationship_map.models import (
 )
 
 
+class CountingConnection:
+    def __init__(self, connection, fail_unwind_at: int | None = None) -> None:
+        self.connection = connection
+        self.queries: list[str] = []
+        self.fail_unwind_at = fail_unwind_at
+        self.unwind_count = 0
+
+    def execute(self, query: str, parameters=None):
+        self.queries.append(query)
+        if "UNWIND $rows AS row" in query:
+            self.unwind_count += 1
+            if self.unwind_count == self.fail_unwind_at:
+                raise RuntimeError("synthetic batch failure")
+        if parameters is None:
+            return self.connection.execute(query)
+        return self.connection.execute(query, parameters)
+
+
 @pytest.fixture
 def temp_kuzu_repo() -> Generator[KuzuRepositoryImpl, None, None]:
     db_dir = tempfile.mkdtemp()
@@ -182,6 +200,125 @@ def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert len(analysis.candidates) >= 1
     candidate_ids = [c.steam_id for c in analysis.candidates]
     assert "4" in candidate_ids
+
+
+def test_kuzu_batches_large_graph_writes_and_deduplicates_relationships(
+    temp_kuzu_repo: KuzuRepositoryImpl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    connection = repo._get_conn()
+    counting = CountingConnection(connection)
+    monkeypatch.setattr(repo, "_get_conn", lambda: counting)
+
+    steam_ids = [f"batch-{index:04d}" for index in range(1002)]
+    repo.upsert_users(
+        [SteamUserRecord(steam_id=steam_id, depth_min=index % 4) for index, steam_id in enumerate(steam_ids)],
+        "batch-project",
+    )
+
+    user_batch_queries = [query for query in counting.queries if "UNWIND $rows AS row" in query]
+    assert len(user_batch_queries) == 3
+    user_count = connection.execute(
+        """
+        MATCH (u:SteamUser)-[:IN_PROJECT]->(p:Project)
+        WHERE p.id = $project_id
+        RETURN count(u)
+        """,
+        {"project_id": "batch-project"},
+    ).get_next()[0]
+    assert user_count == 1002
+
+    counting.queries.clear()
+    edges = [
+        FriendEdge(
+            from_id=steam_ids[index],
+            to_id=steam_ids[index + 1],
+            crawl_id="batch-crawl",
+            source_depth=index % 4,
+        )
+        for index in range(1001)
+    ]
+    edges.extend(
+        [
+            FriendEdge(
+                from_id=steam_ids[1],
+                to_id=steam_ids[0],
+                crawl_id="duplicate",
+                source_depth=9,
+            ),
+            FriendEdge(
+                from_id=steam_ids[0],
+                to_id=steam_ids[0],
+                crawl_id="self-loop",
+                source_depth=0,
+            ),
+        ]
+    )
+    repo.upsert_relationships(edges, "batch-project")
+
+    relationship_batch_queries = [query for query in counting.queries if "UNWIND $rows AS row" in query]
+    assert len(relationship_batch_queries) == 3
+    relationship_count = connection.execute(
+        """
+        MATCH ()-[r:STEAM_FRIEND]->()
+        WHERE r.project_id = $project_id
+        RETURN count(r)
+        """,
+        {"project_id": "batch-project"},
+    ).get_next()[0]
+    assert relationship_count == 1001
+
+    counting.queries.clear()
+    repo.bulk_patch_users(
+        [
+            {
+                "steam_id": steam_id,
+                "note": "batched",
+                "tags": [],
+                "category": "load-test",
+            }
+            for steam_id in steam_ids
+        ],
+        project_id="batch-project",
+    )
+    patch_batch_queries = [query for query in counting.queries if "UNWIND $rows AS row" in query]
+    assert len(patch_batch_queries) == 3
+    patched_count = connection.execute(
+        """
+        MATCH (:SteamUser)-[membership:IN_PROJECT]->(p:Project)
+        WHERE p.id = $project_id AND membership.note = 'batched'
+        RETURN count(membership)
+        """,
+        {"project_id": "batch-project"},
+    ).get_next()[0]
+    assert patched_count == 1002
+
+
+def test_kuzu_batched_user_write_rolls_back_all_chunks(
+    temp_kuzu_repo: KuzuRepositoryImpl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    connection = repo._get_conn()
+    failing = CountingConnection(connection, fail_unwind_at=2)
+    monkeypatch.setattr(repo, "_get_conn", lambda: failing)
+
+    with pytest.raises(RuntimeError, match="synthetic batch failure"):
+        repo.upsert_users(
+            [SteamUserRecord(steam_id=f"rollback-{index:04d}") for index in range(501)],
+            "rollback-project",
+        )
+
+    result = connection.execute(
+        """
+        MATCH (u:SteamUser)-[:IN_PROJECT]->(p:Project)
+        WHERE p.id = $project_id
+        RETURN count(u)
+        """,
+        {"project_id": "rollback-project"},
+    )
+    assert result.get_next()[0] == 0
 
 
 def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
@@ -506,6 +643,7 @@ def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     patches = [
         {"steam_id": "1", "note": "Alice's note", "tags": ["CS2"], "category": "friend"},
         {"steam_id": "2", "note": "Bob's note", "tags": ["Dota2"], "category": "colleague"},
+        {"steam_id": "1", "tags": [], "category": "close friend"},
     ]
     repo.bulk_patch_users(patches)
 
@@ -514,8 +652,8 @@ def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     bob = [n for n in graph.nodes if n.id == "2"][0]
 
     assert alice.note == "Alice's note"
-    assert alice.tags == ["CS2"]
-    assert alice.category == "friend"
+    assert alice.tags == []
+    assert alice.category == "close friend"
 
     assert bob.note == "Bob's note"
     assert bob.tags == ["Dota2"]
