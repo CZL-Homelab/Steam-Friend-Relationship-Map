@@ -1202,6 +1202,78 @@ def test_app_crawls_conflict_returns_409() -> None:
     assert "已有活跃的抓取任务在运行中" in resp.json()["detail"]
 
 
+def test_active_crawl_endpoint_returns_the_managed_run() -> None:
+    active_run = CrawlRun(
+        id="run-active",
+        root_steam_id="root",
+        max_depth=2,
+        max_nodes=100,
+        status=CrawlStatus.running,
+    )
+
+    class ActiveRunRepo(FakeRepo):
+        def get_crawl_run(self, run_id: str) -> CrawlRun | None:
+            return active_run if run_id == active_run.id else None
+
+    app = create_app(
+        settings=Settings(),
+        repo=ActiveRunRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    app.state.manager.get_active_run_id = MagicMock(return_value=active_run.id)
+    client = TestClient(app)
+
+    response = client.get("/api/crawls/active")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == active_run.id
+    app.state.manager.get_active_run_id.return_value = None
+    assert client.get("/api/crawls/active").json() is None
+
+
+async def test_cancelled_crawl_creation_finishes_after_it_acquires_runtime_lock() -> None:
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    creation_started = asyncio.Event()
+    allow_creation = asyncio.Event()
+    creation_finished = asyncio.Event()
+
+    async def delayed_create_crawl(payload: object) -> CrawlRun:
+        creation_started.set()
+        await allow_creation.wait()
+        creation_finished.set()
+        return CrawlRun(
+            id="run-after-disconnect",
+            root_steam_id="root",
+            max_depth=2,
+            max_nodes=100,
+            status=CrawlStatus.pending,
+        )
+
+    app.state.manager.create_crawl = delayed_create_crawl
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        request = asyncio.create_task(
+            client.post(
+                "/api/crawls",
+                json={"root_url": "root", "max_depth": 2, "max_nodes": 100},
+            )
+        )
+        await asyncio.wait_for(creation_started.wait(), timeout=1)
+        request.cancel()
+        await asyncio.sleep(0)
+        allow_creation.set()
+        await asyncio.wait_for(creation_finished.wait(), timeout=1)
+        result = await asyncio.gather(request, return_exceptions=True)
+
+    assert isinstance(result[0], asyncio.CancelledError)
+
+
 async def test_runtime_mutation_waits_for_crawl_creation() -> None:
     app = create_app(
         settings=Settings(),

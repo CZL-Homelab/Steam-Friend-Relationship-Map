@@ -294,6 +294,32 @@ async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs(
 
 
 @pytest.mark.asyncio
+async def test_active_run_id_prefers_the_newest_controllable_crawl() -> None:
+    manager = CrawlManager(FakeRepo(), FakeSteam())  # type: ignore[arg-type]
+    old_control = CrawlControl()
+    new_control = CrawlControl()
+    old_control.task = asyncio.create_task(asyncio.Event().wait())
+    new_control.task = asyncio.create_task(asyncio.Event().wait())
+    manager.controls = {"old": old_control, "new": new_control}
+    manager.run_history = ["old", "new"]
+
+    try:
+        assert manager.get_active_run_id() == "new"
+        new_control.terminal = True
+        assert manager.get_active_run_id() == "old"
+        old_control.terminal = True
+        assert manager.get_active_run_id() is None
+    finally:
+        old_control.task.cancel()
+        new_control.task.cancel()
+        await asyncio.gather(
+            old_control.task,
+            new_control.task,
+            return_exceptions=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_crawler_repository_work_does_not_block_event_loop() -> None:
     repo = BlockingRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]

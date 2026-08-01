@@ -43,6 +43,8 @@ let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
 const startupDependencyErrors = [];
+const ACTIVE_CRAWL_STATUSES = new Set(["pending", "running", "paused"]);
+const TERMINAL_CRAWL_STATUSES = new Set(["completed", "cancelled", "stopped", "failed"]);
 
 function createFrontendCoordinator(globalName, resourceName) {
   const Coordinator = window[globalName];
@@ -1064,10 +1066,13 @@ function formatTimeLocal(iso) {
   return d.toLocaleString();
 }
 
-function startTimer() {
-  crawlStartTime = Date.now();
+function startTimer(startedAt = null) {
+  const persistedStart = Date.parse(startedAt || "");
+  const now = Date.now();
+  crawlStartTime = Number.isFinite(persistedStart) && persistedStart <= now ? persistedStart : now;
   $("crawlTimer").style.display = "flex";
   $("crawlUtcTime").textContent = `UTC ${new Date().toISOString().replace("T", " ").slice(0, 19)}`;
+  $("elapsedTime").textContent = formatElapsed(Math.floor((now - crawlStartTime) / 1000));
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - crawlStartTime) / 1000);
@@ -1224,7 +1229,13 @@ async function startCrawl() {
   const friendMax = $("crawlFriendCountMax").value.trim();
   if (friendMin) payload.friend_count_min = Number(friendMin);
   if (friendMax) payload.friend_count_max = Number(friendMax);
-  const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
+  let run;
+  try {
+    run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
+  } catch (error) {
+    await recoverActiveCrawl().catch(() => {});
+    throw error;
+  }
   requestCoordinator.cancelMany(["crawl-status", "crawl-events"]);
   invalidateNetworkAnalysis(false);
   currentRunId = run.id;
@@ -1238,8 +1249,39 @@ async function startCrawl() {
   $("analysisRoot").value = run.root_steam_id;
   toast(t("toast.crawlStarted"));
   appendSystemLog("info", "crawl", t("toast.crawlStarted"));
-  startTimer();
+  startTimer(run.started_at);
   pollRun();
+}
+
+function applyCrawlSnapshot(run) {
+  setStatus("crawlStatus", run.status);
+  updateCrawlButtons(run.status);
+  $("nodeCount").textContent = run.nodes_discovered;
+  $("edgeCount").textContent = run.edges_discovered;
+  $("privateCount").textContent = run.private_count;
+  $("filteredCount").textContent = run.filtered_count || 0;
+  setProgress(run.progress_percent);
+  if (run.last_event) $("lastEvent").textContent = run.last_event;
+}
+
+async function recoverActiveCrawl() {
+  if (currentRunId) return false;
+  const run = await latestApi("crawl-status", "/api/crawls/active");
+  if (!run || !ACTIVE_CRAWL_STATUSES.has(run.status) || currentRunId) return false;
+
+  requestCoordinator.cancelMany(["crawl-status", "crawl-events"]);
+  currentRunId = run.id;
+  crawlPollFailures = 0;
+  lastEventSeq = 0;
+  $("crawlLogs").innerHTML = "";
+  $("graphRoot").value = run.root_steam_id || "";
+  $("analysisRoot").value = run.root_steam_id || "";
+  applyCrawlSnapshot(run);
+  startTimer(run.started_at);
+  startDbStatsPolling();
+  appendSystemLog("info", "crawl", t("log.crawlReattached"));
+  pollRun();
+  return true;
 }
 
 function scheduleRunPoll(delay = 1200) {
@@ -1270,16 +1312,9 @@ async function pollRun() {
       appendSystemLog("info", "crawl", t("log.crawlPollRecovered"));
       crawlPollFailures = 0;
     }
-    setStatus("crawlStatus", run.status);
-    updateCrawlButtons(run.status);
-    $("nodeCount").textContent = run.nodes_discovered;
-    $("edgeCount").textContent = run.edges_discovered;
-    $("privateCount").textContent = run.private_count;
-    $("filteredCount").textContent = run.filtered_count || 0;
-    setProgress(run.progress_percent);
-    if (run.last_event) $("lastEvent").textContent = run.last_event;
+    applyCrawlSnapshot(run);
     await loadEvents().catch(() => {});
-    if (["completed", "cancelled", "stopped", "failed"].includes(run.status)) {
+    if (TERMINAL_CRAWL_STATUSES.has(run.status)) {
       currentRunId = null;
       crawlPollFailures = 0;
       stopTimer();
@@ -1410,7 +1445,7 @@ async function resumeCrawl() {
 function updateCrawlButtons(status) {
   const running = status === "running";
   const paused = status === "paused";
-  const active = running || paused;
+  const active = ACTIVE_CRAWL_STATUSES.has(status);
   $("cancelCrawl").style.display = active ? "" : "none";
   $("forceStopCrawl").style.display = active ? "" : "none";
   $("pauseCrawl").style.display = running ? "" : "none";
@@ -2116,9 +2151,12 @@ function resumeBackgroundWork() {
   pageActive = true;
   startSystemLogPolling();
   loadHealth().catch(() => {});
-  if (!currentRunId) return;
+  if (!currentRunId) {
+    recoverActiveCrawl().catch(() => {});
+    return;
+  }
   pollRun();
-  if (["running", "paused"].includes($("crawlStatus")?.dataset.status || "")) {
+  if (ACTIVE_CRAWL_STATUSES.has($("crawlStatus")?.dataset.status || "")) {
     startDbStatsPolling();
   }
 }
@@ -2166,7 +2204,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     .catch((error) => appendSystemLog("error", "settings", error.message));
   loadGraph().catch(() => {});
   loadDbStats().catch((error) => appendSystemLog("error", "db", error.message));
-  loadSystemLogs(true).catch(() => {});
+  loadSystemLogs(true)
+    .catch(() => {})
+    .then(() => recoverActiveCrawl())
+    .catch((error) => appendSystemLog("warn", "crawl", error.message));
   startSystemLogPolling();
 });
 

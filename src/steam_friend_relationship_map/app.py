@@ -1147,10 +1147,12 @@ def create_app(
 
     @app.post("/api/crawls", response_model=CrawlRun)
     async def create_crawl(payload: CrawlCreate) -> CrawlRun:
+        async def operation() -> CrawlRun:
+            log_buffer.append("info", "crawl", "正在创建抓取任务")
+            return await manager.create_crawl(payload)
+
         try:
-            async with runtime_mutation_lock:
-                log_buffer.append("info", "crawl", "正在创建抓取任务")
-                return await manager.create_crawl(payload)
+            return await run_runtime_operation(operation, "crawl creation")
         except RuntimeError as exc:
             log_buffer.append("warn", "crawl", f"抓取任务创建冲突: {exc}")
             raise HTTPException(status_code=409, detail=safe_detail(exc)) from exc
@@ -1160,6 +1162,16 @@ def create_app(
         except Exception as exc:
             log_buffer.append("error", "crawl", f"抓取任务创建异常: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+
+    @app.get("/api/crawls/active", response_model=CrawlRun | None)
+    async def get_active_crawl() -> CrawlRun | None:
+        async def operation() -> CrawlRun | None:
+            run_id = manager.get_active_run_id()
+            if run_id is None:
+                return None
+            return await asyncio.to_thread(repo.get_crawl_run, run_id)
+
+        return await run_runtime_operation(operation, "active crawl lookup")
 
     @app.get("/api/crawls/{run_id}", response_model=CrawlRun)
     async def get_crawl(run_id: str) -> CrawlRun:

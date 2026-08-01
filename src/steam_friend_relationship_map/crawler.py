@@ -94,6 +94,13 @@ class CrawlManager:
                 return True
         return False
 
+    def get_active_run_id(self) -> str | None:
+        """Return the newest controllable crawl owned by this manager."""
+        for run_id in reversed(self.run_history):
+            if self._is_active(self.controls.get(run_id)):
+                return run_id
+        return None
+
     @staticmethod
     def _is_active(control: CrawlControl | None) -> bool:
         return bool(

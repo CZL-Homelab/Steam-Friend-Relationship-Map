@@ -443,6 +443,93 @@ def test_force_stop_keeps_polling_until_the_server_reports_a_terminal_state() ->
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_frontend_reattaches_to_an_active_crawl_after_reload() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    coordinator_path = str((STATIC_DIR / "request-coordinator.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      const {{ LatestRequestCoordinator }} = require({json.dumps(coordinator_path)});
+      (async () => {{
+      const requests = [];
+      const timerStarts = [];
+      const logs = [];
+      const calls = {{ stats: 0, poll: 0 }};
+      const elements = {{
+        crawlLogs: {{ innerHTML: "old" }},
+        graphRoot: {{ value: "" }},
+        analysisRoot: {{ value: "" }},
+        crawlStatus: {{ dataset: {{}}, textContent: "" }},
+        nodeCount: {{ textContent: "" }},
+        edgeCount: {{ textContent: "" }},
+        privateCount: {{ textContent: "" }},
+        filteredCount: {{ textContent: "" }},
+        lastEvent: {{ textContent: "" }},
+        crawlProgressBar: {{ style: {{}} }},
+        cancelCrawl: {{ style: {{}} }},
+        forceStopCrawl: {{ style: {{}} }},
+        pauseCrawl: {{ style: {{}} }},
+        resumeCrawl: {{ style: {{}} }},
+      }};
+      const activeRun = {{
+        id: "run-active",
+        root_steam_id: "root",
+        status: "pending",
+        started_at: "2026-07-01T00:00:00Z",
+        nodes_discovered: 3,
+        edges_discovered: 2,
+        private_count: 1,
+        filtered_count: 4,
+        progress_percent: 25,
+        last_event: "queued",
+      }};
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{ LatestRequestCoordinator, addEventListener() {{}} }},
+        document: {{
+          addEventListener() {{}},
+          getElementById(id) {{ return elements[id] || null; }},
+        }},
+        requests,
+        timerStarts,
+        logs,
+        calls,
+        activeRun,
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      const recovered = await vm.runInContext(`
+        latestApi = async (key, path) => {{ requests.push({{ key, path }}); return activeRun; }};
+        startTimer = (startedAt) => timerStarts.push(startedAt);
+        startDbStatsPolling = () => calls.stats++;
+        appendSystemLog = (_level, _source, message) => logs.push(message);
+        pollRun = async () => {{ calls.poll++; }};
+        t = (key) => key;
+        recoverActiveCrawl();
+      `, context);
+
+      if (!recovered || requests.length !== 1) process.exit(1);
+      if (requests[0].path !== "/api/crawls/active") process.exit(2);
+      if (vm.runInContext("currentRunId", context) !== "run-active") process.exit(3);
+      if (elements.graphRoot.value !== "root" || elements.analysisRoot.value !== "root") process.exit(4);
+      if (elements.crawlStatus.dataset.status !== "pending") process.exit(5);
+      if (elements.crawlProgressBar.style.width !== "25%") process.exit(6);
+      if (elements.cancelCrawl.style.display !== "" || elements.forceStopCrawl.style.display !== "") process.exit(7);
+      if (elements.pauseCrawl.style.display !== "none" || elements.resumeCrawl.style.display !== "none") process.exit(8);
+      if (timerStarts[0] !== activeRun.started_at || calls.stats !== 1 || calls.poll !== 1) process.exit(9);
+      if (logs[0] !== "log.crawlReattached" || elements.crawlLogs.innerHTML !== "") process.exit(10);
+      }})().catch((error) => {{ console.error(error); process.exit(11); }});
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_stale_frontend_responses_cannot_overwrite_current_state() -> None:
     app_path = str((STATIC_DIR / "app.js").resolve())
     coordinator_path = str((STATIC_DIR / "request-coordinator.js").resolve())
