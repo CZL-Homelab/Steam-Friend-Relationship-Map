@@ -293,11 +293,37 @@ def create_app(
         **kwargs: Any,
     ) -> Any:
         """Run synchronous repository work off-loop while guarding runtime swaps."""
-        async with runtime_mutation_lock:
-            if project_scoped:
-                kwargs["project_id"] = settings.active_project
-            method = getattr(repo, method_name)
-            return await asyncio.to_thread(method, *args, **kwargs)
+        started = asyncio.Event()
+
+        async def operation() -> Any:
+            async with runtime_mutation_lock:
+                if project_scoped:
+                    kwargs["project_id"] = settings.active_project
+                method = getattr(repo, method_name)
+                started.set()
+                return await asyncio.to_thread(method, *args, **kwargs)
+
+        task = asyncio.create_task(operation())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not started.is_set():
+                task.cancel()
+            else:
+                def report_late_failure(completed: asyncio.Task[Any]) -> None:
+                    try:
+                        completed.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as exc:
+                        log_buffer.append(
+                            "warn",
+                            "runtime",
+                            f"Cancelled repository operation later failed: {log_buffer.redact(str(exc))}",
+                        )
+
+                task.add_done_callback(report_late_failure)
+            raise
 
     @asynccontextmanager
     async def runtime_mutation_guard() -> AsyncIterator[None]:
