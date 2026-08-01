@@ -251,6 +251,55 @@ def test_required_interactive_elements_exist_in_application_page() -> None:
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_application_uses_memory_fallback_when_local_storage_is_blocked() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      const domReadyCallbacks = [];
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        setTimeout,
+        clearTimeout,
+        window: {{ addEventListener() {{}} }},
+        document: {{
+          addEventListener(event, callback) {{
+            if (event === "DOMContentLoaded") domReadyCallbacks.push(callback);
+          }},
+          getElementById() {{ return null; }},
+        }},
+      }};
+      Object.defineProperty(context, "localStorage", {{
+        get() {{ throw new DOMException("storage blocked", "SecurityError"); }},
+      }});
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      vm.runInContext('appStorage.setItem("session-key", "value")', context);
+      if (vm.runInContext('appStorage.getItem("session-key")', context) !== "value") process.exit(1);
+      vm.runInContext('appStorage.removeItem("session-key")', context);
+      if (vm.runInContext('appStorage.getItem("session-key")', context) !== null) process.exit(2);
+      if (domReadyCallbacks.length !== 1) process.exit(3);
+      const overlayWorks = vm.runInContext(`
+        (() => {{
+          const fallback = createSafeStorage(() => ({{
+            getItem() {{ return "stale"; }},
+            setItem() {{ throw new DOMException("quota", "QuotaExceededError"); }},
+            removeItem() {{ throw new DOMException("blocked", "SecurityError"); }},
+          }}));
+          fallback.setItem("key", "fresh");
+          if (fallback.getItem("key") !== "fresh") return false;
+          fallback.removeItem("key");
+          return fallback.getItem("key") === null;
+        }})()
+      `, context);
+      if (!overlayWorks) process.exit(4);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_application_reports_missing_helper_scripts_without_crashing() -> None:
     app_path = str((STATIC_DIR / "app.js").resolve())
     script = f"""

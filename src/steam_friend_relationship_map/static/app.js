@@ -1,5 +1,65 @@
 const $ = (id) => document.getElementById(id);
 
+function createSafeStorage(storageProvider = () => globalThis.localStorage) {
+  const memory = new Map();
+  const removed = new Set();
+
+  function browserStorage() {
+    try {
+      return storageProvider();
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    getItem(key) {
+      if (memory.has(key)) return memory.get(key);
+      if (removed.has(key)) return null;
+      try {
+        const value = browserStorage()?.getItem(key);
+        if (value !== null && value !== undefined) return value;
+      } catch {
+        // Fall through to page-local memory when browser storage is blocked.
+      }
+      return memory.get(key) ?? null;
+    },
+    setItem(key, value) {
+      const normalized = String(value);
+      try {
+        const storage = browserStorage();
+        if (storage) {
+          storage.setItem(key, normalized);
+          memory.delete(key);
+          removed.delete(key);
+          return;
+        }
+      } catch {
+        // Keep the new value in page-local memory when persistence fails.
+      }
+      memory.set(key, normalized);
+      removed.delete(key);
+    },
+    removeItem(key) {
+      try {
+        const storage = browserStorage();
+        if (storage) {
+          storage.removeItem(key);
+          memory.delete(key);
+          removed.delete(key);
+          return;
+        }
+      } catch {
+        // Mask a stale persisted value when deletion cannot reach storage.
+      }
+      memory.delete(key);
+      removed.add(key);
+    },
+  };
+}
+
+const appStorage = createSafeStorage();
+
 const FALLBACK_ZH = {
   "app.title": "Steam 好友关系图谱",
   "app.subtitle": "Neo4j 本地图数据库",
@@ -39,7 +99,7 @@ let selectedNode = null;
 let currentGraph = { nodes: [], edges: [], limited: false };
 let currentNetworkAnalysis = null;
 let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
-let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
+let currentLang = appStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
 const startupDependencyErrors = [];
@@ -125,7 +185,7 @@ function t(key, params = {}) {
 
 function setLanguage(lang) {
   currentLang = i18n[lang] ? lang : "zh-CN";
-  localStorage.setItem("sfm_lang", currentLang);
+  appStorage.setItem("sfm_lang", currentLang);
   applyTranslations();
   if (currentNetworkAnalysis) renderNetworkAnalysisResults(currentNetworkAnalysis);
   if (selectedNode) fillProfile(selectedNode);
@@ -134,10 +194,10 @@ function setLanguage(lang) {
 // ── Theme ─────────────────────────────────────────────────────────
 
 function initTheme() {
-  const saved = localStorage.getItem("sfm_theme") || "auto";
+  const saved = appStorage.getItem("sfm_theme") || "auto";
   applyTheme(saved);
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if ((localStorage.getItem("sfm_theme") || "auto") === "auto") {
+    if ((appStorage.getItem("sfm_theme") || "auto") === "auto") {
       applyTheme("auto");
     }
   });
@@ -221,14 +281,14 @@ function applyTheme(mode) {
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     document.documentElement.toggleAttribute("data-theme", prefersDark);
   }
-  localStorage.setItem("sfm_theme", mode);
+  appStorage.setItem("sfm_theme", mode);
   updateCytoscapeStyle();
   updateThemeToggleIcon(mode);
 }
 
 function cycleTheme() {
   const modes = ["auto", "light", "dark"];
-  const current = localStorage.getItem("sfm_theme") || "auto";
+  const current = appStorage.getItem("sfm_theme") || "auto";
   const next = modes[(modes.indexOf(current) + 1) % modes.length];
   applyTheme(next);
   toast(t(`theme.${next}`));
@@ -1102,17 +1162,17 @@ function startTimer(startedAt = null) {
 
 function saveRecentRoot(url, name, avatar, id) {
   let roots = [];
-  try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  try { roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
   roots = roots.filter(r => r.url !== url);
   roots.unshift({ url, name: name || url, avatar, id: id || "" });
   if (roots.length > 10) roots = roots.slice(0, 10);
-  try { localStorage.setItem("sfm_recent_roots", JSON.stringify(roots)); } catch { /* */ }
+  try { appStorage.setItem("sfm_recent_roots", JSON.stringify(roots)); } catch { /* */ }
   renderRecentRoots();
 }
 
 function renderRecentRoots() {
   let roots = [];
-  try { roots = JSON.parse(localStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  try { roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
   const list = $("recentRootsList");
   const count = $("recentRootsCount");
   list.innerHTML = "";
@@ -1168,7 +1228,7 @@ function applyConfig(cfg) {
 
 function loadPresets() {
   let presets = {};
-  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  try { presets = JSON.parse(appStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
   const sel = $("presetSelect");
   sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
   Object.keys(presets).forEach(name => {
@@ -1185,9 +1245,9 @@ function savePreset() {
   if (!name || !name.trim()) return;
   const cfg = getCurrentConfig();
   let presets = {};
-  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  try { presets = JSON.parse(appStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
   presets[name.trim()] = cfg;
-  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+  appStorage.setItem(PRESET_KEY, JSON.stringify(presets));
   loadPresets();
   toast(t("preset.saved"));
 }
@@ -1195,7 +1255,7 @@ function savePreset() {
 function applyPreset(name) {
   if (!name) return;
   let presets = {};
-  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  try { presets = JSON.parse(appStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
   const cfg = presets[name];
   if (cfg) { applyConfig(cfg); toast(t("preset.applied", { name })); }
 }
@@ -1204,20 +1264,20 @@ function deletePreset() {
   const name = $("presetSelect").value;
   if (!name) return;
   let presets = {};
-  try { presets = JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
+  try { presets = JSON.parse(appStorage.getItem(PRESET_KEY) || "{}"); } catch { /* */ }
   delete presets[name];
-  localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+  appStorage.setItem(PRESET_KEY, JSON.stringify(presets));
   loadPresets();
   toast(t("preset.deleted"));
 }
 
 function autoSaveLastConfig() {
-  try { localStorage.setItem(LAST_CONFIG_KEY, JSON.stringify(getCurrentConfig())); } catch { /* */ }
+  try { appStorage.setItem(LAST_CONFIG_KEY, JSON.stringify(getCurrentConfig())); } catch { /* */ }
 }
 
 function autoLoadLastConfig() {
   let cfg = null;
-  try { cfg = JSON.parse(localStorage.getItem(LAST_CONFIG_KEY)); } catch { /* */ }
+  try { cfg = JSON.parse(appStorage.getItem(LAST_CONFIG_KEY)); } catch { /* */ }
   if (cfg) applyConfig(cfg);
 }
 
@@ -1877,10 +1937,10 @@ function wireEvents() {
   $("systemLogLevel").addEventListener("change", () => loadSystemLogs(true).catch(() => {}));
   $("graphSizeBy").addEventListener("change", () => renderGraph(currentGraph));
   $("graphLayoutBias").addEventListener("change", runLayout);
-  const savedCommunityColors = localStorage.getItem("sfm_community_colors");
+  const savedCommunityColors = appStorage.getItem("sfm_community_colors");
   if (savedCommunityColors !== null) $("communityColors").checked = savedCommunityColors === "true";
   $("communityColors").addEventListener("change", () => {
-    localStorage.setItem("sfm_community_colors", String($("communityColors").checked));
+    appStorage.setItem("sfm_community_colors", String($("communityColors").checked));
     renderGraph(currentGraph);
   });
   
@@ -1889,7 +1949,7 @@ function wireEvents() {
   const limitToggle = $("graphLimitToggle");
   const limitBtn = $("graphLimitBtn");
   if (limitInput && limitToggle) {
-    const savedNoLimit = localStorage.getItem("sfm_no_limit") === "true";
+    const savedNoLimit = appStorage.getItem("sfm_no_limit") === "true";
     limitToggle.checked = savedNoLimit;
     limitInput.max = savedNoLimit ? 100000 : 2000;
 
@@ -1912,7 +1972,7 @@ function wireEvents() {
     
     limitToggle.addEventListener("change", () => {
       const isChecked = limitToggle.checked;
-      localStorage.setItem("sfm_no_limit", isChecked);
+      appStorage.setItem("sfm_no_limit", isChecked);
       limitInput.max = isChecked ? 100000 : 2000;
       if (!isChecked && Number(limitInput.value) > 2000) {
         limitInput.value = 2000;
@@ -2012,7 +2072,7 @@ function initResizeHandles() {
   const STORAGE_KEY = "sfm_panel_sizes";
   let saved = null;
   try {
-    saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    saved = JSON.parse(appStorage.getItem(STORAGE_KEY));
   } catch { /* ignore */ }
 
   // 仅在用户拖拽过时才用 px 覆盖 CSS 的 fr 比例
@@ -2021,7 +2081,7 @@ function initResizeHandles() {
   }
 
   function persist(left, right) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ left, right })); } catch { /* ignore */ }
+    try { appStorage.setItem(STORAGE_KEY, JSON.stringify({ left, right })); } catch { /* ignore */ }
   }
 
   function makeDraggable(handle, side) {
@@ -2080,7 +2140,7 @@ function initResizeHandles() {
   // 双击 → 清除保存 → 恢复 CSS 默认 fr 比例
   function resetToRatio() {
     shell.style.gridTemplateColumns = "";
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    try { appStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
   }
   leftHandle.addEventListener("dblclick", resetToRatio);
   rightHandle.addEventListener("dblclick", resetToRatio);
@@ -2095,12 +2155,12 @@ function initConsole() {
 
   const STORAGE_KEY = "sfm_console";
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch { /* ignore */ }
+  try { saved = JSON.parse(appStorage.getItem(STORAGE_KEY)); } catch { /* ignore */ }
 
   const state = { open: saved?.open ?? true, height: saved?.height ?? 220 };
 
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
+    try { appStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore */ }
   }
 
   function apply() {
