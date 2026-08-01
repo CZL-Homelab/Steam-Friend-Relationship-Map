@@ -270,6 +270,60 @@ def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert "4" in candidate_ids
 
 
+def test_kuzu_path_and_friend_circle_use_bounded_bfs(
+    temp_kuzu_repo: KuzuRepositoryImpl, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="root", persona_name="Root", depth_min=0),
+            SteamUserRecord(steam_id="a", persona_name="A", depth_min=1),
+            SteamUserRecord(steam_id="b", persona_name="B", depth_min=1),
+            SteamUserRecord(steam_id="c", persona_name="C", depth_min=2),
+            SteamUserRecord(steam_id="d", persona_name="D", depth_min=2),
+        ],
+        "default",
+    )
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="root", to_id="a", crawl_id="run", source_depth=0),
+            FriendEdge(from_id="root", to_id="b", crawl_id="run", source_depth=0),
+            FriendEdge(from_id="a", to_id="c", crawl_id="run", source_depth=1),
+            FriendEdge(from_id="b", to_id="c", crawl_id="run", source_depth=1),
+            FriendEdge(from_id="a", to_id="d", crawl_id="run", source_depth=1),
+            FriendEdge(from_id="c", to_id="d", crawl_id="run", source_depth=2),
+        ],
+        "default",
+    )
+
+    connection = repo._get_conn()
+    counting = CountingConnection(connection)
+    monkeypatch.setattr(repo, "_get_conn", lambda: counting)
+
+    assert repo.get_shortest_path("root", "d", 1, "default").nodes == []
+    path = repo.get_shortest_path("root", "d", 2, "default")
+    assert [node.id for node in path.nodes] == ["root", "a", "d"]
+    assert [edge.source for edge in path.edges] == ["root", "a"]
+    assert [node.id for node in repo.get_shortest_path("root", "root", 0, "default").nodes] == ["root"]
+
+    analysis = repo.get_friend_circle_analysis(
+        root="root",
+        max_depth=2,
+        min_mutual=2,
+        limit=10,
+        project_id="default",
+    )
+    assert [candidate.steam_id for candidate in analysis.candidates] == ["c"]
+    assert analysis.candidates[0].depth == 2
+    assert analysis.candidates[0].mutual_count == 2
+    assert [node.id for node in analysis.candidates[0].evidence] == ["a", "b"]
+
+    normalized_queries = [" ".join(query.split()) for query in counting.queries]
+    assert all("MATCH p=" not in query for query in normalized_queries)
+    assert all(":STEAM_FRIEND*" not in query for query in normalized_queries)
+
+
 def test_kuzu_batches_large_graph_writes_and_deduplicates_relationships(
     temp_kuzu_repo: KuzuRepositoryImpl, monkeypatch: pytest.MonkeyPatch
 ) -> None:

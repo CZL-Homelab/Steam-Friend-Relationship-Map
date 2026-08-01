@@ -83,6 +83,19 @@ def _parse_node(row_val: Any) -> dict[str, Any]:
     return {}
 
 
+def _consume_rows(result: Any) -> list[list[Any]]:
+    """Consume and close a Kuzu result so it cannot retain buffer-pool pages."""
+    try:
+        rows = []
+        while result.has_next():
+            rows.append(result.get_next())
+        return rows
+    finally:
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+
+
 class KuzuRepositoryImpl(IGraphRepository):
     """Kùzu 进程内嵌入式图数据库实现。"""
 
@@ -380,8 +393,8 @@ class KuzuRepositoryImpl(IGraphRepository):
 
     @staticmethod
     def _scalar_count(conn: kuzu.Connection, query: str, params: dict[str, Any]) -> int:
-        res = conn.execute(query, params)
-        return int(res.get_next()[0] or 0) if res.has_next() else 0
+        rows = _consume_rows(conn.execute(query, params))
+        return int(rows[0][0] or 0) if rows else 0
 
     def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
         import uuid
@@ -989,10 +1002,24 @@ class KuzuRepositoryImpl(IGraphRepository):
             {"steam_ids": steam_ids, "project_id": project_id},
         )
         metadata: dict[str, dict[str, Any]] = {}
-        while result.has_next():
-            steam_id, membership = result.get_next()
+        for steam_id, membership in _consume_rows(result):
             metadata[steam_id] = membership if isinstance(membership, dict) else {}
         return metadata
+
+    @staticmethod
+    def _users_by_id(
+        conn: kuzu.Connection, steam_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        if not steam_ids:
+            return {}
+        rows = _consume_rows(
+            conn.execute(
+                "MATCH (u:SteamUser) WHERE u.steam_id IN $steam_ids RETURN u",
+                {"steam_ids": list(dict.fromkeys(steam_ids))},
+            )
+        )
+        users = [_parse_node(row[0]) for row in rows]
+        return {user.get("steam_id", ""): user for user in users if user.get("steam_id")}
 
     def _graph_node(
         self, data: dict[str, Any], degree: int, metadata: dict[str, Any] | None = None
@@ -1017,46 +1044,56 @@ class KuzuRepositoryImpl(IGraphRepository):
             root_friend_circle_score=data.get("root_friend_circle_score") or 0,
         )
 
-    def _reachable_ids_from_root(
+    def _bfs_from_root(
         self, conn: kuzu.Connection, root: str, depth: int, project_id: str
-    ) -> tuple[list[str], bool, int, bool]:
+    ) -> tuple[list[str], dict[str, int], dict[str, str], bool, int]:
         if depth < 0:
-            return [], False, 0, False
+            return [], {}, {}, False, 0
 
-        root_res = conn.execute(
-            """
-            MATCH (r:SteamUser)-[:IN_PROJECT]->(p:Project)
-            WHERE r.steam_id = $root AND p.id = $project_id
-            RETURN r.steam_id
-            """,
-            {"root": root, "project_id": project_id},
+        root_rows = _consume_rows(
+            conn.execute(
+                """
+                MATCH (r:SteamUser)-[:IN_PROJECT]->(p:Project)
+                WHERE r.steam_id = $root AND p.id = $project_id
+                RETURN r.steam_id
+                """,
+                {"root": root, "project_id": project_id},
+            )
         )
-        if not root_res.has_next():
-            return [], False, 0, bool(depth)
+        if not root_rows:
+            return [], {}, {}, False, 0
 
         ordered_ids = [root]
         seen = {root}
+        depths = {root: 0}
+        parents: dict[str, str] = {}
         frontier = [root]
         reached = 0
 
         for next_depth in range(1, depth + 1):
             if not frontier:
                 break
-            res = conn.execute(
-                """
-                MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
-                WHERE a.steam_id IN $frontier
-                  AND coalesce(r.project_id, '') IN $project_ids
-                RETURN DISTINCT b.steam_id
-                """,
-                {"frontier": frontier, "project_ids": self._visible_project_ids(project_id)},
+            rows = _consume_rows(
+                conn.execute(
+                    """
+                    MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+                    WHERE a.steam_id IN $frontier
+                      AND coalesce(r.project_id, '') IN $project_ids
+                    RETURN DISTINCT a.steam_id, b.steam_id
+                    """,
+                    {
+                        "frontier": frontier,
+                        "project_ids": self._visible_project_ids(project_id),
+                    },
+                )
             )
             next_frontier = []
-            while res.has_next():
-                candidate = res.get_next()[0]
+            for source, candidate in sorted(rows, key=lambda row: (row[1], row[0])):
                 if candidate in seen:
                     continue
                 seen.add(candidate)
+                depths[candidate] = next_depth
+                parents[candidate] = source
                 ordered_ids.append(candidate)
                 next_frontier.append(candidate)
             if not next_frontier:
@@ -1064,7 +1101,15 @@ class KuzuRepositoryImpl(IGraphRepository):
             frontier = next_frontier
             reached = next_depth
 
-        return ordered_ids, True, reached, reached < depth
+        return ordered_ids, depths, parents, True, reached
+
+    def _reachable_ids_from_root(
+        self, conn: kuzu.Connection, root: str, depth: int, project_id: str
+    ) -> tuple[list[str], bool, int, bool]:
+        ordered_ids, _, _, root_found, reached = self._bfs_from_root(
+            conn, root, depth, project_id
+        )
+        return ordered_ids, root_found, reached, bool(root_found and reached < depth)
 
     def _root_friend_circle_metrics(
         self,
@@ -1080,18 +1125,22 @@ class KuzuRepositoryImpl(IGraphRepository):
             return {}
         target_set = set(target_ids)
 
-        res = conn.execute(
-            """
-            MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
-            WHERE a.steam_id IN $ids AND b.steam_id IN $ids
-              AND coalesce(r.project_id, '') IN $project_ids
-            RETURN a.steam_id, b.steam_id
-            """,
-            {"ids": reachable_ids, "project_ids": self._visible_project_ids(project_id)},
+        rows = _consume_rows(
+            conn.execute(
+                """
+                MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+                WHERE a.steam_id IN $ids AND b.steam_id IN $ids
+                  AND coalesce(r.project_id, '') IN $project_ids
+                RETURN a.steam_id, b.steam_id
+                """,
+                {
+                    "ids": reachable_ids,
+                    "project_ids": self._visible_project_ids(project_id),
+                },
+            )
         )
         adjacency = {steam_id: set() for steam_id in reachable_ids}
-        while res.has_next():
-            source, target = res.get_next()
+        for source, target in rows:
             if source == target:
                 continue
             adjacency.setdefault(source, set()).add(target)
@@ -1101,39 +1150,55 @@ class KuzuRepositoryImpl(IGraphRepository):
             steam_id: sorted(neighbors)
             for steam_id, neighbors in adjacency.items()
         }
-        route_counts = {steam_id: 0 for steam_id in target_set}
-        total_hops = {steam_id: 0 for steam_id in target_set}
-        capped_targets = 0
-        max_capped_targets = max(0, len(target_set - {root}))
-
-        def walk(current: str, remaining_depth: int, path: set[str], hops: int) -> None:
-            nonlocal capped_targets
-            if remaining_depth <= 0:
-                return
-            for neighbor in neighbors_by_id.get(current, ()):
-                if capped_targets >= max_capped_targets:
-                    return
-                if neighbor in path:
-                    continue
-                if neighbor in target_set and route_counts.get(neighbor, 0) < route_cap:
-                    route_counts[neighbor] += 1
-                    total_hops[neighbor] += hops + 1
-                    if neighbor != root and route_counts[neighbor] == route_cap:
-                        capped_targets += 1
-                if remaining_depth > 1:
-                    path.add(neighbor)
-                    walk(neighbor, remaining_depth - 1, path, hops + 1)
-                    path.remove(neighbor)
-
-        walk(root, depth, {root}, 0)
-
         metrics: dict[str, tuple[int, int, float]] = {}
         for steam_id in target_ids:
             if steam_id == root:
                 metrics[steam_id] = (1, 0, 1_000_000.0)
                 continue
-            count = min(route_counts.get(steam_id, 0), route_cap)
-            hops = total_hops.get(steam_id, 0)
+
+            distance_to_target = {steam_id: 0}
+            frontier = [steam_id]
+            for next_distance in range(1, depth + 1):
+                next_frontier = []
+                for current in frontier:
+                    for neighbor in neighbors_by_id.get(current, ()):
+                        if neighbor in distance_to_target:
+                            continue
+                        distance_to_target[neighbor] = next_distance
+                        next_frontier.append(neighbor)
+                if not next_frontier:
+                    break
+                frontier = next_frontier
+
+            count = 0
+            hops = 0
+
+            def walk_target(
+                current: str, remaining_depth: int, path: set[str], path_hops: int
+            ) -> None:
+                nonlocal count, hops
+                if count >= route_cap or remaining_depth <= 0:
+                    return
+                for neighbor in neighbors_by_id.get(current, ()):
+                    if count >= route_cap:
+                        return
+                    if neighbor in path:
+                        continue
+                    next_hops = path_hops + 1
+                    if neighbor == steam_id:
+                        count += 1
+                        hops += next_hops
+                        continue
+                    if remaining_depth <= 1:
+                        continue
+                    if distance_to_target.get(neighbor, depth + 1) > remaining_depth - 1:
+                        continue
+                    path.add(neighbor)
+                    walk_target(neighbor, remaining_depth - 1, path, next_hops)
+                    path.remove(neighbor)
+
+            if distance_to_target.get(root, depth + 1) <= depth:
+                walk_target(root, depth, {root}, 0)
             score = float(count * 1000 - hops) if count else 0.0
             metrics[steam_id] = (count, hops, score)
         return metrics
@@ -1230,10 +1295,7 @@ class KuzuRepositoryImpl(IGraphRepository):
             LIMIT $limit
             """
 
-        res_nodes = conn.execute(node_query, params)
-        records = []
-        while res_nodes.has_next():
-            records.append(res_nodes.get_next())
+        records = _consume_rows(conn.execute(node_query, params))
         limited = len(records) > limit
         records = records[:limit]
         nodes = [
@@ -1266,20 +1328,21 @@ class KuzuRepositoryImpl(IGraphRepository):
                 depth_incomplete=depth_incomplete,
             )
 
-        res_edges = conn.execute(
-            """
-            MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
-            WHERE a.steam_id IN $ids AND b.steam_id IN $ids AND a.steam_id < b.steam_id
-              AND coalesce(r.project_id, '') IN $project_ids
-            RETURN a.steam_id, b.steam_id
-            LIMIT 5000
-            """,
-            {"ids": ids, "project_ids": self._visible_project_ids(project_id)}
+        edge_rows = _consume_rows(
+            conn.execute(
+                """
+                MATCH (a:SteamUser)-[r:STEAM_FRIEND]-(b:SteamUser)
+                WHERE a.steam_id IN $ids AND b.steam_id IN $ids AND a.steam_id < b.steam_id
+                  AND coalesce(r.project_id, '') IN $project_ids
+                RETURN a.steam_id, b.steam_id
+                LIMIT 5000
+                """,
+                {"ids": ids, "project_ids": self._visible_project_ids(project_id)},
+            )
         )
 
         edges = []
-        while res_edges.has_next():
-            row = res_edges.get_next()
+        for row in edge_rows:
             edges.append(GraphEdge(
                 id=f"{row[0]}-{row[1]}",
                 source=row[0],
@@ -1301,38 +1364,31 @@ class KuzuRepositoryImpl(IGraphRepository):
     ) -> GraphResponse:
         max_depth = max(0, min(max_depth, 4))
         conn = self._get_conn()
-        res = conn.execute(
-            f"""
-            WITH $project_ids AS project_ids, $from_id AS fid, $to_id AS tid
-            MATCH (a:SteamUser {{steam_id: fid}})-[:IN_PROJECT]->(project:Project)
-            MATCH (b:SteamUser {{steam_id: tid}})-[:IN_PROJECT]->(project)
-            WHERE project.id = $project_id
-            MATCH p=(a:SteamUser {{steam_id: fid}})-[:STEAM_FRIEND*..{max_depth}]-(b:SteamUser {{steam_id: tid}})
-            WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN project_ids)
-            RETURN nodes(p)
-            ORDER BY length(p) ASC
-            LIMIT 1
-            """,
-            {
-                "from_id": from_id,
-                "to_id": to_id,
-                "project_id": project_id,
-                "project_ids": self._visible_project_ids(project_id),
-            }
-        )
-        if not res.has_next():
+        endpoint_metadata = self._project_metadata(conn, [from_id, to_id], project_id)
+        if from_id not in endpoint_metadata or to_id not in endpoint_metadata:
             return GraphResponse(nodes=[], edges=[])
 
-        path_nodes = res.get_next()[0]
-        parsed_nodes = [_parse_node(raw_node) for raw_node in path_nodes]
-        metadata = self._project_metadata(
-            conn,
-            [node.get("steam_id", "") for node in parsed_nodes],
-            project_id,
+        _, depths, parents, root_found, _ = self._bfs_from_root(
+            conn, from_id, max_depth, project_id
         )
+        if not root_found or to_id not in depths:
+            return GraphResponse(nodes=[], edges=[])
+
+        path_ids = [to_id]
+        while path_ids[-1] != from_id:
+            parent = parents.get(path_ids[-1])
+            if parent is None:
+                return GraphResponse(nodes=[], edges=[])
+            path_ids.append(parent)
+        path_ids.reverse()
+
+        users = self._users_by_id(conn, path_ids)
+        metadata = self._project_metadata(conn, path_ids, project_id)
         nodes = []
-        for node_dict in parsed_nodes:
-            steam_id = node_dict.get("steam_id", "")
+        for steam_id in path_ids:
+            node_dict = users.get(steam_id)
+            if node_dict is None:
+                return GraphResponse(nodes=[], edges=[])
             nodes.append(self._graph_node(node_dict, 0, metadata.get(steam_id)))
 
         edges = []
@@ -1354,96 +1410,101 @@ class KuzuRepositoryImpl(IGraphRepository):
         min_mutual = max(0, min_mutual)
         limit = max(1, min(limit, 100))
         conn = self._get_conn()
-
-        res = conn.execute(
-            f"""
-            WITH $project_ids AS project_ids, $root AS root_id
-            MATCH (root:SteamUser {{steam_id: root_id}})-[:IN_PROJECT]->(project:Project)
-            WHERE project.id = $project_id
-            MATCH p=(root)-[:STEAM_FRIEND*2..{max_depth}]-(candidate:SteamUser)
-            WHERE all(r IN relationships(p) WHERE coalesce(r.project_id, '') IN project_ids)
-            WITH root, candidate, min(length(p)) AS depth, project, project_ids
-            MATCH (candidate)-[candidate_membership:IN_PROJECT]->(project)
-            WHERE candidate.steam_id <> root.steam_id
-              AND NOT EXISTS {{
-                MATCH (root)-[direct:STEAM_FRIEND]-(candidate)
-                WHERE coalesce(direct.project_id, '') IN project_ids
-              }}
-            MATCH (candidate)-[evidence_rel:STEAM_FRIEND]-(evidence:SteamUser)
-            MATCH (evidence)-[evidence_membership:IN_PROJECT]->(project)
-            WHERE coalesce(evidence_rel.project_id, '') IN project_ids
-              AND (
-                coalesce(evidence_membership.depth_min, 999) < coalesce(candidate_membership.depth_min, 999)
-                OR EXISTS {{
-                  MATCH (root)-[root_rel:STEAM_FRIEND]-(evidence)
-                  WHERE coalesce(root_rel.project_id, '') IN project_ids
-                }}
-              )
-            WITH candidate,
-                 candidate_membership,
-                 depth,
-                 collect(DISTINCT evidence) AS all_evidence,
-                 count(DISTINCT evidence) AS mutual_count,
-                 project_ids
-            WHERE mutual_count >= $min_mutual
-            OPTIONAL MATCH (candidate)-[rel:STEAM_FRIEND]-()
-            WHERE coalesce(rel.project_id, '') IN project_ids
-            WITH candidate, candidate_membership, depth, all_evidence AS evidence_nodes, mutual_count, count(DISTINCT rel) AS degree
-            RETURN candidate,
-                   candidate_membership,
-                   depth,
-                   evidence_nodes,
-                   mutual_count,
-                   degree,
-                   (mutual_count * 10 + degree * 0.2 + coalesce(candidate.friend_count, 0) / 100.0 - depth * 3) AS score
-            ORDER BY score DESC, mutual_count DESC
-            LIMIT $limit
-            """,
-            {
-                "root": root,
-                "project_id": project_id,
-                "project_ids": self._visible_project_ids(project_id),
-                "min_mutual": min_mutual,
-                "limit": limit
-            }
+        ordered_ids, depths, _, root_found, _ = self._bfs_from_root(
+            conn, root, max_depth, project_id
         )
+        if not root_found:
+            return FriendCircleAnalysisResponse(root=root, candidates=[])
 
-        rows = []
-        while res.has_next():
-            rows.append(res.get_next())
-        evidence_ids = [
-            _parse_node(evidence).get("steam_id", "")
-            for row in rows
-            for evidence in row[3][:6]
-        ]
+        candidate_ids = [steam_id for steam_id in ordered_ids if depths[steam_id] >= 2]
+        if not candidate_ids:
+            return FriendCircleAnalysisResponse(root=root, candidates=[])
+
+        edge_rows = _consume_rows(
+            conn.execute(
+                """
+                MATCH (candidate:SteamUser)-[rel:STEAM_FRIEND]-(neighbor:SteamUser)
+                WHERE candidate.steam_id IN $candidate_ids
+                  AND coalesce(rel.project_id, '') IN $project_ids
+                RETURN candidate.steam_id, neighbor.steam_id
+                """,
+                {
+                    "candidate_ids": candidate_ids,
+                    "project_ids": self._visible_project_ids(project_id),
+                },
+            )
+        )
+        neighbors = {steam_id: set() for steam_id in candidate_ids}
+        for candidate_id, neighbor_id in edge_rows:
+            if candidate_id != neighbor_id:
+                neighbors.setdefault(candidate_id, set()).add(neighbor_id)
+
+        candidate_users = self._users_by_id(conn, candidate_ids)
+        candidate_metadata = self._project_metadata(conn, candidate_ids, project_id)
+        ranked: list[tuple[float, int, str, list[str]]] = []
+        for candidate_id in candidate_ids:
+            if candidate_id not in candidate_users:
+                continue
+            candidate_depth = depths[candidate_id]
+            evidence_ids = sorted(
+                (
+                    neighbor_id
+                    for neighbor_id in neighbors.get(candidate_id, set())
+                    if depths.get(neighbor_id, max_depth + 1) < candidate_depth
+                ),
+                key=lambda steam_id: (depths.get(steam_id, max_depth + 1), steam_id),
+            )
+            mutual_count = len(evidence_ids)
+            if mutual_count < min_mutual:
+                continue
+            node_dict = candidate_users.get(candidate_id, {})
+            degree = len(neighbors.get(candidate_id, set()))
+            friend_count = node_dict.get("friend_count") or 0
+            score = round(
+                mutual_count * 10
+                + degree * 0.2
+                + friend_count / 100.0
+                - candidate_depth * 3,
+                2,
+            )
+            ranked.append((score, mutual_count, candidate_id, evidence_ids[:6]))
+
+        ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        ranked = ranked[:limit]
+        evidence_ids = list(
+            dict.fromkeys(evidence_id for row in ranked for evidence_id in row[3])
+        )
+        evidence_users = self._users_by_id(conn, evidence_ids)
         evidence_metadata = self._project_metadata(conn, evidence_ids, project_id)
 
         candidates = []
-        for row in rows:
-            node_dict = _parse_node(row[0])
-            node = self._graph_node(node_dict, row[5], row[1])
-            evidence_list = []
-            for ev in row[3][:6]:
-                evidence = _parse_node(ev)
-                evidence_list.append(
-                    self._graph_node(
-                        evidence,
-                        0,
-                        evidence_metadata.get(evidence.get("steam_id", "")),
-                    )
+        for score, mutual_count, candidate_id, candidate_evidence_ids in ranked:
+            node = self._graph_node(
+                candidate_users[candidate_id],
+                len(neighbors.get(candidate_id, set())),
+                candidate_metadata.get(candidate_id),
+            )
+            evidence = [
+                self._graph_node(
+                    evidence_users[evidence_id],
+                    0,
+                    evidence_metadata.get(evidence_id),
                 )
+                for evidence_id in candidate_evidence_ids
+                if evidence_id in evidence_users
+            ]
             candidates.append(
                 FriendCircleCandidate(
                     steam_id=node.id,
                     label=node.label,
-                    depth=row[2],
+                    depth=depths[candidate_id],
                     avatar=node.avatar,
                     profile_url=node.profile_url,
                     degree=node.degree,
                     friend_count=node.friend_count,
-                    mutual_count=row[4],
-                    score=round(float(row[6] or 0.0), 2),
-                    evidence=evidence_list,
+                    mutual_count=mutual_count,
+                    score=score,
+                    evidence=evidence,
                 )
             )
         return FriendCircleAnalysisResponse(root=root, candidates=candidates)
