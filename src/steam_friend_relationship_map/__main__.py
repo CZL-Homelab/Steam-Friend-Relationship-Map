@@ -152,21 +152,30 @@ def main() -> None:
 
     try:
         init_env(force=args.init)
+    except Exception as exc:
+        print(f"启动初始化失败：{exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+    try:
         settings = get_settings()
     except ValidationError as exc:
         _print_settings_error(exc)
         raise SystemExit(2) from None
-    except RuntimeError as exc:
-        print(f"启动初始化失败：{exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"启动配置读取失败：{exc}", file=sys.stderr)
         raise SystemExit(2) from None
 
-    uvicorn.run(
-        "steam_friend_relationship_map.app:create_app",
-        host=settings.app_host,
-        port=settings.app_port,
-        factory=True,
-        reload=False,
-    )
+    try:
+        uvicorn.run(
+            "steam_friend_relationship_map.app:create_app",
+            host=settings.app_host,
+            port=settings.app_port,
+            factory=True,
+            reload=False,
+        )
+    except Exception as exc:
+        print(f"服务启动失败：{exc}", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

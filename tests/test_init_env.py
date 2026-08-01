@@ -196,3 +196,59 @@ def test_main_reports_invalid_settings_without_starting_server(
     assert "启动配置无效" in stderr
     assert "APP_PORT" in stderr
     run.assert_not_called()
+
+
+def test_main_reports_settings_source_failure_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["steam-friend-map"])
+    monkeypatch.setattr(main_module, "init_env", lambda force=False: None)
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        MagicMock(
+            side_effect=UnicodeDecodeError(
+                "utf-8",
+                b"\xff",
+                0,
+                1,
+                "invalid start byte",
+            )
+        ),
+    )
+    run = MagicMock()
+    monkeypatch.setattr(main_module.uvicorn, "run", run)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+
+    assert exit_info.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "启动配置读取失败" in stderr
+    assert "Traceback" not in stderr
+    run.assert_not_called()
+
+
+def test_main_reports_server_factory_failure_and_preserves_uvicorn_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["steam-friend-map"])
+    monkeypatch.setattr(main_module, "init_env", lambda force=False: None)
+    monkeypatch.setattr(main_module, "get_settings", lambda: Settings())
+    run = MagicMock(side_effect=RuntimeError("factory crashed"))
+    monkeypatch.setattr(main_module.uvicorn, "run", run)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+
+    assert exit_info.value.code == 1
+    assert "服务启动失败：factory crashed" in capsys.readouterr().err
+
+    run.side_effect = SystemExit(3)
+    with pytest.raises(SystemExit) as uvicorn_exit:
+        main_module.main()
+
+    assert uvicorn_exit.value.code == 3
+    assert capsys.readouterr().err == ""
