@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from datetime import UTC, datetime, timedelta
-
 from neo4j import GraphDatabase
+
 from .graph_repo import IGraphRepository
 from .models import (
     CrawlRun,
@@ -100,10 +100,13 @@ class Neo4jRepositoryImpl(IGraphRepository):
     @staticmethod
     def _migrate_project_memberships(session: Any) -> None:
         migration_id = "project-membership-v1"
-        if session.run(
-            "MATCH (m:SchemaMigration {id: $id}) RETURN m.id AS id",
-            id=migration_id,
-        ).single() is not None:
+        if (
+            session.run(
+                "MATCH (m:SchemaMigration {id: $id}) RETURN m.id AS id",
+                id=migration_id,
+            ).single()
+            is not None
+        ):
             return
 
         now = utc_now_iso()
@@ -151,10 +154,13 @@ class Neo4jRepositoryImpl(IGraphRepository):
     @staticmethod
     def _migrate_project_member_metadata(session: Any) -> None:
         migration_id = "project-member-metadata-v2"
-        if session.run(
-            "MATCH (m:SchemaMigration {id: $id}) RETURN m.id AS id",
-            id=migration_id,
-        ).single() is not None:
+        if (
+            session.run(
+                "MATCH (m:SchemaMigration {id: $id}) RETURN m.id AS id",
+                id=migration_id,
+            ).single()
+            is not None
+        ):
             return
 
         session.run(
@@ -185,8 +191,11 @@ class Neo4jRepositoryImpl(IGraphRepository):
         """Ensure the 'default' project exists and return its id."""
         return self.create_project(ProjectCreate(name="默认项目"), project_id="default")
 
-    def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
+    def create_project(
+        self, payload: ProjectCreate, project_id: str | None = None
+    ) -> str:
         import uuid
+
         pid = project_id or str(uuid.uuid4())
         now = utc_now_iso()
         with self.driver.session() as session:
@@ -249,27 +258,34 @@ class Neo4jRepositoryImpl(IGraphRepository):
 
     def project_exists(self, project_id: str) -> bool:
         with self.driver.session() as session:
-            result = session.run("MATCH (p:Project {id: $pid}) RETURN p", pid=project_id).single()
+            result = session.run(
+                "MATCH (p:Project {id: $pid}) RETURN p", pid=project_id
+            ).single()
             return result is not None
 
     def list_projects(self) -> ProjectListResponse:
         with self.driver.session() as session:
-            project_records = list(session.run(
-                """
+            project_records = list(
+                session.run(
+                    """
                 MATCH (p:Project)
                 RETURN p.id AS id, p.name AS name, p.created_at AS created_at
                 ORDER BY p.created_at DESC
                 """
-            ))
+                )
+            )
             if project_records:
-                user_records = list(session.run(
-                    """
+                user_records = list(
+                    session.run(
+                        """
                     MATCH (:SteamUser)-[:IN_PROJECT]->(p:Project)
                     RETURN p.id AS project_id, count(*) AS user_count
                     """
-                ))
-                relationship_records = list(session.run(
-                    """
+                    )
+                )
+                relationship_records = list(
+                    session.run(
+                        """
                     MATCH ()-[r:STEAM_FRIEND]-()
                     WITH CASE
                         WHEN coalesce(r.project_id, '') = '' THEN 'default'
@@ -277,9 +293,11 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     END AS project_id, r
                     RETURN project_id, count(DISTINCT r) AS relationship_count
                     """
-                ))
-                crawl_records = list(session.run(
-                    """
+                    )
+                )
+                crawl_records = list(
+                    session.run(
+                        """
                     MATCH (c:CrawlRun)
                     WITH CASE
                         WHEN coalesce(c.project_id, '') = '' THEN 'default'
@@ -287,7 +305,8 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     END AS project_id
                     RETURN project_id, count(*) AS crawl_count
                     """
-                ))
+                    )
+                )
             else:
                 user_records = []
                 relationship_records = []
@@ -297,7 +316,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
             self.ensure_schema()
             self.ensure_default_project()
             return ProjectListResponse(
-                projects=[ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())],
+                projects=[
+                    ProjectInfo(id="default", name="默认项目", created_at=utc_now_iso())
+                ],
                 active_project_id="",
             )
         user_counts = {
@@ -364,11 +385,17 @@ class Neo4jRepositoryImpl(IGraphRepository):
             return
         assignments = ", ".join(f"r.{key} = ${key}" for key in fields)
         with self.driver.session() as session:
-            session.run(f"MATCH (r:CrawlRun {{id: $run_id}}) SET {assignments}", run_id=run_id, **fields).consume()
+            session.run(
+                f"MATCH (r:CrawlRun {{id: $run_id}}) SET {assignments}",
+                run_id=run_id,
+                **fields,
+            ).consume()
 
     def get_crawl_run(self, run_id: str) -> CrawlRun | None:
         with self.driver.session() as session:
-            record = session.run("MATCH (r:CrawlRun {id: $run_id}) RETURN r", run_id=run_id).single()
+            record = session.run(
+                "MATCH (r:CrawlRun {id: $run_id}) RETURN r", run_id=run_id
+            ).single()
         if record is None:
             return None
         return CrawlRun(**dict(record["r"]))
@@ -443,6 +470,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
                     project_id=project_id,
                     project_name="默认项目" if project_id == "default" else project_id,
                 ).consume()
+
     def mark_friend_list_status(
         self,
         steam_id: str,
@@ -520,7 +548,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
     def get_cached_friend_list(
         self, steam_id: str, valid_days: int, project_id: str
     ) -> tuple[str, list[str]] | None:
-        return self.get_cached_friend_lists([steam_id], valid_days, project_id).get(steam_id)
+        return self.get_cached_friend_lists([steam_id], valid_days, project_id).get(
+            steam_id
+        )
 
     def get_cached_friend_lists(
         self, steam_ids: Iterable[str], valid_days: int, project_id: str
@@ -563,7 +593,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 cached_lists[steam_id] = (status, list(friend_ids))
             return cached_lists
 
-    def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
+    def upsert_relationships(
+        self, edges: Iterable[FriendEdge], project_id: str
+    ) -> None:
         rows = [edge.model_dump(mode="json") for edge in edges]
         if not rows:
             return
@@ -713,7 +745,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
         }
         if query:
             params["query"] = query.lower()
-            filters.append("(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)")
+            filters.append(
+                "(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)"
+            )
         if category:
             params["category"] = category
             filters.append("coalesce(membership.category, '') = $category")
@@ -725,7 +759,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
             filters.append("coalesce(n.friend_count, -1) <= $friend_count_max")
         if prior_pool_min_links:
             params["prior_pool_min_links"] = prior_pool_min_links
-            filters.append("coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links")
+            filters.append(
+                "coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links"
+            )
         where = "WHERE " + " AND ".join(filters) if filters else ""
         sort_map = {
             "depth": "coalesce(membership.depth_min, 999)",
@@ -736,9 +772,13 @@ class Neo4jRepositoryImpl(IGraphRepository):
         }
         order_expr = sort_map.get(sort_by, sort_map["depth"])
         direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
-        root_ids = sorted(
-            dict.fromkeys(part.strip() for part in root.split(",") if part.strip())
-        )[:5] if root else []
+        root_ids = (
+            sorted(
+                dict.fromkeys(part.strip() for part in root.split(",") if part.strip())
+            )[:5]
+            if root
+            else []
+        )
         with self.driver.session() as session:
             if root_ids:
                 params["root_ids"] = root_ids
@@ -773,9 +813,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
             limited = len(records) > limit
             records = records[:limit]
             nodes = [
-                self._graph_node(
-                    record["n"], record["degree"], record["membership"]
-                )
+                self._graph_node(record["n"], record["degree"], record["membership"])
                 for record in records
             ]
             if root_ids:
@@ -802,7 +840,12 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 )
             )
         edges = [
-            GraphEdge(id=f"{record['source']}-{record['target']}", source=record["source"], target=record["target"], strength=record["strength"] or 1)
+            GraphEdge(
+                id=f"{record['source']}-{record['target']}",
+                source=record["source"],
+                target=record["target"],
+                strength=record["strength"] or 1,
+            )
             for record in edge_records
         ]
         if root_ids and nodes:
@@ -847,7 +890,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 )
         return GraphResponse(nodes=nodes, edges=edges, limited=limited)
 
-    def get_shortest_path(self, from_id: str, to_id: str, max_depth: int, project_id: str = "default") -> GraphResponse:
+    def get_shortest_path(
+        self, from_id: str, to_id: str, max_depth: int, project_id: str = "default"
+    ) -> GraphResponse:
         max_depth = self._safe_depth(max_depth, 4)
         with self.driver.session() as session:
             record = session.run(
@@ -879,10 +924,24 @@ class Neo4jRepositoryImpl(IGraphRepository):
             for index in range(len(path_nodes) - 1):
                 source = path_nodes[index]["steam_id"]
                 target = path_nodes[index + 1]["steam_id"]
-                edges.append(GraphEdge(id=f"{source}-{target}", source=source, target=target, strength=1))
+                edges.append(
+                    GraphEdge(
+                        id=f"{source}-{target}",
+                        source=source,
+                        target=target,
+                        strength=1,
+                    )
+                )
             return GraphResponse(nodes=nodes, edges=edges)
 
-    def get_friend_circle_analysis(self, root: str, max_depth: int = 3, min_mutual: int = 2, limit: int = 50, project_id: str = "default") -> FriendCircleAnalysisResponse:
+    def get_friend_circle_analysis(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> FriendCircleAnalysisResponse:
         max_depth = self._safe_depth(max_depth, 4)
         min_mutual = max(0, min_mutual)
         limit = max(1, min(limit, 100))
@@ -1089,7 +1148,9 @@ class Neo4jRepositoryImpl(IGraphRepository):
         )
         return PotentialFriendsResponse(root=root, candidates=candidates[:limit])
 
-    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
+    def get_top_degree(
+        self, limit: int = 12, project_id: str = "default"
+    ) -> list[GraphNode]:
         with self.driver.session() as session:
             records = list(
                 session.run(
@@ -1196,16 +1257,17 @@ class Neo4jRepositoryImpl(IGraphRepository):
         }
 
     @staticmethod
-    def _graph_node(
-        node: Any, degree: int, metadata: Any | None = None
-    ) -> GraphNode:
+    def _graph_node(node: Any, degree: int, metadata: Any | None = None) -> GraphNode:
         data = dict(node)
         member = dict(metadata) if metadata is not None else {}
         return GraphNode(
             id=data.get("steam_id", ""),
             label=data.get("persona_name") or data.get("steam_id", "Unknown"),
             depth=member.get("depth_min"),
-            avatar=data.get("avatar_full") or data.get("avatar_medium") or data.get("avatar") or "",
+            avatar=data.get("avatar_full")
+            or data.get("avatar_medium")
+            or data.get("avatar")
+            or "",
             profile_url=data.get("profile_url") or "",
             note=member.get("note") or "",
             tags=member.get("tags") or [],

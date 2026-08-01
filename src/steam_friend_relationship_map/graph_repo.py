@@ -13,7 +13,6 @@ from .models import (
     FriendListCacheUpdate,
     GraphNode,
     GraphResponse,
-    PotentialFriendCandidate,
     PotentialFriendsResponse,
     ProjectCreate,
     ProjectListResponse,
@@ -49,7 +48,9 @@ class IGraphRepository(ABC):
         pass
 
     @abstractmethod
-    def create_project(self, payload: ProjectCreate, project_id: str | None = None) -> str:
+    def create_project(
+        self, payload: ProjectCreate, project_id: str | None = None
+    ) -> str:
         """创建新项目，返回项目 ID。"""
         pass
 
@@ -129,7 +130,9 @@ class IGraphRepository(ABC):
         return cached_lists
 
     @abstractmethod
-    def upsert_relationships(self, edges: Iterable[FriendEdge], project_id: str) -> None:
+    def upsert_relationships(
+        self, edges: Iterable[FriendEdge], project_id: str
+    ) -> None:
         """批量更新或保存好友关系边。"""
         pass
 
@@ -211,7 +214,9 @@ class IGraphRepository(ABC):
         pass
 
     @abstractmethod
-    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
+    def get_top_degree(
+        self, limit: int = 12, project_id: str = "default"
+    ) -> list[GraphNode]:
         """获取当前项目中连接数最多的 Top 节点列表。"""
         pass
 

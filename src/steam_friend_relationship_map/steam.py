@@ -14,7 +14,6 @@ from .models import SteamUserRecord
 from .proxy import normalize_proxy_url
 from .rate_limiter import AdaptiveRateLimiter
 
-
 STEAM_ID_RE = re.compile(r"^\d{17}$")
 
 
@@ -67,9 +66,7 @@ class SteamClient:
         # Parse potential multiple keys separated by whitespace, commas, or semicolons
         keys = list(
             dict.fromkeys(
-                key.strip()
-                for key in re.split(r"[\s,;]+", api_key)
-                if key.strip()
+                key.strip() for key in re.split(r"[\s,;]+", api_key) if key.strip()
             )
         )
         self.api_keys = keys if keys else [""]
@@ -122,14 +119,22 @@ class SteamClient:
         if STEAM_ID_RE.match(raw):
             return raw
 
-        parsed = urlparse(raw if "://" in raw else f"https://steamcommunity.com/id/{raw}")
+        parsed = urlparse(
+            raw if "://" in raw else f"https://steamcommunity.com/id/{raw}"
+        )
         parts = [part for part in parsed.path.split("/") if part]
-        if len(parts) >= 2 and parts[0].lower() == "profiles" and STEAM_ID_RE.match(parts[1]):
+        if (
+            len(parts) >= 2
+            and parts[0].lower() == "profiles"
+            and STEAM_ID_RE.match(parts[1])
+        ):
             return parts[1]
         if len(parts) >= 2 and parts[0].lower() == "id":
             return await self.resolve_vanity_url(parts[1])
 
-        raise SteamApiError("请输入 Steam 64 位 ID、/profiles/<id> 或 /id/<vanity> 主页 URL")
+        raise SteamApiError(
+            "请输入 Steam 64 位 ID、/profiles/<id> 或 /id/<vanity> 主页 URL"
+        )
 
     async def resolve_vanity_url(self, vanity: str) -> str:
         data = await self._get_json(
@@ -145,7 +150,9 @@ class SteamClient:
         if not steam_ids:
             return []
         # Steam GetPlayerSummaries 支持批量 steamids，这里按 100 个一组降低请求次数。
-        chunks: list[list[str]] = [steam_ids[index : index + 100] for index in range(0, len(steam_ids), 100)]
+        chunks: list[list[str]] = [
+            steam_ids[index : index + 100] for index in range(0, len(steam_ids), 100)
+        ]
         records: list[SteamUserRecord] = []
         for chunk in chunks:
             data = await self._get_json(
@@ -161,7 +168,8 @@ class SteamClient:
                     SteamUserRecord(
                         steam_id=steam_id,
                         persona_name=player.get("personaname") or "Unknown",
-                        profile_url=player.get("profileurl") or f"https://steamcommunity.com/profiles/{steam_id}",
+                        profile_url=player.get("profileurl")
+                        or f"https://steamcommunity.com/profiles/{steam_id}",
                         avatar=player.get("avatar") or "",
                         avatar_medium=player.get("avatarmedium") or "",
                         avatar_full=player.get("avatarfull") or "",
@@ -183,9 +191,16 @@ class SteamClient:
                 return FriendListResult(steam_id=steam_id, friend_ids=[], private=True)
             raise
         friends = data.get("friendslist", {}).get("friends", [])
-        return FriendListResult(steam_id=steam_id, friend_ids=[str(item["steamid"]) for item in friends if item.get("steamid")])
+        return FriendListResult(
+            steam_id=steam_id,
+            friend_ids=[
+                str(item["steamid"]) for item in friends if item.get("steamid")
+            ],
+        )
 
-    async def _get_json(self, path: str, params: dict[str, str], retries: int = 3) -> dict:
+    async def _get_json(
+        self, path: str, params: dict[str, str], retries: int = 3
+    ) -> dict:
         # 安全注意事项：Steam Web API 要求 api_key 作为 URL 查询参数传递（GET ?key=...）。
         # 虽然通过 HTTPS 加密传输，但 key 会出现在服务器访问日志和可能的中间代理日志中。
         # 应用层日志已通过 AppLogBuffer.redact() 脱敏处理。

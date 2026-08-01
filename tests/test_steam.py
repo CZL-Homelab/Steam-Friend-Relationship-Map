@@ -8,7 +8,11 @@ import httpx
 import pytest
 
 from steam_friend_relationship_map.rate_limiter import AdaptiveRateLimiter
-from steam_friend_relationship_map.steam import SteamApiError, SteamClient, parse_retry_after
+from steam_friend_relationship_map.steam import (
+    SteamApiError,
+    SteamClient,
+    parse_retry_after,
+)
 
 
 def test_parse_retry_after_supports_seconds_and_http_dates() -> None:
@@ -16,7 +20,10 @@ def test_parse_retry_after_supports_seconds_and_http_dates() -> None:
     retry_at = now + timedelta(seconds=12)
 
     assert parse_retry_after("7.5", now=now) == 7.5
-    assert parse_retry_after(retry_at.strftime("%a, %d %b %Y %H:%M:%S GMT"), now=now) == 12.0
+    assert (
+        parse_retry_after(retry_at.strftime("%a, %d %b %Y %H:%M:%S GMT"), now=now)
+        == 12.0
+    )
     assert parse_retry_after("not-a-date", now=now) is None
 
 
@@ -35,7 +42,9 @@ async def test_steam_client_honors_retry_after_header() -> None:
     client = SteamClient("key-1,key-2", client=http_client, rate_limiter=limiter)
 
     with (
-        patch("steam_friend_relationship_map.steam.asyncio.sleep", new=AsyncMock()) as sleep,
+        patch(
+            "steam_friend_relationship_map.steam.asyncio.sleep", new=AsyncMock()
+        ) as sleep,
         patch("random.uniform", return_value=0.0),
     ):
         result = await client._get_json("/test", {}, retries=2)
@@ -132,7 +141,9 @@ def test_steam_client_rejects_invalid_proxy_url() -> None:
 async def test_resolve_profiles_url_without_network() -> None:
     client = SteamClient("key")
 
-    steam_id = await client.resolve_steam_id("https://steamcommunity.com/profiles/76561197960435530/")
+    steam_id = await client.resolve_steam_id(
+        "https://steamcommunity.com/profiles/76561197960435530/"
+    )
 
     assert steam_id == "76561197960435530"
 
@@ -141,11 +152,15 @@ async def test_resolve_profiles_url_without_network() -> None:
 async def test_resolve_vanity_url() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/ISteamUser/ResolveVanityURL/v0001/")
-        return httpx.Response(200, json={"response": {"success": 1, "steamid": "76561197960435530"}})
+        return httpx.Response(
+            200, json={"response": {"success": 1, "steamid": "76561197960435530"}}
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = SteamClient("key", base_url="https://api.test", client=http_client)
-        steam_id = await client.resolve_steam_id("https://steamcommunity.com/id/gabelogannewell")
+        steam_id = await client.resolve_steam_id(
+            "https://steamcommunity.com/id/gabelogannewell"
+        )
 
     assert steam_id == "76561197960435530"
 
@@ -168,7 +183,9 @@ async def test_private_friend_list_is_marked() -> None:
         return httpx.Response(401, json={})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-        client = SteamClient("key-1,key-2", base_url="https://api.test", client=http_client)
+        client = SteamClient(
+            "key-1,key-2", base_url="https://api.test", client=http_client
+        )
         result = await client.get_friend_list("76561197960435530")
 
     assert result.private is True

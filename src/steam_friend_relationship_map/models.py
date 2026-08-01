@@ -65,8 +65,14 @@ class CrawlCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_filters(self) -> "CrawlCreate":
-        if self.friend_count_min is not None and self.friend_count_max is not None and self.friend_count_min > self.friend_count_max:
-            raise ValueError("friend_count_min must be less than or equal to friend_count_max")
+        if (
+            self.friend_count_min is not None
+            and self.friend_count_max is not None
+            and self.friend_count_min > self.friend_count_max
+        ):
+            raise ValueError(
+                "friend_count_min must be less than or equal to friend_count_max"
+            )
         return self
 
 

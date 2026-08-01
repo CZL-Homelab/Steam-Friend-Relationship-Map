@@ -37,7 +37,9 @@ class FakeSteam:
     async def get_friend_list(self, steam_id: str) -> FriendListResult:
         if steam_id == "private":
             return FriendListResult(steam_id=steam_id, friend_ids=[], private=True)
-        return FriendListResult(steam_id=steam_id, friend_ids=self.friend_graph.get(steam_id, []))
+        return FriendListResult(
+            steam_id=steam_id, friend_ids=self.friend_graph.get(steam_id, [])
+        )
 
 
 class FakeRepo:
@@ -61,21 +63,32 @@ class FakeRepo:
         data.update(fields)
         self.runs[run_id] = CrawlRun(**data)
 
-    def upsert_users(self, users: list[SteamUserRecord], project_id: str = "default") -> None:
+    def upsert_users(
+        self, users: list[SteamUserRecord], project_id: str = "default"
+    ) -> None:
         for user in users:
             self.users[user.steam_id] = user
 
     def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
         self.statuses[steam_id] = status
 
-    def upsert_relationships(self, edges: list[FriendEdge], project_id: str = "default") -> None:
+    def upsert_relationships(
+        self, edges: list[FriendEdge], project_id: str = "default"
+    ) -> None:
         for edge in edges:
             self.edges.add(tuple(sorted((edge.from_id, edge.to_id))))
 
-    def get_cached_friend_list(self, steam_id: str, valid_days: int, project_id: str = "default") -> tuple[str, list[str]] | None:
+    def get_cached_friend_list(
+        self, steam_id: str, valid_days: int, project_id: str = "default"
+    ) -> tuple[str, list[str]] | None:
         return None
 
-    def count_inner_layer_links(self, candidate_ids: list[str], inner_pool: list[str], project_id: str = "default") -> dict[str, int]:
+    def count_inner_layer_links(
+        self,
+        candidate_ids: list[str],
+        inner_pool: list[str],
+        project_id: str = "default",
+    ) -> dict[str, int]:
         graph = {
             "root": ["a", "b"],
             "a": ["root", "c"],
@@ -159,7 +172,9 @@ class BatchStatusFakeRepo(FakeRepo):
         self.status_batches: list[list[str]] = []
 
     def mark_friend_list_status(self, steam_id: str, status: str, **_: object) -> None:
-        raise AssertionError("batch status persistence should not use the singular method")
+        raise AssertionError(
+            "batch status persistence should not use the singular method"
+        )
 
     def mark_friend_list_statuses(
         self,
@@ -271,7 +286,9 @@ async def test_crawl_terminal_write_failure_is_retried_and_contained() -> None:
 
 
 @pytest.mark.asyncio
-async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs() -> None:
+async def test_crawl_manager_shutdown_cancels_pending_work_and_rejects_new_runs() -> (
+    None
+):
     steam = HangingSteam()
     repo = FakeRepo()
     manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
@@ -572,7 +589,9 @@ async def test_crawl_bounds_concurrent_layer_expansion() -> None:
 @pytest.mark.asyncio
 async def test_crawl_persists_expansion_progress_once_per_request_batch() -> None:
     friend_ids = [f"friend-{index:02d}" for index in range(12)]
-    steam = TrackingSteam({"root": friend_ids, **{steam_id: [] for steam_id in friend_ids}})
+    steam = TrackingSteam(
+        {"root": friend_ids, **{steam_id: [] for steam_id in friend_ids}}
+    )
     repo = FakeRepo()
     manager = CrawlManager(repo, steam)  # type: ignore[arg-type]
 
@@ -677,7 +696,9 @@ async def test_crawl_respects_depth_and_records_private_nodes() -> None:
     repo = FakeRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
-    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=3, max_nodes=10, delay_ms=0))
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=3, max_nodes=10, delay_ms=0)
+    )
     await manager.controls[run.id].task
 
     finished = repo.runs[run.id]
@@ -693,7 +714,9 @@ async def test_crawl_respects_max_nodes() -> None:
     repo = FakeRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
-    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=4, max_nodes=3, delay_ms=0))
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=4, max_nodes=3, delay_ms=0)
+    )
     await manager.controls[run.id].task
 
     assert set(repo.users) == {"root", "a", "b"}
@@ -705,7 +728,11 @@ async def test_crawl_filters_by_friend_count() -> None:
     repo = FakeRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
-    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, friend_count_min=3))
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root", max_depth=1, max_nodes=10, delay_ms=0, friend_count_min=3
+        )
+    )
     await manager.controls[run.id].task
 
     assert set(repo.users) == {"root", "a", "b"}
@@ -718,7 +745,15 @@ async def test_crawl_filters_by_prior_pool_links() -> None:
     repo = FakeRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
-    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0, prior_pool_min_links=2))
+    run = await manager.create_crawl(
+        CrawlCreate(
+            root_url="root",
+            max_depth=1,
+            max_nodes=10,
+            delay_ms=0,
+            prior_pool_min_links=2,
+        )
+    )
     await manager.controls[run.id].task
 
     assert set(repo.users) == {"root", "a", "b"}
@@ -730,7 +765,9 @@ async def test_crawl_events_can_be_read_after_sequence() -> None:
     repo = FakeRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
-    run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0))
+    run = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+    )
     await manager.controls[run.id].task
     events = manager.get_events(run.id, after=1)
 
@@ -744,9 +781,13 @@ async def test_crawl_concurrency_lock() -> None:
     repo = FakeRepo()
     manager = CrawlManager(repo, FakeSteam())  # type: ignore[arg-type]
 
-    run1 = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0))
+    run1 = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+    )
     with pytest.raises(RuntimeError, match="已有活跃的抓取任务在运行中"):
-        await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0))
+        await manager.create_crawl(
+            CrawlCreate(root_url="root", max_depth=1, max_nodes=10, delay_ms=0)
+        )
 
     await manager.controls[run1.id].task
 
@@ -758,11 +799,15 @@ async def test_crawl_memory_leak_gc() -> None:
 
     runs = []
     for _ in range(15):
-        run = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=2, delay_ms=0))
+        run = await manager.create_crawl(
+            CrawlCreate(root_url="root", max_depth=1, max_nodes=2, delay_ms=0)
+        )
         await manager.controls[run.id].task
         runs.append(run.id)
 
-    run_16 = await manager.create_crawl(CrawlCreate(root_url="root", max_depth=1, max_nodes=2, delay_ms=0))
+    run_16 = await manager.create_crawl(
+        CrawlCreate(root_url="root", max_depth=1, max_nodes=2, delay_ms=0)
+    )
     await manager.controls[run_16.id].task
 
     for old_run_id in runs[:5]:
@@ -788,8 +833,11 @@ class MockAuthBreakerSteam:
     async def get_friend_list(self, steam_id: str) -> FriendListResult:
         self.calls += 1
         if steam_id == "root":
-            return FriendListResult(steam_id="root", friend_ids=[f"f{index}" for index in range(1, 11)])
+            return FriendListResult(
+                steam_id="root", friend_ids=[f"f{index}" for index in range(1, 11)]
+            )
         from steam_friend_relationship_map.steam import SteamApiError
+
         raise SteamApiError("Unauthorized", status_code=401)
 
 

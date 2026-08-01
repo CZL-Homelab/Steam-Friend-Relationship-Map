@@ -12,7 +12,9 @@ from steam_friend_relationship_map.neo4j_repo import Neo4jRepositoryImpl
 
 
 class _FakeResult:
-    def __init__(self, query: str, params: dict[str, Any], driver: "_FakeDriver") -> None:
+    def __init__(
+        self, query: str, params: dict[str, Any], driver: "_FakeDriver"
+    ) -> None:
         self.query = query
         self.params = params
         self.driver = driver
@@ -23,7 +25,9 @@ class _FakeResult:
     def single(self) -> dict[str, Any] | None:
         if "RETURN m.id AS id" in self.query:
             migration_id = str(self.params["id"])
-            return {"id": migration_id} if migration_id in self.driver.migrations else None
+            return (
+                {"id": migration_id} if migration_id in self.driver.migrations else None
+            )
         if "RETURN p" in self.query:
             return {"p": {"id": "project-a"}}
         if "c.status IN $statuses" in self.query and "AS count" in self.query:
@@ -59,7 +63,9 @@ class _FakeSession:
 
     def run(self, query: str, **params: Any) -> _FakeResult:
         placeholders = set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", query))
-        assert placeholders <= set(params), f"Missing Cypher params {placeholders - set(params)} for query: {query}"
+        assert placeholders <= set(params), (
+            f"Missing Cypher params {placeholders - set(params)} for query: {query}"
+        )
         self.driver.queries.append(query)
         self.driver.query_params.append(params)
         if self.in_write_transaction:
@@ -140,7 +146,10 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
     assert any("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
     assert any("membership.note" in query for query in driver.queries)
     assert any("coalesce(membership.category" in query for query in driver.queries)
-    assert any("NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries)
+    assert any(
+        "NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query
+        for query in driver.queries
+    )
     assert driver.execute_write_calls == 1
     assert len(driver.transaction_queries) == 5
     assert all(
@@ -153,7 +162,9 @@ def test_neo4j_project_membership_migration_is_idempotent() -> None:
     repo, driver = _repo()
 
     repo.ensure_schema()
-    first_migration_query_count = sum("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
+    first_migration_query_count = sum(
+        "MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries
+    )
     repo.ensure_schema()
 
     assert first_migration_query_count == 1

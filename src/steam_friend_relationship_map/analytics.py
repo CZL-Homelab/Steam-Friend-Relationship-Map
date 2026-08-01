@@ -4,7 +4,12 @@ from typing import Any
 
 import networkx as nx
 
-from .models import ExportResponse, NetworkAnalysisResponse, NetworkLeader, NetworkMetric
+from .models import (
+    ExportResponse,
+    NetworkAnalysisResponse,
+    NetworkLeader,
+    NetworkMetric,
+)
 
 
 def _node_id(value: Any) -> str:
@@ -108,7 +113,11 @@ def analyze_network(
             )
         )
 
-    modularity = nx.community.modularity(graph, [set(members) for members in communities]) if edge_count else 0
+    modularity = (
+        nx.community.modularity(graph, [set(members) for members in communities])
+        if edge_count
+        else 0
+    )
     return NetworkAnalysisResponse(
         metrics=metrics,
         leaders=leaders,

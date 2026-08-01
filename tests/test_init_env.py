@@ -82,7 +82,9 @@ def test_settings_rejects_values_that_cannot_start_safely(
         Settings(**{field: value})
 
 
-def test_init_env_non_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_env_non_interactive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Set up cwd to be tmp_path
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
 
@@ -119,7 +121,9 @@ def test_init_env_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert "APP_PORT=8080" in content
 
 
-def test_init_env_interactive_invalid_then_valid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_env_interactive_invalid_then_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Set up cwd to be tmp_path
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
 
@@ -142,15 +146,16 @@ def test_init_env_interactive_invalid_then_valid(tmp_path: Path, monkeypatch: py
     assert input_mock.call_count == 3
 
 
-def test_init_env_with_example_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_env_with_example_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Set up cwd to be tmp_path
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
 
     # Create .env.example
     example_file = tmp_path / ".env.example"
     example_file.write_text(
-        "GRAPH_DB_ENGINE=kuzu\nAPP_PORT=8000\nDEFAULT_MAX_DEPTH=2\n",
-        encoding="utf-8"
+        "GRAPH_DB_ENGINE=kuzu\nAPP_PORT=8000\nDEFAULT_MAX_DEPTH=2\n", encoding="utf-8"
     )
 
     # Mock stdin.isatty to return True
@@ -186,7 +191,10 @@ def test_init_env_preserves_existing_file_when_atomic_replace_fails(
     with pytest.raises(RuntimeError, match="无法安全写入"):
         init_env(force=True)
 
-    assert env_file.read_text(encoding="utf-8") == "APP_PORT=8123\nACTIVE_PROJECT=existing\n"
+    assert (
+        env_file.read_text(encoding="utf-8")
+        == "APP_PORT=8123\nACTIVE_PROJECT=existing\n"
+    )
     assert list(tmp_path.glob("..env.*.tmp")) == []
 
 

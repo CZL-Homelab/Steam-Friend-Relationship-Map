@@ -30,8 +30,8 @@ from steam_friend_relationship_map.models import (
     PotentialFriendCandidate,
     PotentialFriendsResponse,
 )
-from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.secrets import SecretStorageError
+from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.steam import SteamApiError, SteamClient
 
 
@@ -49,7 +49,11 @@ class FakeRepo:
         return "default"
 
     def list_projects(self) -> object:
-        from steam_friend_relationship_map.models import ProjectInfo, ProjectListResponse
+        from steam_friend_relationship_map.models import (
+            ProjectInfo,
+            ProjectListResponse,
+        )
+
         return ProjectListResponse(
             projects=[ProjectInfo(id="default", name="默认项目")],
             active_project_id="default",
@@ -89,7 +93,9 @@ class FakeRepo:
     def get_shortest_path(self, *_: object, **__: object) -> GraphResponse:
         return GraphResponse(nodes=[GraphNode(id="root", label="Root")], edges=[])
 
-    def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
+    def get_top_degree(
+        self, limit: int = 12, project_id: str = "default"
+    ) -> list[GraphNode]:
         return [GraphNode(id="root", label="Root", degree=5)]
 
     def get_db_stats(self, project_id: str = "default") -> DbStats:
@@ -98,7 +104,11 @@ class FakeRepo:
     def get_friend_circle_analysis(self, **_: object) -> FriendCircleAnalysisResponse:
         return FriendCircleAnalysisResponse(
             root="root",
-            candidates=[FriendCircleCandidate(steam_id="candidate", label="Candidate", mutual_count=2, score=18)],
+            candidates=[
+                FriendCircleCandidate(
+                    steam_id="candidate", label="Candidate", mutual_count=2, score=18
+                )
+            ],
         )
 
     def get_potential_friends(self, **_: object) -> PotentialFriendsResponse:
@@ -116,7 +126,9 @@ class FakeRepo:
         )
 
     def export_graph(self, project_id: str = "default") -> ExportResponse:
-        return ExportResponse(nodes=[{"steam_id": "root", "persona_name": "Root"}], edges=[])
+        return ExportResponse(
+            nodes=[{"steam_id": "root", "persona_name": "Root"}], edges=[]
+        )
 
     def get_crawl_run(self, _: str) -> None:
         return None
@@ -199,14 +211,18 @@ def test_app_recovers_interrupted_crawls_on_startup() -> None:
     assert repo.recovery_calls == 1
     logs = client.get("/api/logs?after=0").json()
     assert any(
-        entry["source"] == "crawl:recovery"
-        and "2 个上次启动中断" in entry["message"]
+        entry["source"] == "crawl:recovery" and "2 个上次启动中断" in entry["message"]
         for entry in logs
     )
 
 
 def test_graph_endpoint_uses_repo() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.get("/api/graph?root=root&depth=2&limit=50")
@@ -228,7 +244,12 @@ def test_project_list_errors_return_json_detail() -> None:
         def list_projects(self) -> object:
             raise RuntimeError("buffer pool is full")
 
-    app = create_app(settings=Settings(), repo=BrokenProjectsRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=BrokenProjectsRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.get("/api/projects")
@@ -238,8 +259,15 @@ def test_project_list_errors_return_json_detail() -> None:
 
 
 def test_app_starts_when_repository_is_unavailable() -> None:
-    with patch("steam_friend_relationship_map.app.get_repository", side_effect=RuntimeError("Could not set lock on file")):
-        app = create_app(settings=Settings(), steam=SteamClient("key"), secret_store=FakeSecretStore())
+    with patch(
+        "steam_friend_relationship_map.app.get_repository",
+        side_effect=RuntimeError("Could not set lock on file"),
+    ):
+        app = create_app(
+            settings=Settings(),
+            steam=SteamClient("key"),
+            secret_store=FakeSecretStore(),
+        )
 
     client = TestClient(app)
 
@@ -273,15 +301,28 @@ def test_application_entrypoint_and_static_assets_use_safe_cache_headers() -> No
     assert unversioned_asset.headers["cache-control"] == "no-cache"
     assert all(
         response.headers["x-content-type-options"] == "nosniff"
-        for response in (entrypoint, static_entrypoint, versioned_asset, unversioned_asset)
+        for response in (
+            entrypoint,
+            static_entrypoint,
+            versioned_asset,
+            unversioned_asset,
+        )
     )
     assert all(
         response.headers["x-frame-options"] == "SAMEORIGIN"
-        for response in (entrypoint, static_entrypoint, versioned_asset, unversioned_asset)
+        for response in (
+            entrypoint,
+            static_entrypoint,
+            versioned_asset,
+            unversioned_asset,
+        )
     )
     assert "script-src 'self'" in entrypoint.headers["content-security-policy"]
     assert "frame-ancestors 'self'" in entrypoint.headers["content-security-policy"]
-    assert "img-src 'self' https: data: blob:" in entrypoint.headers["content-security-policy"]
+    assert (
+        "img-src 'self' https: data: blob:"
+        in entrypoint.headers["content-security-policy"]
+    )
     assert client.get("/static/").status_code == 404
 
 
@@ -425,10 +466,18 @@ def test_user_patch_endpoint() -> None:
             self.project_id = str(kwargs["project_id"])
 
     repo = PatchTrackingRepo()
-    app = create_app(settings=Settings(active_project="project-a"), repo=repo, steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(active_project="project-a"),
+        repo=repo,
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
-    response = client.patch("/api/users/root", json={"note": "friend", "tags": ["cs2", "cs2"], "category": "game"})
+    response = client.patch(
+        "/api/users/root",
+        json={"note": "friend", "tags": ["cs2", "cs2"], "category": "game"},
+    )
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
@@ -436,7 +485,12 @@ def test_user_patch_endpoint() -> None:
 
 
 def test_db_stats_endpoint() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.get("/api/db/stats")
@@ -448,10 +502,17 @@ def test_db_stats_endpoint() -> None:
 
 def test_secret_api_does_not_echo_secret() -> None:
     store = FakeSecretStore()
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=store)  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=store,
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
-    response = client.post("/api/settings/secrets", json={"name": "steam_api_key", "value": "super-secret"})
+    response = client.post(
+        "/api/settings/secrets", json={"name": "steam_api_key", "value": "super-secret"}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -627,7 +688,9 @@ def test_batch_settings_save_rolls_back_all_values_when_database_reconnect_fails
     assert settings_loader.call_count == 2
 
 
-def test_public_settings_reports_explicit_runtime_secrets_without_echoing_them() -> None:
+def test_public_settings_reports_explicit_runtime_secrets_without_echoing_them() -> (
+    None
+):
     api_key = "runtime-steam-key"
     password = "runtime-neo4j-password"
     app = create_app(
@@ -649,10 +712,17 @@ def test_public_settings_reports_explicit_runtime_secrets_without_echoing_them()
 
 
 def test_secret_api_rejects_unknown_secret_name() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
-    response = client.post("/api/settings/secrets", json={"name": "cookie", "value": "secret"})
+    response = client.post(
+        "/api/settings/secrets", json={"name": "cookie", "value": "secret"}
+    )
 
     assert response.status_code == 422
 
@@ -661,7 +731,9 @@ def test_proxy_secret_status_does_not_echo_url() -> None:
     proxy_url = "http://proxy-user:proxy-password@127.0.0.1:8080"
     store = FakeSecretStore()
     store.values["steam_proxy_url"] = proxy_url
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store)  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.get("/api/settings")
@@ -675,7 +747,9 @@ def test_proxy_secret_status_does_not_echo_url() -> None:
 
 def test_proxy_secret_rejects_unsupported_scheme() -> None:
     store = FakeSecretStore()
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store)  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(), repo=FakeRepo(), steam=FakeSteam(), secret_store=store
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.post(
@@ -697,8 +771,13 @@ def test_proxy_secret_update_rebuilds_steam_client() -> None:
     store = FakeSecretStore()
 
     with (
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
-        patch("steam_friend_relationship_map.app.SteamClient", side_effect=[old_steam, new_steam]) as steam_client,
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
+        patch(
+            "steam_friend_relationship_map.app.SteamClient",
+            side_effect=[old_steam, new_steam],
+        ) as steam_client,
     ):
         app = create_app(settings=old_settings, repo=FakeRepo(), secret_store=store)  # type: ignore[arg-type]
         client = TestClient(app)
@@ -715,7 +794,12 @@ def test_proxy_secret_update_rebuilds_steam_client() -> None:
 
 
 def test_settings_patch_rejects_invalid_graph_engine() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.patch("/api/settings", json={"graph_db_engine": "sqlite"})
@@ -725,11 +809,19 @@ def test_settings_patch_rejects_invalid_graph_engine() -> None:
 
 def test_settings_patch_strips_crlf_before_env_write() -> None:
     from unittest.mock import patch
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     with patch("steam_friend_relationship_map.app.set_key") as mock_set_key:
-        response = client.patch("/api/settings", json={"neo4j_user": "neo4j\r\nINJECTED=1"})
+        response = client.patch(
+            "/api/settings", json={"neo4j_user": "neo4j\r\nINJECTED=1"}
+        )
 
     assert response.status_code == 200
     mock_set_key.assert_called_once()
@@ -788,11 +880,18 @@ def test_settings_patch_keeps_current_repo_when_new_database_fails() -> None:
     candidate_repo = TrackingRepo(RuntimeError("unable to open database"))
 
     with (
-        patch("steam_friend_relationship_map.app.get_repository", side_effect=[old_repo, candidate_repo]),
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.get_repository",
+            side_effect=[old_repo, candidate_repo],
+        ),
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
         patch("steam_friend_relationship_map.app.set_key") as mock_set_key,
     ):
-        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+        app = create_app(
+            settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore()
+        )  # type: ignore[arg-type]
         client = TestClient(app)
         response = client.patch("/api/settings", json={"kuzu_db_path": "data/missing"})
 
@@ -820,10 +919,14 @@ def test_settings_patch_restores_same_kuzu_database_after_failure() -> None:
             "steam_friend_relationship_map.app.get_repository",
             side_effect=[old_repo, candidate_repo, restored_repo],
         ),
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
         patch("steam_friend_relationship_map.app.set_key") as mock_set_key,
     ):
-        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+        app = create_app(
+            settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore()
+        )  # type: ignore[arg-type]
         client = TestClient(app)
         response = client.patch("/api/settings", json={"kuzu_buffer_pool_size_gb": 2})
 
@@ -842,11 +945,18 @@ def test_settings_patch_swaps_repo_only_after_candidate_is_ready() -> None:
     candidate_repo = TrackingRepo()
 
     with (
-        patch("steam_friend_relationship_map.app.get_repository", side_effect=[old_repo, candidate_repo]),
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.get_repository",
+            side_effect=[old_repo, candidate_repo],
+        ),
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
         patch("steam_friend_relationship_map.app.set_key"),
     ):
-        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+        app = create_app(
+            settings=old_settings, steam=FakeSteam(), secret_store=FakeSecretStore()
+        )  # type: ignore[arg-type]
         client = TestClient(app)
         response = client.patch("/api/settings", json={"kuzu_db_path": "data/new"})
 
@@ -867,9 +977,7 @@ def test_runtime_switch_keeps_ready_database_when_old_cleanup_fails() -> None:
         neo4j_uri="bolt://old-host:7687",
         neo4j_password="exposed-old-password",
     )
-    new_settings = old_settings.model_copy(
-        update={"neo4j_uri": "bolt://new-host:7687"}
-    )
+    new_settings = old_settings.model_copy(update={"neo4j_uri": "bolt://new-host:7687"})
     old_repo = CleanupFailingRepo()
     candidate_repo = TrackingRepo()
 
@@ -878,7 +986,9 @@ def test_runtime_switch_keeps_ready_database_when_old_cleanup_fails() -> None:
             "steam_friend_relationship_map.app.get_repository",
             side_effect=[old_repo, candidate_repo],
         ),
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
         patch("steam_friend_relationship_map.app.set_key"),
     ):
         app = create_app(
@@ -898,7 +1008,9 @@ def test_runtime_switch_keeps_ready_database_when_old_cleanup_fails() -> None:
     assert candidate_repo.close_count == 0
     logs = client.get("/api/logs").json()
     cleanup_log = next(
-        row for row in logs if "Previous graph database cleanup failed" in row["message"]
+        row
+        for row in logs
+        if "Previous graph database cleanup failed" in row["message"]
     )
     assert "exposed-old-password" not in cleanup_log["message"]
     assert "[REDACTED]" in cleanup_log["message"]
@@ -959,20 +1071,18 @@ def test_runtime_switch_closes_database_candidate_when_steam_creation_fails() ->
 
 def test_runtime_switch_keeps_ready_steam_client_when_old_cleanup_fails() -> None:
     old_settings = Settings(steam_api_key="old-steam-secret")
-    new_settings = old_settings.model_copy(
-        update={"steam_api_key": "new-steam-secret"}
-    )
+    new_settings = old_settings.model_copy(update={"steam_api_key": "new-steam-secret"})
     old_steam = MagicMock()
-    old_steam.aclose = AsyncMock(
-        side_effect=RuntimeError("cleanup old-steam-secret")
-    )
+    old_steam.aclose = AsyncMock(side_effect=RuntimeError("cleanup old-steam-secret"))
     new_steam = MagicMock()
     new_steam.aclose = AsyncMock()
     store = FakeSecretStore()
     store.values["steam_api_key"] = "old-steam-secret"
 
     with (
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
         patch(
             "steam_friend_relationship_map.app.SteamClient",
             side_effect=[old_steam, new_steam],
@@ -1013,10 +1123,17 @@ def test_secret_update_restores_previous_value_when_database_reconnect_fails() -
     secret_store.values["neo4j_password"] = "old-secret"
 
     with (
-        patch("steam_friend_relationship_map.app.get_repository", side_effect=[old_repo, candidate_repo]),
-        patch("steam_friend_relationship_map.app.get_settings", return_value=new_settings),
+        patch(
+            "steam_friend_relationship_map.app.get_repository",
+            side_effect=[old_repo, candidate_repo],
+        ),
+        patch(
+            "steam_friend_relationship_map.app.get_settings", return_value=new_settings
+        ),
     ):
-        app = create_app(settings=old_settings, steam=FakeSteam(), secret_store=secret_store)  # type: ignore[arg-type]
+        app = create_app(
+            settings=old_settings, steam=FakeSteam(), secret_store=secret_store
+        )  # type: ignore[arg-type]
         client = TestClient(app)
         response = client.post(
             "/api/settings/secrets",
@@ -1031,7 +1148,12 @@ def test_secret_update_restores_previous_value_when_database_reconnect_fails() -
 
 
 def test_csrf_rejects_localhost_prefix_spoof() -> None:
-    app = create_app(settings=Settings(app_host="127.0.0.1", app_port=8000), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(app_host="127.0.0.1", app_port=8000),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app, base_url="http://localhost:8000")
 
     response = client.post(
@@ -1044,7 +1166,12 @@ def test_csrf_rejects_localhost_prefix_spoof() -> None:
 
 
 def test_csrf_allows_exact_localhost_origin() -> None:
-    app = create_app(settings=Settings(app_host="127.0.0.1", app_port=8000), repo=FakeRepo(), steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(app_host="127.0.0.1", app_port=8000),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app, base_url="http://localhost:8000")
 
     response = client.post(
@@ -1057,7 +1184,12 @@ def test_csrf_allows_exact_localhost_origin() -> None:
 
 
 def test_settings_test_reports_missing_steam_key() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=FakeSteam(SteamApiError("缺少 STEAM_API_KEY")), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(SteamApiError("缺少 STEAM_API_KEY")),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.post("/api/settings/test", json={})
@@ -1070,7 +1202,12 @@ def test_settings_test_reports_missing_steam_key() -> None:
 
 
 def test_settings_test_reports_invalid_steam_key() -> None:
-    app = create_app(settings=Settings(steam_api_key="bad-key"), repo=FakeRepo(), steam=FakeSteam(SteamApiError("Steam API 请求失败: HTTP 403", 403)), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(steam_api_key="bad-key"),
+        repo=FakeRepo(),
+        steam=FakeSteam(SteamApiError("Steam API 请求失败: HTTP 403", 403)),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.post("/api/settings/test", json={})
@@ -1085,7 +1222,9 @@ def test_settings_test_reports_invalid_steam_key() -> None:
 def test_settings_test_reports_neo4j_server_unavailable() -> None:
     app = create_app(
         settings=Settings(STEAM_API_KEY="key", NEO4J_PASSWORD="pw"),
-        repo=FailingRepo(RuntimeError("Failed to establish connection to localhost:7687")),
+        repo=FailingRepo(
+            RuntimeError("Failed to establish connection to localhost:7687")
+        ),
         steam=FakeSteam(),
         secret_store=FakeSecretStore(),
     )  # type: ignore[arg-type]
@@ -1102,7 +1241,16 @@ def test_settings_test_reports_neo4j_server_unavailable() -> None:
 
 def test_logs_endpoint_redacts_sensitive_values() -> None:
     proxy_url = "http://proxy-user:proxy-secret@127.0.0.1:8080"
-    app = create_app(settings=Settings(steam_api_key="abcd1234abcd1234abcd1234abcd1234", steam_proxy_url=proxy_url, neo4j_password="pw-secret"), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(
+            steam_api_key="abcd1234abcd1234abcd1234abcd1234",
+            steam_proxy_url=proxy_url,
+            neo4j_password="pw-secret",
+        ),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     app.state.logs.append(
@@ -1124,17 +1272,29 @@ def test_logs_endpoint_redacts_sensitive_values() -> None:
 
 
 def test_friend_circle_analysis_endpoint() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
-    response = client.get("/api/analysis/friend-circles?root=root&max_depth=3&min_mutual=2&limit=10")
+    response = client.get(
+        "/api/analysis/friend-circles?root=root&max_depth=3&min_mutual=2&limit=10"
+    )
 
     assert response.status_code == 200
     assert response.json()["candidates"][0]["steam_id"] == "candidate"
 
 
 def test_network_analysis_endpoint() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.get("/api/analysis/network?limit=10")
@@ -1208,7 +1368,12 @@ def test_network_analysis_errors_return_json_detail() -> None:
         def export_graph(self, project_id: str = "default") -> ExportResponse:
             raise RuntimeError("analysis export failed")
 
-    app = create_app(settings=Settings(), repo=FailingExportRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FailingExportRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.get("/api/analysis/network")
@@ -1245,7 +1410,9 @@ async def test_cancelled_network_analysis_finishes_before_next_worker_starts(
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             first_request = asyncio.create_task(client.get("/api/analysis/network"))
             deadline = time.monotonic() + 0.5
             while not first_started.is_set() and time.monotonic() < deadline:
@@ -1308,7 +1475,9 @@ async def test_lifespan_waits_for_detached_network_analysis_before_cleanup(
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             request = asyncio.create_task(client.get("/api/analysis/network"))
             deadline = time.monotonic() + 0.5
             while not analysis_started.is_set() and time.monotonic() < deadline:
@@ -1344,7 +1513,7 @@ def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
                 nodes=[
                     {
                         "steam_id": "=danger-id",
-                        "persona_name": "=HYPERLINK(\"https://example.test\")",
+                        "persona_name": '=HYPERLINK("https://example.test")',
                         "profile_url": "+https://example.test",
                         "avatar_full": "https://example.test/avatar.jpg",
                         "note": "@SUM(1+1)",
@@ -1373,7 +1542,10 @@ def test_export_csv_body_is_utf8_complete_and_formula_safe() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
-    assert response.headers["content-disposition"] == 'attachment; filename="steam_graph.csv"'
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="steam_graph.csv"'
+    )
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.content.startswith(b"\xef\xbb\xbf")
@@ -1438,7 +1610,10 @@ def test_export_accepts_json_body_and_legacy_query_format() -> None:
 
     assert json_response.status_code == 200
     assert json_response.json()["nodes"][0]["steam_id"] == "root"
-    assert json_response.headers["content-disposition"] == 'attachment; filename="steam_graph.json"'
+    assert (
+        json_response.headers["content-disposition"]
+        == 'attachment; filename="steam_graph.json"'
+    )
     assert json_response.headers["cache-control"] == "no-store"
     assert json_response.headers["x-content-type-options"] == "nosniff"
     assert csv_response.status_code == 200
@@ -1477,11 +1652,19 @@ def test_graph_rejects_more_than_five_unique_roots() -> None:
 
 def test_project_switch_strips_crlf() -> None:
     from unittest.mock import patch
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     with patch("steam_friend_relationship_map.app.set_key") as mock_set_key:
-        response = client.post("/api/projects/switch", json={"name": "test\r\ninjected\nname"})
+        response = client.post(
+            "/api/projects/switch", json={"name": "test\r\ninjected\nname"}
+        )
         assert response.status_code == 200
         mock_set_key.assert_called_once()
         args, _ = mock_set_key.call_args
@@ -1489,7 +1672,9 @@ def test_project_switch_strips_crlf() -> None:
         assert args[2] == "testinjectedname"
 
 
-def test_project_switch_keeps_existing_repository_when_only_active_project_changes(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_project_switch_keeps_existing_repository_when_only_active_project_changes(
+    monkeypatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
     import steam_friend_relationship_map.app as app_module
 
     class TrackingRepo(FakeRepo):
@@ -1500,7 +1685,11 @@ def test_project_switch_keeps_existing_repository_when_only_active_project_chang
             self.closed = True
 
         def list_projects(self) -> object:
-            from steam_friend_relationship_map.models import ProjectInfo, ProjectListResponse
+            from steam_friend_relationship_map.models import (
+                ProjectInfo,
+                ProjectListResponse,
+            )
+
             return ProjectListResponse(
                 projects=[
                     ProjectInfo(id="default", name="Default"),
@@ -1528,7 +1717,9 @@ def test_project_switch_keeps_existing_repository_when_only_active_project_chang
     monkeypatch.setattr(app_module, "get_repository", fake_get_repository)
     monkeypatch.setattr(app_module, "get_settings", lambda: switched_settings)
 
-    app = create_app(settings=initial_settings, steam=FakeSteam(), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=initial_settings, steam=FakeSteam(), secret_store=FakeSecretStore()
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.post("/api/projects/switch", json={"name": "project-a"})
@@ -1541,21 +1732,29 @@ def test_project_switch_keeps_existing_repository_when_only_active_project_chang
 
 def test_app_endpoints_blocked_during_crawl() -> None:
     from unittest.mock import MagicMock
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
-    
+
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+
     app.state.manager.has_active_crawl = MagicMock(return_value=True)
     client = TestClient(app)
-    
+
     # 1. Test patch settings
     resp = client.patch("/api/settings", json={"default_max_depth": 3})
     assert resp.status_code == 400
     assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
-    
+
     # 2. Test set secret
-    resp = client.post("/api/settings/secrets", json={"name": "steam_api_key", "value": "test"})
+    resp = client.post(
+        "/api/settings/secrets", json={"name": "steam_api_key", "value": "test"}
+    )
     assert resp.status_code == 400
     assert "当前有活跃的抓取任务在运行" in resp.json()["detail"]
-    
+
     # 3. Test delete secret
     resp = client.delete("/api/settings/secrets/steam_api_key")
     assert resp.status_code == 400
@@ -1579,11 +1778,19 @@ def test_app_endpoints_blocked_during_crawl() -> None:
 
 def test_app_crawls_conflict_returns_409() -> None:
     from unittest.mock import AsyncMock
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
-    
-    app.state.manager.create_crawl = AsyncMock(side_effect=RuntimeError("已有活跃的抓取任务在运行中"))
+
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+
+    app.state.manager.create_crawl = AsyncMock(
+        side_effect=RuntimeError("已有活跃的抓取任务在运行中")
+    )
     client = TestClient(app)
-    
+
     resp = client.post("/api/crawls", json={"root_url": "root", "max_depth": 2})
     assert resp.status_code == 409
     assert "已有活跃的抓取任务在运行中" in resp.json()["detail"]
@@ -1619,7 +1826,9 @@ def test_active_crawl_endpoint_returns_the_managed_run() -> None:
     assert client.get("/api/crawls/active").json() is None
 
 
-async def test_cancelled_crawl_creation_finishes_after_it_acquires_runtime_lock() -> None:
+async def test_cancelled_crawl_creation_finishes_after_it_acquires_runtime_lock() -> (
+    None
+):
     app = create_app(
         settings=Settings(),
         repo=FakeRepo(),
@@ -1735,7 +1944,9 @@ async def test_heavy_repository_query_runs_off_loop_and_guards_runtime_access() 
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             graph_request = asyncio.create_task(client.get("/api/graph"))
             deadline = time.monotonic() + 0.5
             while not repo.started.is_set() and time.monotonic() < deadline:
@@ -1747,12 +1958,16 @@ async def test_heavy_repository_query_runs_off_loop_and_guards_runtime_access() 
             assert not health_request.done()
 
             logs_started = time.monotonic()
-            logs_response = await asyncio.wait_for(client.get("/api/logs"), timeout=0.25)
+            logs_response = await asyncio.wait_for(
+                client.get("/api/logs"), timeout=0.25
+            )
             assert time.monotonic() - logs_started < 0.25
             assert logs_response.status_code == 200
 
             repo.release.set()
-            graph_response, health_response = await asyncio.gather(graph_request, health_request)
+            graph_response, health_response = await asyncio.gather(
+                graph_request, health_request
+            )
     finally:
         repo.release.set()
         safety_release.cancel()
@@ -1808,7 +2023,9 @@ async def test_runtime_settings_rebuild_runs_blocking_work_off_loop(
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             settings_request = asyncio.create_task(
                 client.patch("/api/settings", json={"default_max_depth": 3})
             )
@@ -1818,7 +2035,9 @@ async def test_runtime_settings_rebuild_runs_blocking_work_off_loop(
             assert repo.started.is_set()
             assert not settings_request.done()
 
-            logs_response = await asyncio.wait_for(client.get("/api/logs"), timeout=0.25)
+            logs_response = await asyncio.wait_for(
+                client.get("/api/logs"), timeout=0.25
+            )
             assert logs_response.status_code == 200
 
             repo.release.set()
@@ -1860,14 +2079,18 @@ async def test_public_settings_reads_secure_store_off_loop() -> None:
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             settings_request = asyncio.create_task(client.get("/api/settings"))
             deadline = time.monotonic() + 0.5
             while not store.started.is_set() and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
             assert store.started.is_set()
 
-            logs_response = await asyncio.wait_for(client.get("/api/logs"), timeout=0.25)
+            logs_response = await asyncio.wait_for(
+                client.get("/api/logs"), timeout=0.25
+            )
             assert logs_response.status_code == 200
 
             store.release.set()
@@ -1903,7 +2126,9 @@ async def test_cancelled_repository_request_holds_lock_until_worker_finishes() -
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             graph_request = asyncio.create_task(client.get("/api/graph"))
             deadline = time.monotonic() + 0.5
             while not repo.started.is_set() and time.monotonic() < deadline:
@@ -1954,7 +2179,9 @@ async def test_cancelled_settings_test_holds_lock_until_worker_finishes() -> Non
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             settings_test = asyncio.create_task(
                 client.post("/api/settings/test", json={})
             )
@@ -2006,7 +2233,9 @@ async def test_cancelled_queued_repository_request_never_starts() -> None:
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             first_request = asyncio.create_task(client.get("/api/graph"))
             deadline = time.monotonic() + 0.5
             while not repo.started.is_set() and time.monotonic() < deadline:
@@ -2055,7 +2284,9 @@ async def test_cancelled_started_runtime_mutation_finishes_before_unlocking() ->
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             mutation_request = asyncio.create_task(
                 client.post("/api/projects", json={"name": "created-project"})
             )
@@ -2110,7 +2341,9 @@ async def test_cancelled_queued_runtime_mutation_never_starts() -> None:
     safety_release.start()
 
     try:
-        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             graph_request = asyncio.create_task(client.get("/api/graph"))
             deadline = time.monotonic() + 0.5
             while not repo.graph_started.is_set() and time.monotonic() < deadline:
@@ -2331,7 +2564,12 @@ def test_active_project_delete_switches_to_default_before_removing_data(
 
 
 def test_app_crawls_reject_out_of_range_request_concurrency() -> None:
-    app = create_app(settings=Settings(), repo=FakeRepo(), steam=SteamClient("key"), secret_store=FakeSecretStore())  # type: ignore[arg-type]
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=SteamClient("key"),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
     client = TestClient(app)
 
     response = client.post(
@@ -2442,4 +2680,3 @@ def test_app_lifespan_releases_kuzu_database_lock(tmp_path: Path) -> None:
         assert reopened.test_connection() == "Kùzu 连接正常"
     finally:
         reopened.close()
-

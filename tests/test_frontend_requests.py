@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 STATIC_DIR = Path("src/steam_friend_relationship_map/static")
 NODE = shutil.which("node")
 
@@ -242,7 +241,9 @@ def test_request_coordinator_loads_before_application_script() -> None:
 def test_required_interactive_elements_exist_in_application_page() -> None:
     source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    declaration = source.split("const REQUIRED_INTERACTIVE_ELEMENT_IDS = [", 1)[1].split("];", 1)[0]
+    declaration = source.split("const REQUIRED_INTERACTIVE_ELEMENT_IDS = [", 1)[
+        1
+    ].split("];", 1)[0]
     required_ids = set(re.findall(r'"([A-Za-z0-9_-]+)"', declaration))
     page_ids = set(re.findall(r'id="([A-Za-z0-9_-]+)"', index))
 
@@ -378,11 +379,15 @@ def test_application_reports_missing_helper_scripts_without_crashing() -> None:
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
 
 
-def test_application_reports_missing_frontend_dependencies_before_initializing_graph() -> None:
+def test_application_reports_missing_frontend_dependencies_before_initializing_graph() -> (
+    None
+):
     source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     startup = source.index('document.addEventListener("DOMContentLoaded"')
     dependency_check = source.index("getMissingFrontendDependencies()", startup)
-    failure_display = source.index("showStartupFailure(missingDependencies)", dependency_check)
+    failure_display = source.index(
+        "showStartupFailure(missingDependencies)", dependency_check
+    )
     graph_init = source.index("initGraph()", failure_display)
 
     assert dependency_check < failure_display < graph_init
