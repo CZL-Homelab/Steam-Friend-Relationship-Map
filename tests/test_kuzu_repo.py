@@ -105,6 +105,31 @@ def test_kuzu_open_failure_does_not_move_database(tmp_path: Path) -> None:
     assert db_path.exists()
 
 
+def test_kuzu_open_failure_identifies_legacy_recovery_backup(tmp_path: Path) -> None:
+    db_path = tmp_path / "kuzu_db"
+    wal_path = tmp_path / "kuzu_db.wal"
+    backup_path = tmp_path / "kuzu_db_corrupted_20260701_233820"
+    db_path.write_bytes(b"db")
+    wal_path.write_bytes(b"wal")
+    backup_path.write_bytes(b"recovered database")
+
+    with patch(
+        "steam_friend_relationship_map.kuzu_repo.kuzu.Database",
+        side_effect=IndexError("invalid unordered_map<K, T> key"),
+    ) as database:
+        with pytest.raises(RuntimeError) as error:
+            KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
+
+    message = str(error.value)
+    assert "storage files appear to be inconsistent" in message
+    assert str(backup_path) in message
+    assert "do not delete or overwrite the originals" in message
+    database.assert_called_once()
+    assert db_path.read_bytes() == b"db"
+    assert wal_path.read_bytes() == b"wal"
+    assert backup_path.read_bytes() == b"recovered database"
+
+
 def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()

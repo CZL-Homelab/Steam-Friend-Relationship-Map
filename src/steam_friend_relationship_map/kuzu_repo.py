@@ -43,6 +43,37 @@ _PROJECT_MEMBER_PROPERTY_TYPES = {
 _KUZU_WRITE_BATCH_SIZE = 500
 
 
+def _recovery_backup_hint(db_path: str, error_detail: str) -> str:
+    """Describe legacy auto-recovery leftovers without changing database files."""
+    if "invalid unordered_map" not in error_detail.lower():
+        return ""
+
+    active_path = Path(db_path)
+    wal_path = Path(f"{db_path}.wal")
+    try:
+        candidates = [
+            path
+            for path in active_path.parent.glob(f"{active_path.name}_corrupted_*")
+            if path.is_file()
+        ]
+        if not candidates or not active_path.is_file() or not wal_path.is_file():
+            return ""
+        backup_path = max(candidates, key=lambda path: (path.stat().st_size, path.stat().st_mtime))
+        active_size = active_path.stat().st_size
+        backup_size = backup_path.stat().st_size
+    except OSError:
+        return ""
+
+    if backup_size <= active_size:
+        return ""
+    return (
+        " The active database and WAL may not belong together: a larger legacy "
+        f"auto-recovery backup exists at '{backup_path}' ({backup_size} bytes), while "
+        f"the active database is only {active_size} bytes. Recover from verified copies "
+        "of the backup and WAL; do not delete or overwrite the originals."
+    )
+
+
 def _parse_node(row_val: Any) -> dict[str, Any]:
     """将 Kùzu 查询返回的节点转换为标准的 Python 字典。"""
     if isinstance(row_val, dict):
@@ -65,7 +96,14 @@ class KuzuRepositoryImpl(IGraphRepository):
         except Exception as exc:
             detail = str(exc) or repr(exc)
             lowered = detail.lower()
-            if any(term in lowered for term in ["lock", "already in use", "could not set lock", "being used"]):
+            recovery_hint = _recovery_backup_hint(db_path, detail)
+            if recovery_hint:
+                hint = (
+                    "Kuzu could not open the database because its storage files appear "
+                    "to be inconsistent. No database files were moved, deleted, or recreated."
+                    f"{recovery_hint}"
+                )
+            elif any(term in lowered for term in ["lock", "already in use", "could not set lock", "being used"]):
                 hint = (
                     "Kuzu database is already in use. Stop other steam-friend-map/uvicorn "
                     "processes that are using this database, or choose a different KUZU_DB_PATH."
