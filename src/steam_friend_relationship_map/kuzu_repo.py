@@ -22,6 +22,8 @@ from .models import (
     GraphEdge,
     GraphNode,
     GraphResponse,
+    PotentialFriendCandidate,
+    PotentialFriendsResponse,
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
@@ -1319,6 +1321,56 @@ class KuzuRepositoryImpl(IGraphRepository):
             metrics[steam_id] = (count, hops, score)
         return metrics
 
+    def _multi_root_friend_circle_metrics(
+        self,
+        conn: kuzu.Connection,
+        roots: list[str],
+        reachable_ids: list[str],
+        target_ids: list[str],
+        depth: int,
+        project_id: str,
+        route_cap: int = 200,
+    ) -> dict[str, tuple[int, int, float]]:
+        root_set = set(roots)
+        totals = {target_id: [0, 0] for target_id in target_ids}
+        for root_id in sorted(root_set):
+            remaining_targets = [
+                target_id
+                for target_id in target_ids
+                if target_id not in root_set and totals[target_id][0] < route_cap
+            ]
+            if not remaining_targets:
+                break
+            per_root = self._root_friend_circle_metrics(
+                conn,
+                root_id,
+                reachable_ids,
+                remaining_targets,
+                depth,
+                project_id,
+                route_cap=route_cap,
+            )
+            for target_id in remaining_targets:
+                remaining = route_cap - totals[target_id][0]
+                count, hops, _ = per_root.get(target_id, (0, 0, 0.0))
+                if count > remaining and count:
+                    hops = round(hops * remaining / count)
+                    count = remaining
+                totals[target_id][0] += count
+                totals[target_id][1] += hops
+
+        metrics: dict[str, tuple[int, int, float]] = {}
+        for target_id, (count, hops) in totals.items():
+            if target_id in root_set:
+                metrics[target_id] = (1, 0, 1_000_000.0)
+            else:
+                metrics[target_id] = (
+                    count,
+                    hops,
+                    float(count * 1000 - hops) if count else 0.0,
+                )
+        return metrics
+
     def get_graph(
         self,
         *,
@@ -1376,9 +1428,24 @@ class KuzuRepositoryImpl(IGraphRepository):
 
         conn = self._get_conn()
         root_metrics: dict[str, tuple[int, int, float]] = {}
-        if root:
-            reachable_ids, root_found, traversal_depth_reached, depth_incomplete = self._reachable_ids_from_root(conn, root, depth, project_id)
-            if not root_found or not reachable_ids:
+        root_ids = sorted(
+            dict.fromkeys(part.strip() for part in root.split(",") if part.strip())
+        )[:5] if root else []
+        intersection_ids: set[str] = set()
+        if root_ids:
+            reachable_sets: list[set[str]] = []
+            root_found = False
+            traversal_depth_reached = 0
+            for root_id in root_ids:
+                ids, found, reached, incomplete = self._reachable_ids_from_root(
+                    conn, root_id, depth, project_id
+                )
+                if found:
+                    root_found = True
+                    reachable_sets.append(set(ids))
+                    traversal_depth_reached = max(traversal_depth_reached, reached)
+                    depth_incomplete = depth_incomplete or incomplete
+            if not root_found or not reachable_sets:
                 return GraphResponse(
                     nodes=[],
                     edges=[],
@@ -1387,6 +1454,12 @@ class KuzuRepositoryImpl(IGraphRepository):
                     root_found=root_found,
                     depth_incomplete=depth_incomplete,
                 )
+            reachable_ids = sorted(set().union(*reachable_sets))
+            intersection_ids = {
+                steam_id
+                for steam_id in reachable_ids
+                if sum(steam_id in reachable for reachable in reachable_sets) > 1
+            }
             params["reachable_ids"] = reachable_ids
             node_query = f"""
             MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
@@ -1418,10 +1491,12 @@ class KuzuRepositoryImpl(IGraphRepository):
             self._graph_node(_parse_node(rec[0]), rec[2], rec[1])
             for rec in records
         ]
-        if root and nodes:
-            root_metrics = self._root_friend_circle_metrics(
+        for node in nodes:
+            node.is_intersection = node.id in intersection_ids
+        if root_ids and nodes:
+            root_metrics = self._multi_root_friend_circle_metrics(
                 conn,
-                root,
+                root_ids,
                 reachable_ids,
                 [node.id for node in nodes],
                 depth,
@@ -1624,6 +1699,102 @@ class KuzuRepositoryImpl(IGraphRepository):
                 )
             )
         return FriendCircleAnalysisResponse(root=root, candidates=candidates)
+
+    def get_potential_friends(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> PotentialFriendsResponse:
+        del max_depth  # The mutual-friend/Jaccard definition is inherently two-hop.
+        min_mutual = max(0, min(min_mutual, 10000))
+        limit = max(1, min(limit, 100))
+        conn = self._get_conn()
+        reachable_ids, depths, _, root_found, _ = self._bfs_from_root(
+            conn, root, 2, project_id
+        )
+        if not root_found:
+            return PotentialFriendsResponse(root=root, candidates=[])
+
+        candidate_ids = sorted(
+            steam_id for steam_id in reachable_ids if depths.get(steam_id) == 2
+        )
+        if not candidate_ids:
+            return PotentialFriendsResponse(root=root, candidates=[])
+
+        rows = _consume_rows(
+            conn.execute(
+                """
+                MATCH (a:SteamUser)-[rel:STEAM_FRIEND]-(b:SteamUser)
+                WHERE (a.steam_id = $root OR a.steam_id IN $candidate_ids)
+                  AND coalesce(rel.project_id, '') IN $project_ids
+                RETURN DISTINCT a.steam_id, b.steam_id
+                """,
+                {
+                    "root": root,
+                    "candidate_ids": candidate_ids,
+                    "project_ids": self._visible_project_ids(project_id),
+                },
+            )
+        )
+        neighbors: dict[str, set[str]] = {root: set()}
+        for candidate_id in candidate_ids:
+            neighbors[candidate_id] = set()
+        for source, target in rows:
+            neighbors.setdefault(source, set()).add(target)
+
+        users = self._users_by_id(conn, candidate_ids)
+        metadata = self._project_metadata(conn, candidate_ids, project_id)
+        root_neighbors = neighbors.get(root, set())
+        ranked: list[PotentialFriendCandidate] = []
+        for candidate_id in candidate_ids:
+            if candidate_id not in users or candidate_id not in metadata:
+                continue
+            candidate_neighbors = neighbors.get(candidate_id, set())
+            evidence_ids = sorted(root_neighbors & candidate_neighbors)
+            mutual_count = len(evidence_ids)
+            if mutual_count < min_mutual:
+                continue
+            union_count = len(root_neighbors | candidate_neighbors)
+            jaccard = mutual_count / union_count if union_count else 0.0
+            node = self._graph_node(
+                users[candidate_id], len(candidate_neighbors), metadata[candidate_id]
+            )
+            evidence_users = self._users_by_id(conn, evidence_ids[:6])
+            evidence_metadata = self._project_metadata(conn, evidence_ids[:6], project_id)
+            ranked.append(
+                PotentialFriendCandidate(
+                    steam_id=node.id,
+                    label=node.label,
+                    depth=2,
+                    avatar=node.avatar,
+                    profile_url=node.profile_url,
+                    degree=node.degree,
+                    friend_count=node.friend_count,
+                    mutual_count=mutual_count,
+                    jaccard_coefficient=round(jaccard, 4),
+                    score=round(jaccard * 100, 2),
+                    evidence=[
+                        self._graph_node(
+                            evidence_users[evidence_id],
+                            0,
+                            evidence_metadata.get(evidence_id),
+                        )
+                        for evidence_id in evidence_ids[:6]
+                        if evidence_id in evidence_users
+                    ],
+                )
+            )
+        ranked.sort(
+            key=lambda candidate: (
+                -candidate.score,
+                -candidate.mutual_count,
+                candidate.steam_id,
+            )
+        )
+        return PotentialFriendsResponse(root=root, candidates=ranked[:limit])
 
     def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
         conn = self._get_conn()

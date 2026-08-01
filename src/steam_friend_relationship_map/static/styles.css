@@ -158,12 +158,21 @@ textarea {
   box-shadow: var(--shadow-sm);
 }
 
-.sidebar-tab-content,
-.inspector-tab-content {
+.sidebar-tab-content {
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
   width: 33.3333%;
+  flex-shrink: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.inspector-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  width: 25%;
   flex-shrink: 0;
   height: 0;
   overflow: hidden;
@@ -174,8 +183,9 @@ textarea {
 .sidebar-tab-slider[data-active-index="1"] #tabFilter,
 .sidebar-tab-slider[data-active-index="2"] #tabSettings,
 .inspector-tab-slider[data-active-index="0"] #insTabPath,
-.inspector-tab-slider[data-active-index="1"] #insTabRank,
-.inspector-tab-slider[data-active-index="2"] #insTabCypher {
+.inspector-tab-slider[data-active-index="1"] #insTabAnalysis,
+.inspector-tab-slider[data-active-index="2"] #insTabRank,
+.inspector-tab-slider[data-active-index="3"] #insTabCypher {
   height: auto;
   overflow: visible;
 }
@@ -1861,11 +1871,17 @@ body {
   flex-shrink: 0;
 }
 
-.sidebar-tab-slider,
-.inspector-tab-slider {
+.sidebar-tab-slider {
   display: flex;
   align-items: flex-start;
   width: 300%;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.inspector-tab-slider {
+  display: flex;
+  align-items: flex-start;
+  width: 400%;
   transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -1876,8 +1892,9 @@ body {
 
 /* Inspector Translations */
 .inspector-tab-slider[data-active-index="0"] { transform: translateX(0); }
-.inspector-tab-slider[data-active-index="1"] { transform: translateX(-33.3333%); }
-.inspector-tab-slider[data-active-index="2"] { transform: translateX(-66.6666%); }
+.inspector-tab-slider[data-active-index="1"] { transform: translateX(-25%); }
+.inspector-tab-slider[data-active-index="2"] { transform: translateX(-50%); }
+.inspector-tab-slider[data-active-index="3"] { transform: translateX(-75%); }
 
 /* ── Custom iOS/Mac Style Switch / Checkbox ─────────────────────── */
 
@@ -1955,3 +1972,4 @@ body {
   background-color: var(--teal);
   border-color: var(--teal);
 }
+

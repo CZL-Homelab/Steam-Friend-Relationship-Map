@@ -56,8 +56,8 @@ def init_env(force: bool = False) -> None:
                         port_str = line.split("=", 1)[1].strip()
                         if port_str.isdigit() and 1024 <= int(port_str) <= 65535:
                             default_port = int(port_str)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"警告：读取 .env.example 中的 APP_PORT 失败，将使用默认端口 {default_port}: {e}")
 
     port = default_port
     if is_interactive:

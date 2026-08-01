@@ -109,7 +109,9 @@ const REQUIRED_INTERACTIVE_ELEMENT_IDS = [
   "saveSettings", "clearSteamProxy", "refreshDbStats", "dbStatsInterval",
   "startCrawl", "cancelCrawl", "forceStopCrawl", "pauseCrawl", "resumeCrawl",
   "refreshGraph", "fitGraph", "layoutGraph", "saveProfile", "findPath",
-  "loadNetworkAnalysis", "loadFriendCircles", "refreshSystemLogs",
+  "loadNetworkAnalysis", "loadFriendCircles", "loadPotentialFriends",
+  "potentialRoot", "potentialMinMutual", "potentialLimit", "potentialFriendList",
+  "refreshSystemLogs",
   "copySystemLogs", "clearSystemLogs", "systemLogLevel", "systemLogs",
   "graphSizeBy", "graphLayoutBias", "communityColors", "exportJson", "exportCsv",
   "exportFrame", "copyBloom", "bloomQuery", "refreshProjects", "createProject",
@@ -266,6 +268,11 @@ function updateCytoscapeStyle() {
     .selector("node.analysis-evidence")
     .style({
       "border-color": amber,
+    })
+    .selector("node[?isIntersection]")
+    .style({
+      "border-color": amber,
+      "border-width": 6,
     })
     .selector("edge")
     .style({
@@ -717,6 +724,7 @@ function renderGraph(data) {
           pagerank: networkMetric?.pagerank || 0,
           community: networkMetric?.community || 0,
           hasCommunity: hasCommunity ? 1 : 0,
+          isIntersection: Boolean(node.is_intersection),
           communityColor: hasCommunity
             ? COMMUNITY_COLORS[(networkMetric.community - 1) % COMMUNITY_COLORS.length]
             : fallbackBorder,
@@ -1808,6 +1816,42 @@ async function loadFriendCircles() {
   toast(t("toast.analysisLoaded"));
 }
 
+async function loadPotentialFriends() {
+  clearFieldErrors(["potentialRoot", "potentialMinMutual", "potentialLimit"]);
+  const root = $("potentialRoot").value.trim() || $("graphRoot").value.trim().split(",")[0];
+  if (!root) {
+    setFieldError("potentialRoot", t("validation.required"));
+    throw new Error(t("validation.rootSteamIdRequired"));
+  }
+  $("potentialRoot").value = root;
+  const params = new URLSearchParams({
+    root,
+    max_depth: "2",
+    min_mutual: $("potentialMinMutual").value || "2",
+    limit: $("potentialLimit").value || "30",
+  });
+  const data = await latestApi(
+    "potential-friends",
+    `/api/analysis/potential-friends?${params.toString()}`,
+  );
+  if (!data) return;
+  $("potentialFriendList").innerHTML = data.candidates
+    .map(
+      (item) =>
+        `<li><button class="rank-button potential-rank-button" data-steam-id="${escapeHtml(item.steam_id)}"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(t("potential.row", {
+          mutual: item.mutual_count,
+          jaccard: (item.jaccard_coefficient * 100).toFixed(1),
+        }))}</span></button></li>`,
+    )
+    .join("");
+  $("potentialFriendList").querySelectorAll(".potential-rank-button").forEach((button) => {
+    button.addEventListener("click", () =>
+      focusAnalysisCandidate(button.dataset.steamId, data.candidates),
+    );
+  });
+  toast(t("toast.potentialFriendsLoaded"));
+}
+
 function focusAnalysisCandidate(steamId, candidates) {
   const candidate = candidates.find((item) => item.steam_id === steamId);
   cy.elements().removeClass("analysis-focus analysis-evidence");
@@ -1945,6 +1989,7 @@ function wireEvents() {
   $("findPath").addEventListener("click", (event) => withButtonState(event.currentTarget, findPath).catch(() => {}));
   $("loadNetworkAnalysis").addEventListener("click", (event) => withButtonState(event.currentTarget, loadNetworkAnalysis).catch(() => {}));
   $("loadFriendCircles").addEventListener("click", (event) => withButtonState(event.currentTarget, loadFriendCircles).catch(() => {}));
+  $("loadPotentialFriends").addEventListener("click", (event) => withButtonState(event.currentTarget, loadPotentialFriends).catch(() => {}));
   $("refreshSystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, () => loadSystemLogs(true)).catch(() => {}));
   $("copySystemLogs").addEventListener("click", (event) => withButtonState(event.currentTarget, copySystemLogs).catch(() => {}));
   $("clearSystemLogs").addEventListener("click", () => {

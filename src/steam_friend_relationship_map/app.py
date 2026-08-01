@@ -38,6 +38,7 @@ from .models import (
     GraphResponse,
     HealthResponse,
     NetworkAnalysisResponse,
+    PotentialFriendsResponse,
     ProjectCreate,
     ProjectInfo,
     ProjectListResponse,
@@ -99,6 +100,8 @@ CSV_EXPORT_FIELDS = (
     "root_closeness_score",
 )
 CSV_EXPORT_CHUNK_SIZE = 64 * 1024
+MAX_GRAPH_ROOTS = 5
+MAX_GRAPH_ROOT_LENGTH = 128
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 CONTENT_SECURITY_POLICY = "; ".join(
     (
@@ -141,6 +144,23 @@ class AppStaticFiles(StaticFiles):
 
 def sanitize_env_value(value: object) -> str:
     return str(value).replace("\n", "").replace("\r", "")
+
+
+def normalize_graph_roots(value: str | None) -> str | None:
+    if not value:
+        return None
+    roots = list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
+    if len(roots) > MAX_GRAPH_ROOTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"root accepts at most {MAX_GRAPH_ROOTS} unique identifiers",
+        )
+    if any(len(root) > MAX_GRAPH_ROOT_LENGTH for root in roots):
+        raise HTTPException(
+            status_code=422,
+            detail=f"each root identifier must be at most {MAX_GRAPH_ROOT_LENGTH} characters",
+        )
+    return ",".join(roots) or None
 
 
 def read_secret_environment_values(path: Path) -> tuple[dict[str, str], str]:
@@ -377,6 +397,16 @@ class UnavailableRepository(IGraphRepository):
         self._raise()
 
     def get_top_degree(self, limit: int = 12, project_id: str = "default") -> list[GraphNode]:
+        self._raise()
+
+    def get_potential_friends(
+        self,
+        root: str,
+        max_depth: int = 3,
+        min_mutual: int = 2,
+        limit: int = 50,
+        project_id: str = "default",
+    ) -> PotentialFriendsResponse:
         self._raise()
 
     def get_db_stats(self, project_id: str = "default") -> DbStats:
@@ -1401,11 +1431,12 @@ def create_app(
         sort_dir: Annotated[str, Query(pattern="^(asc|desc)$")] = "asc",
     ) -> GraphResponse:
         try:
+            normalized_root = normalize_graph_roots(root)
             if friend_count_min is not None and friend_count_max is not None and friend_count_min > friend_count_max:
                 raise HTTPException(status_code=400, detail="friend_count_min must be <= friend_count_max")
             return await call_repository(
                 "get_graph",
-                root=root or None,
+                root=normalized_root,
                 depth=depth,
                 limit=limit,
                 query=q or None,
@@ -1499,6 +1530,26 @@ def create_app(
             )
         except Exception as exc:
             log_buffer.append("error", "analysis", f"网络影响力分析失败: {exc}")
+            raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
+
+    @app.get("/api/analysis/potential-friends", response_model=PotentialFriendsResponse)
+    async def potential_friends(
+        root: Annotated[str, Query(min_length=1, max_length=MAX_GRAPH_ROOT_LENGTH)],
+        max_depth: Annotated[int, Query(ge=2, le=4)] = 3,
+        min_mutual: Annotated[int, Query(ge=0, le=10000)] = 2,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ) -> PotentialFriendsResponse:
+        try:
+            return await call_repository(
+                "get_potential_friends",
+                root=root.strip(),
+                max_depth=max_depth,
+                min_mutual=min_mutual,
+                limit=limit,
+                project_scoped=True,
+            )
+        except Exception as exc:
+            log_buffer.append("error", "analysis", f"Potential-friend analysis failed: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc
 
     @app.post("/api/export", response_model=ExportResponse)

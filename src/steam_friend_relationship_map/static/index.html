@@ -474,6 +474,10 @@
             <i data-lucide="route"></i>
             <span data-i18n="instab.path">路径与社交圈</span>
           </button>
+          <button class="ins-tab-button" data-target="insTabAnalysis">
+            <i data-lucide="user-round-search"></i>
+            <span data-i18n="instab.analysis">分析</span>
+          </button>
           <button class="ins-tab-button" data-target="insTabRank">
             <i data-lucide="bar-chart-3"></i>
             <span data-i18n="instab.rank">影响力</span>
@@ -528,6 +532,31 @@
             </label>
             <p class="hint" data-i18n="analysis.hint">候选人不是 Root 的直接好友，但和更靠近 Root 的用户池有多条已知连接。</p>
             <ol id="friendCircleList" class="rank-list"></ol>
+          </section>
+        </div>
+
+        <div class="inspector-tab-content" id="insTabAnalysis">
+          <section class="panel">
+            <div class="panel-title">
+              <span data-i18n="section.potentialFriends">潜在好友推荐</span>
+              <button class="icon-button" id="loadPotentialFriends" title="分析潜在好友" data-i18n-title="action.analyzePotentialFriends"><i data-lucide="sparkles"></i></button>
+            </div>
+            <label data-i18n-label="field.rootSteamId">
+              Root SteamID
+              <input id="potentialRoot" placeholder="7656..." data-i18n-placeholder="placeholder.steamId" />
+            </label>
+            <div class="two-col">
+              <label data-i18n-label="field.minMutual">
+                最少共同连接
+                <input id="potentialMinMutual" type="number" min="0" max="10000" value="2" />
+              </label>
+              <label data-i18n-label="field.limit">
+                限制
+                <input id="potentialLimit" type="number" min="1" max="100" value="30" />
+              </label>
+            </div>
+            <p class="hint" data-i18n="potential.hint">推荐与 Root 没有直接关系、但拥有共同好友的二跳用户，并按 Jaccard 相似度排序。</p>
+            <ol id="potentialFriendList" class="rank-list"></ol>
           </section>
         </div>
 

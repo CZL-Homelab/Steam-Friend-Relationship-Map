@@ -27,6 +27,8 @@ from steam_friend_relationship_map.models import (
     GraphNode,
     GraphResponse,
     NetworkAnalysisResponse,
+    PotentialFriendCandidate,
+    PotentialFriendsResponse,
 )
 from steam_friend_relationship_map.settings import Settings
 from steam_friend_relationship_map.secrets import SecretStorageError
@@ -97,6 +99,20 @@ class FakeRepo:
         return FriendCircleAnalysisResponse(
             root="root",
             candidates=[FriendCircleCandidate(steam_id="candidate", label="Candidate", mutual_count=2, score=18)],
+        )
+
+    def get_potential_friends(self, **_: object) -> PotentialFriendsResponse:
+        return PotentialFriendsResponse(
+            root="root",
+            candidates=[
+                PotentialFriendCandidate(
+                    steam_id="candidate",
+                    label="Candidate",
+                    mutual_count=2,
+                    jaccard_coefficient=0.5,
+                    score=50,
+                )
+            ],
         )
 
     def export_graph(self, project_id: str = "default") -> ExportResponse:
@@ -1429,6 +1445,34 @@ def test_export_accepts_json_body_and_legacy_query_format() -> None:
     assert csv_response.headers["content-type"].startswith("text/csv")
     assert invalid_body.status_code == 422
     assert invalid_query.status_code == 400
+
+
+def test_potential_friends_endpoint_uses_repository() -> None:
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    response = TestClient(app).get(
+        "/api/analysis/potential-friends?root=root&max_depth=3&min_mutual=2&limit=10"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["steam_id"] == "candidate"
+    assert response.json()["candidates"][0]["jaccard_coefficient"] == 0.5
+
+
+def test_graph_rejects_more_than_five_unique_roots() -> None:
+    app = create_app(
+        settings=Settings(),
+        repo=FakeRepo(),
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    response = TestClient(app).get("/api/graph?root=1,2,3,4,5,6")
+
+    assert response.status_code == 422
 
 
 def test_project_switch_strips_crlf() -> None:

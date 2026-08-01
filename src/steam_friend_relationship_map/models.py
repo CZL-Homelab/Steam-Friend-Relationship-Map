@@ -226,7 +226,7 @@ class GraphNode(BaseModel):
     avatar: str = ""
     profile_url: str = ""
     note: str = ""
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     category: str = ""
     friend_list_status: str = "unknown"
     degree: int = 0
@@ -237,6 +237,7 @@ class GraphNode(BaseModel):
     root_route_count: int = 0
     root_route_total_hops: int = 0
     root_friend_circle_score: float = 0
+    is_intersection: bool = False
 
 
 class GraphEdge(BaseModel):
@@ -303,12 +304,31 @@ class FriendCircleCandidate(BaseModel):
     friend_count: int | None = None
     mutual_count: int = 0
     score: float = 0
-    evidence: list[GraphNode] = []
+    evidence: list[GraphNode] = Field(default_factory=list)
 
 
 class FriendCircleAnalysisResponse(BaseModel):
     root: str
     candidates: list[FriendCircleCandidate]
+
+
+class PotentialFriendCandidate(BaseModel):
+    steam_id: str
+    label: str
+    depth: int | None = None
+    avatar: str = ""
+    profile_url: str = ""
+    degree: int = 0
+    friend_count: int | None = None
+    mutual_count: int = 0
+    jaccard_coefficient: float = 0.0
+    score: float = 0.0
+    evidence: list[GraphNode] = Field(default_factory=list)
+
+
+class PotentialFriendsResponse(BaseModel):
+    root: str
+    candidates: list[PotentialFriendCandidate]
 
 
 class ProjectInfo(BaseModel):

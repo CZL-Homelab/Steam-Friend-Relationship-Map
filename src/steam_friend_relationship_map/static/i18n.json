@@ -2,6 +2,7 @@
   "zh-CN": {
     "action.analyzeCircles": "分析朋友圈",
     "action.analyzeNetwork": "刷新网络分析",
+    "action.analyzePotentialFriends": "分析潜在好友",
     "action.cancelCrawl": "停止扫描",
     "action.clearLogs": "清空",
     "action.clearProxy": "清除 Steam 代理",
@@ -156,6 +157,7 @@
     "section.guide": "新手引导",
     "section.logs": "抓取日志",
     "section.networkInfluence": "网络影响力",
+    "section.potentialFriends": "潜在好友推荐",
     "section.preScanFilters": "扫描前筛选",
     "section.project": "项目管理",
     "section.recentRoots": "最近扫描",
@@ -202,6 +204,7 @@
     "toast.logsCleared": "日志显示已清空",
     "toast.logsCopied": "已复制脱敏日志",
     "toast.networkAnalysisLoaded": "网络影响力分析已完成",
+    "toast.potentialFriendsLoaded": "潜在好友分析已完成",
     "toast.noActiveCrawl": "当前没有运行中的抓取任务",
     "toast.paused": "扫描已暂停",
     "toast.profileSaved": "资料已保存",
@@ -230,11 +233,14 @@
     "validation.range": "请输入 {min}-{max} 之间的数值",
     "validation.required": "必填",
     "validation.proxyUrl": "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理 URL",
-    "validation.rootSteamIdRequired": "请输入 Root SteamID"
+    "validation.rootSteamIdRequired": "请输入 Root SteamID",
+    "potential.hint": "推荐与 Root 没有直接关系、但拥有共同好友的二跳用户，并按 Jaccard 相似度排序。",
+    "potential.row": "{mutual} 位共同好友 · Jaccard {jaccard}%"
   },
   "en": {
     "action.analyzeCircles": "Analyze circles",
     "action.analyzeNetwork": "Refresh network analysis",
+    "action.analyzePotentialFriends": "Analyze potential friends",
     "action.cancelCrawl": "Stop crawl",
     "action.clearLogs": "Clear",
     "action.clearProxy": "Clear Steam proxy",
@@ -389,6 +395,7 @@
     "section.guide": "Setup Guide",
     "section.logs": "Crawl Logs",
     "section.networkInfluence": "Network Influence",
+    "section.potentialFriends": "Potential Friends",
     "section.preScanFilters": "Pre-scan Filters",
     "section.project": "Project Management",
     "section.recentRoots": "Recent",
@@ -435,6 +442,7 @@
     "toast.logsCleared": "Log view cleared",
     "toast.logsCopied": "Redacted logs copied",
     "toast.networkAnalysisLoaded": "Network influence analysis completed",
+    "toast.potentialFriendsLoaded": "Potential-friend analysis completed",
     "toast.noActiveCrawl": "No active crawl",
     "toast.paused": "Crawl paused",
     "toast.profileSaved": "Profile saved",
@@ -463,6 +471,8 @@
     "validation.range": "Enter a value from {min} to {max}",
     "validation.required": "Required",
     "validation.proxyUrl": "Enter a valid HTTP, HTTPS, or SOCKS5 proxy URL",
-    "validation.rootSteamIdRequired": "Root SteamID is required"
+    "validation.rootSteamIdRequired": "Root SteamID is required",
+    "potential.hint": "Recommend two-hop users who are not directly connected to Root but share friends, ranked by Jaccard similarity.",
+    "potential.row": "{mutual} mutual friends · Jaccard {jaccard}%"
   }
 }
