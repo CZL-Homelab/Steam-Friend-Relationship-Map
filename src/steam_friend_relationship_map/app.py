@@ -363,24 +363,16 @@ def create_app(
     runtime_mutation_lock = asyncio.Lock()
     started_runtime_mutations: set[asyncio.Task[Any]] = set()
 
-    async def call_repository(
-        method_name: str,
-        *args: Any,
-        project_scoped: bool = False,
-        **kwargs: Any,
-    ) -> Any:
-        """Run synchronous repository work off-loop while guarding runtime swaps."""
+    async def run_runtime_operation(operation, source: str) -> Any:  # type: ignore[no-untyped-def]
+        """Keep a started runtime read protected until all async or worker work finishes."""
         started = asyncio.Event()
 
-        async def operation() -> Any:
+        async def guarded() -> Any:
             async with runtime_mutation_lock:
-                if project_scoped:
-                    kwargs["project_id"] = settings.active_project
-                method = getattr(repo, method_name)
                 started.set()
-                return await asyncio.to_thread(method, *args, **kwargs)
+                return await operation()
 
-        task = asyncio.create_task(operation())
+        task = asyncio.create_task(guarded())
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -396,11 +388,26 @@ def create_app(
                         log_buffer.append(
                             "warn",
                             "runtime",
-                            f"Cancelled repository operation later failed: {log_buffer.redact(str(exc))}",
+                            f"Cancelled {source} later failed: {log_buffer.redact(str(exc))}",
                         )
 
                 task.add_done_callback(report_late_failure)
             raise
+
+    async def call_repository(
+        method_name: str,
+        *args: Any,
+        project_scoped: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run synchronous repository work off-loop while guarding runtime swaps."""
+        async def operation() -> Any:
+            if project_scoped:
+                kwargs["project_id"] = settings.active_project
+            method = getattr(repo, method_name)
+            return await asyncio.to_thread(method, *args, **kwargs)
+
+        return await run_runtime_operation(operation, "repository operation")
 
     @asynccontextmanager
     async def runtime_mutation_guard() -> AsyncIterator[None]:
@@ -977,45 +984,47 @@ def create_app(
 
     @app.post("/api/settings/test", response_model=SettingsTestResult)
     async def test_settings() -> SettingsTestResult:
-        steam_ok = False
-        neo4j_ok = False
-        steam_reason = "unknown"
-        neo4j_reason = "unknown"
-        steam_message = "Steam API Key 未测试"
-        neo4j_message = "Neo4j 未测试"
-        try:
-            if provided_steam is not None:
-                await steam.get_player_summaries(["76561197960435530"])
-            else:
-                async with SteamClient(
-                    settings.steam_api_key,
-                    proxy_url=settings.steam_proxy_url,
-                ) as test_steam:
-                    await test_steam.get_player_summaries(["76561197960435530"])
-            steam_ok = True
-            steam_reason = "ok"
-            steam_message = "Steam API Key 可用"
-        except Exception as exc:
-            steam_reason, steam_message = classify_steam_test_error(exc)
-            log_buffer.append("warn", "settings", f"Steam 连接测试失败: {steam_message}")
-        try:
-            async with runtime_mutation_lock:
+        async def operation() -> SettingsTestResult:
+            steam_ok = False
+            neo4j_ok = False
+            steam_reason = "unknown"
+            neo4j_reason = "unknown"
+            steam_message = "Steam API Key 未测试"
+            neo4j_message = "Neo4j 未测试"
+            try:
+                if provided_steam is not None:
+                    await steam.get_player_summaries(["76561197960435530"])
+                else:
+                    async with SteamClient(
+                        settings.steam_api_key,
+                        proxy_url=settings.steam_proxy_url,
+                    ) as test_steam:
+                        await test_steam.get_player_summaries(["76561197960435530"])
+                steam_ok = True
+                steam_reason = "ok"
+                steam_message = "Steam API Key 可用"
+            except Exception as exc:
+                steam_reason, steam_message = classify_steam_test_error(exc)
+                log_buffer.append("warn", "settings", f"Steam 连接测试失败: {steam_message}")
+            try:
                 current_repo = repo
                 await asyncio.to_thread(current_repo.ensure_schema)
                 neo4j_message = await asyncio.to_thread(current_repo.test_connection)
-            neo4j_ok = True
-            neo4j_reason = "ok"
-        except Exception as exc:
-            neo4j_reason, neo4j_message = classify_neo4j_test_error(exc)
-            log_buffer.append("warn", "settings", f"Neo4j 连接测试失败: {neo4j_message}")
-        return SettingsTestResult(
-            steam_ok=steam_ok,
-            neo4j_ok=neo4j_ok,
-            steam_message=steam_message,
-            neo4j_message=neo4j_message,
-            steam_reason=steam_reason,
-            neo4j_reason=neo4j_reason,
-        )
+                neo4j_ok = True
+                neo4j_reason = "ok"
+            except Exception as exc:
+                neo4j_reason, neo4j_message = classify_neo4j_test_error(exc)
+                log_buffer.append("warn", "settings", f"Neo4j 连接测试失败: {neo4j_message}")
+            return SettingsTestResult(
+                steam_ok=steam_ok,
+                neo4j_ok=neo4j_ok,
+                steam_message=steam_message,
+                neo4j_message=neo4j_message,
+                steam_reason=steam_reason,
+                neo4j_reason=neo4j_reason,
+            )
+
+        return await run_runtime_operation(operation, "settings connection test")
 
     # ── Project management ────────────────────────────────────────────
 

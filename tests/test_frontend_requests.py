@@ -322,9 +322,11 @@ def test_application_reports_missing_frontend_dependencies_before_initializing_g
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> None:
     app_path = str((STATIC_DIR / "app.js").resolve())
+    coordinator_path = str((STATIC_DIR / "request-coordinator.js").resolve())
     script = f"""
       const fs = require("fs");
       const vm = require("vm");
+      const {{ LatestRequestCoordinator }} = require({json.dumps(coordinator_path)});
       (async () => {{
       let nextTimer = 0;
       const timers = new Map();
@@ -347,6 +349,7 @@ def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> N
         fetch(...args) {{ return fetchImpl(...args); }},
         localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
         window: {{
+          LatestRequestCoordinator,
           addEventListener(event, callback) {{ windowEvents.set(event, callback); }},
         }},
         document: {{
@@ -383,6 +386,116 @@ def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> N
       windowEvents.get("pagehide")();
       if (timers.size !== 0) process.exit(4);
       }})().catch((error) => {{ console.error(error); process.exit(5); }});
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_stale_frontend_responses_cannot_overwrite_current_state() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    coordinator_path = str((STATIC_DIR / "request-coordinator.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      const {{ LatestRequestCoordinator }} = require({json.dumps(coordinator_path)});
+      (async () => {{
+      const pending = [];
+      const systemMessages = [];
+      const crawlMessages = [];
+      const classList = () => ({{ toggle() {{}}, contains() {{ return false; }} }});
+      const elements = {{
+        steamStatus: {{ dataset: {{}}, textContent: "" }},
+        neo4jStatus: {{ dataset: {{}}, textContent: "" }},
+        steamStatusDetail: {{ dataset: {{}}, textContent: "", classList: classList() }},
+        neo4jStatusDetail: {{ dataset: {{}}, textContent: "", classList: classList() }},
+        systemLogs: {{ innerHTML: "" }},
+        systemLogLevel: {{ value: "" }},
+      }};
+      const context = {{
+        console: {{ error() {{}}, log() {{}}, warn() {{}} }},
+        pending,
+        systemMessages,
+        crawlMessages,
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        fetch(path, options = {{}}) {{
+          return new Promise((resolve) => pending.push({{ path, options, resolve }}));
+        }},
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}} }},
+        window: {{ LatestRequestCoordinator, addEventListener() {{}} }},
+        document: {{
+          hidden: false,
+          addEventListener() {{}},
+          getElementById(id) {{ return elements[id] || null; }},
+        }},
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      vm.runInContext(`
+        t = (key) => key;
+        toast = () => {{}};
+        loadDbStats = async () => {{}};
+        appendSystemLog = (_level, _source, message) => systemMessages.push(message);
+        appendUiLog = (_level, _stage, message) => crawlMessages.push(message);
+      `, context);
+
+      function request(path) {{
+        const item = pending.find((entry) => entry.path === path && !entry.resolved);
+        if (!item) throw new Error(`missing request: ${{path}}`);
+        return item;
+      }}
+      function resolve(item, body) {{
+        item.resolved = true;
+        item.resolve({{ ok: true, json: async () => body }});
+      }}
+
+      const healthPromise = vm.runInContext("loadHealth()", context);
+      const healthRequest = request("/api/health");
+      const testPromise = vm.runInContext("testSettings({{ silent: true }})", context);
+      const testRequest = request("/api/settings/test");
+      if (!healthRequest.options.signal.aborted) process.exit(1);
+      resolve(testRequest, {{
+        steam_ok: true,
+        neo4j_ok: false,
+        steam_message: "fresh Steam result",
+        neo4j_message: "fresh database result",
+      }});
+      await testPromise;
+      resolve(healthRequest, {{ database_message: "stale health result" }});
+      await healthPromise;
+      if (elements.neo4jStatusDetail.textContent !== "fresh database result") process.exit(2);
+
+      systemMessages.length = 0;
+      vm.runInContext("lastSystemLogSeq = 5", context);
+      const staleLogsPromise = vm.runInContext("loadSystemLogs()", context);
+      const staleLogsRequest = request("/api/logs?after=5");
+      const freshLogsPromise = vm.runInContext("loadSystemLogs(true)", context);
+      const freshLogsRequest = request("/api/logs?after=0");
+      if (!staleLogsRequest.options.signal.aborted) process.exit(3);
+      resolve(freshLogsRequest, [{{ seq: 1, level: "info", source: "new", message: "fresh log" }}]);
+      await freshLogsPromise;
+      resolve(staleLogsRequest, [{{ seq: 6, level: "warn", source: "old", message: "stale log" }}]);
+      await staleLogsPromise;
+      if (systemMessages.join(",") !== "fresh log") process.exit(4);
+      if (vm.runInContext("lastSystemLogSeq", context) !== 1) process.exit(5);
+
+      vm.runInContext('currentRunId = "run-old"; lastEventSeq = 0; pageActive = true', context);
+      const staleEventsPromise = vm.runInContext("loadEvents()", context);
+      const staleEventsRequest = request("/api/crawls/run-old/events?after=0");
+      vm.runInContext('currentRunId = "run-new"', context);
+      const freshEventsPromise = vm.runInContext("loadEvents()", context);
+      const freshEventsRequest = request("/api/crawls/run-new/events?after=0");
+      if (!staleEventsRequest.options.signal.aborted) process.exit(6);
+      resolve(freshEventsRequest, [{{ seq: 1, level: "info", stage: "new", message: "fresh event" }}]);
+      await freshEventsPromise;
+      resolve(staleEventsRequest, [{{ seq: 9, level: "warn", stage: "old", message: "stale event" }}]);
+      await staleEventsPromise;
+      if (crawlMessages.join(",") !== "fresh event") process.exit(7);
+      if (vm.runInContext("lastEventSeq", context) !== 1) process.exit(8);
+      }})().catch((error) => {{ console.error(error); process.exit(9); }});
     """
 
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())

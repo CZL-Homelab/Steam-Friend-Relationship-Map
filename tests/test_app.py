@@ -1469,6 +1469,59 @@ async def test_cancelled_repository_request_holds_lock_until_worker_finishes() -
     assert health_response.status_code == 200
 
 
+async def test_cancelled_settings_test_holds_lock_until_worker_finishes() -> None:
+    class BlockingConnectionRepo(FakeRepo):
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.connection_calls = 0
+
+        def test_connection(self) -> str:
+            self.connection_calls += 1
+            if self.connection_calls == 1:
+                self.started.set()
+                self.release.wait(timeout=2)
+            return "connection ok"
+
+    repo = BlockingConnectionRepo()
+    app = create_app(
+        settings=Settings(),
+        repo=repo,
+        steam=FakeSteam(),
+        secret_store=FakeSecretStore(),
+    )  # type: ignore[arg-type]
+    transport = ASGITransport(app=app)
+    safety_release = threading.Timer(1, repo.release.set)
+    safety_release.start()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            settings_test = asyncio.create_task(
+                client.post("/api/settings/test", json={})
+            )
+            deadline = time.monotonic() + 0.5
+            while not repo.started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert repo.started.is_set()
+
+            settings_test.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await settings_test
+
+            health_request = asyncio.create_task(client.get("/api/health"))
+            await asyncio.sleep(0.05)
+            assert not health_request.done()
+
+            repo.release.set()
+            health_response = await health_request
+    finally:
+        repo.release.set()
+        safety_release.cancel()
+
+    assert health_response.status_code == 200
+    assert repo.connection_calls == 2
+
+
 async def test_cancelled_queued_repository_request_never_starts() -> None:
     class CountingBlockingRepo(FakeRepo):
         def __init__(self) -> None:

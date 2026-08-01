@@ -74,6 +74,13 @@ const PROJECT_SCOPED_REQUEST_KEYS = [
   "network-analysis",
   "friend-circles",
 ];
+const PAGE_SCOPED_REQUEST_KEYS = [
+  ...PROJECT_SCOPED_REQUEST_KEYS,
+  "connection-status",
+  "crawl-status",
+  "crawl-events",
+  "system-logs",
+];
 
 const COMMUNITY_COLORS = [
   "#16a34a", "#dc2626", "#d97706", "#7c3aed", "#0891b2", "#c026d3",
@@ -925,7 +932,8 @@ async function loadHealth() {
   setStatus("neo4jStatus", "testing");
   setConnectionDetail("neo4jStatusDetail", t("status.testing"));
   try {
-    const health = await api("/api/health");
+    const health = await latestApi("connection-status", "/api/health");
+    if (!health) return null;
     setStatus("neo4jStatus", "ok");
     setConnectionDetail("neo4jStatusDetail", health.database_message, true);
     return health;
@@ -1001,7 +1009,11 @@ async function testSettings({ silent = false } = {}) {
   setStatus("neo4jStatus", "testing");
   setConnectionDetail("steamStatusDetail", t("status.testing"));
   setConnectionDetail("neo4jStatusDetail", t("status.testing"));
-  const result = await api("/api/settings/test", { method: "POST", body: "{}" });
+  const result = await latestApi("connection-status", "/api/settings/test", {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result) return null;
   setStatus("steamStatus", result.steam_ok ? "ok" : "failed");
   setStatus("neo4jStatus", result.neo4j_ok ? "ok" : "failed");
   setConnectionDetail("steamStatusDetail", result.steam_message, result.steam_ok);
@@ -1213,6 +1225,7 @@ async function startCrawl() {
   if (friendMin) payload.friend_count_min = Number(friendMin);
   if (friendMax) payload.friend_count_max = Number(friendMax);
   const run = await api("/api/crawls", { method: "POST", body: JSON.stringify(payload) });
+  requestCoordinator.cancelMany(["crawl-status", "crawl-events"]);
   invalidateNetworkAnalysis(false);
   currentRunId = run.id;
   crawlPollFailures = 0;
@@ -1245,7 +1258,8 @@ async function pollRun() {
   pollTimer = null;
   const runId = currentRunId;
   try {
-    const run = await api(`/api/crawls/${runId}`);
+    const run = await latestApi("crawl-status", `/api/crawls/${runId}`);
+    if (!run) return;
     if (runId !== currentRunId || !pageActive) return;
     if (crawlPollFailures > 0) {
       appendSystemLog("info", "crawl", t("log.crawlPollRecovered"));
@@ -1297,7 +1311,12 @@ async function pollRun() {
 
 async function loadEvents() {
   if (!currentRunId) return;
-  const events = await api(`/api/crawls/${currentRunId}/events?after=${lastEventSeq}`);
+  const runId = currentRunId;
+  const events = await latestApi(
+    "crawl-events",
+    `/api/crawls/${runId}/events?after=${lastEventSeq}`,
+  );
+  if (!events || runId !== currentRunId || !pageActive) return;
   for (const event of events) {
     appendUiLog(event.level, event.stage, event.message, event.time);
     lastEventSeq = Math.max(lastEventSeq, event.seq);
@@ -1313,7 +1332,8 @@ async function loadSystemLogs(reset = false) {
   params.set("after", String(lastSystemLogSeq));
   const level = $("systemLogLevel").value;
   if (level) params.set("level", level);
-  const rows = await api(`/api/logs?${params.toString()}`);
+  const rows = await latestApi("system-logs", `/api/logs?${params.toString()}`);
+  if (!rows) return;
   for (const row of rows) {
     appendSystemLog(row.level, row.source, row.message, row.time);
     lastSystemLogSeq = Math.max(lastSystemLogSeq, row.seq);
@@ -1343,6 +1363,7 @@ function startSystemLogPolling() {
 function stopSystemLogPolling() {
   clearTimeout(systemLogTimer);
   systemLogTimer = null;
+  requestCoordinator?.cancel("system-logs");
 }
 
 async function cancelCrawl() {
@@ -2076,13 +2097,14 @@ function suspendBackgroundWork() {
   pollTimer = null;
   stopSystemLogPolling();
   stopDbStatsPolling();
-  requestCoordinator?.cancelMany(PROJECT_SCOPED_REQUEST_KEYS);
+  requestCoordinator?.cancelMany(PAGE_SCOPED_REQUEST_KEYS);
   graphLifecycle?.cancel();
 }
 
 function resumeBackgroundWork() {
   pageActive = true;
   startSystemLogPolling();
+  loadHealth().catch(() => {});
   if (!currentRunId) return;
   pollRun();
   if (["running", "paused"].includes($("crawlStatus")?.dataset.status || "")) {
