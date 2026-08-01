@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -235,6 +236,17 @@ def test_request_coordinator_loads_before_application_script() -> None:
     assert index.index("/static/graph-lifecycle.js") < index.index("/static/app.js")
 
 
+def test_required_interactive_elements_exist_in_application_page() -> None:
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    declaration = source.split("const REQUIRED_INTERACTIVE_ELEMENT_IDS = [", 1)[1].split("];", 1)[0]
+    required_ids = set(re.findall(r'"([A-Za-z0-9_-]+)"', declaration))
+    page_ids = set(re.findall(r'id="([A-Za-z0-9_-]+)"', index))
+
+    assert required_ids
+    assert required_ids <= page_ids
+
+
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_application_reports_missing_helper_scripts_without_crashing() -> None:
     app_path = str((STATIC_DIR / "app.js").resolve())
@@ -295,7 +307,8 @@ def test_application_reports_missing_helper_scripts_without_crashing() -> None:
         if (!hint.textContent.includes("graph-lifecycle.js")) process.exit(4);
         if (!hint.textContent.includes("vendor/cytoscape.min.js")) process.exit(5);
         if (buttons.some((button) => !button.disabled)) process.exit(6);
-      }}).catch(() => process.exit(7));
+        if (!hint.textContent.includes("#graphRoot")) process.exit(7);
+      }}).catch(() => process.exit(8));
     """
 
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())

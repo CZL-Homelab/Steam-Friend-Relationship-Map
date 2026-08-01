@@ -9,7 +9,7 @@ const FALLBACK_ZH = {
   "graph.emptyTitle": "暂无图谱",
   "graph.emptyHint": "完成抓取或刷新图谱后会显示节点。",
   "startup.failedTitle": "界面启动失败",
-  "startup.missingDependencies": "必要静态资源加载失败：{dependencies}。请强制刷新页面；若仍然失败，请检查 /static 资源是否完整。",
+  "startup.missingDependencies": "必要界面资源缺失或版本不一致：{dependencies}。请强制刷新页面；若仍然失败，请检查 /static 资源是否完整。",
   "log.empty": "暂无日志",
   "log.crawlPollFailed": "抓取状态刷新失败，{seconds} 秒后自动重试：{message}",
   "log.crawlPollRecovered": "抓取状态刷新已恢复",
@@ -43,6 +43,20 @@ let currentLang = localStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
 const startupDependencyErrors = [];
+const REQUIRED_INTERACTIVE_ELEMENT_IDS = [
+  "graph", "graphEmpty", "graphLoading", "graphRoot", "pathResult",
+  "resetFilters", "settingsGraphDbEngine", "testSettings", "loadSettings",
+  "saveSettings", "clearSteamProxy", "refreshDbStats", "dbStatsInterval",
+  "startCrawl", "cancelCrawl", "forceStopCrawl", "pauseCrawl", "resumeCrawl",
+  "refreshGraph", "fitGraph", "layoutGraph", "saveProfile", "findPath",
+  "loadNetworkAnalysis", "loadFriendCircles", "refreshSystemLogs",
+  "copySystemLogs", "clearSystemLogs", "systemLogLevel", "systemLogs",
+  "graphSizeBy", "graphLayoutBias", "communityColors", "exportJson", "exportCsv",
+  "exportFrame", "copyBloom", "bloomQuery", "refreshProjects", "createProject",
+  "newProjectName", "themeToggle", "toggleConsole", "presetSelect", "savePreset",
+  "deletePreset", "rootUrl", "maxDepth", "maxNodes", "delayMs", "cacheValidDays",
+  "crawlFriendCountMin", "crawlFriendCountMax", "crawlPriorPoolMinLinks",
+];
 const ACTIVE_CRAWL_STATUSES = new Set(["pending", "running", "paused"]);
 const TERMINAL_CRAWL_STATUSES = new Set(["completed", "cancelled", "stopped", "failed"]);
 
@@ -710,6 +724,9 @@ function getMissingFrontendDependencies() {
   const missing = [...startupDependencyErrors];
   if (typeof window.cytoscape !== "function") {
     missing.push("vendor/cytoscape.min.js");
+  }
+  for (const id of REQUIRED_INTERACTIVE_ELEMENT_IDS) {
+    if (!$(id)) missing.push(`#${id}`);
   }
   return missing;
 }
