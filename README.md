@@ -99,7 +99,21 @@
 - 使用公开 Steam Web API，不读取 Cookie，不绕过隐私设置。
 - 抓取深度限制为 1-4 层，最大用户数限制为 10000。
 - 自动写入 `SteamUser` 节点和 `STEAM_FRIEND` 关系。
+- Kùzu 使用每批 500 行的事务化写入，批量保存用户、项目元数据和好友关系，减少大型抓取任务的数据库往返。Kùzu writes users, project metadata, and friend relationships in transactional batches of 500 rows to reduce database round trips during large crawls.
+- 抓取器会按请求批次批量读写 Kùzu 或 Neo4j 好友列表缓存，并自动忽略不完整的旧缓存后重新抓取。The crawler reads and writes Kùzu or Neo4j friend-list caches in request-sized batches and refetches incomplete legacy cache entries.
+- 抓取进度、错误数和私密用户数按请求批次合并写入，暂停与完成、停止、失败等终态仍会立即持久化。Crawl progress and counters are coalesced per request batch while pause and terminal states remain immediately durable.
+- 项目列表使用固定次数的独立聚合查询统计成员、关系和抓取任务，避免随项目数量增长的 N+1 查询和 Neo4j 笛卡尔中间结果。Project listings use a fixed set of independent aggregate queries, avoiding per-project N+1 reads and Neo4j Cartesian intermediates.
+- 多项目通过显式 `IN_PROJECT` 成员关系隔离；同一 Steam 用户可安全出现在多个项目，删除一个项目不会删除其他项目仍在使用的用户。
+- 备注、标签、分类、Root 层数、内层连接数和紧密度分数也存放在 `IN_PROJECT` 上；同一用户在不同项目中可拥有完全独立的视图数据和分析指标。
+- 旧版仅使用 `project_id` 的数据库会在启动时自动执行一次幂等成员关系迁移，无需手工转换。
+- 配置、密钥、项目切换和抓取任务创建使用统一的运行时互斥保护；切换或配置重载失败时会恢复原状态，避免后台任务继续使用已关闭的数据库或 HTTP 客户端。
+- CSV 导出包含项目、备注、标签、层数和评分等完整字段，使用 UTF-8 BOM，并转义电子表格公式前缀；JSON 导出保持原始结构。
 - 图谱界面支持中文 / English 切换。
+- 图谱、统计、项目、路径和分析请求采用“最新请求生效”协调器；新请求会取消同类旧请求，项目切换会清空旧项目视图，避免迟到响应覆盖当前界面。Graph, statistics, project, path, and analysis reads use latest-request-wins coordination, preventing late responses from overwriting the current project view.
+- Kùzu 的 Root 图谱、最短路径和朋友圈分析均使用最多 4 层的分层 BFS，不枚举可变长度路径组合，避免密集图耗尽 Buffer Pool。Kùzu root graphs, shortest paths, and friend-circle analysis use bounded layer-by-layer BFS instead of variable-length path enumeration to protect the buffer pool on dense graphs.
+- 应用启动时会把上一次进程异常退出遗留的等待中、运行中或暂停中的抓取记录标记为已停止，避免界面长期显示不存在的后台任务。On startup, orphaned pending, running, or paused crawls from a previous process are marked stopped so the UI never reports a background task that no longer exists.
+- 抓取任务的完成、取消、强停和失败状态使用统一终态快照；错误信息脱敏后落库，终态写入失败会自动重试且不会产生未处理的后台任务异常。Crawl completion, cancellation, forced stop, and failure share one terminal snapshot; errors are redacted before persistence, and terminal writes retry without leaking unhandled task exceptions.
+- 图谱重复刷新或切换项目时会主动取消旧的分块渲染计时器并停止旧 Cytoscape 布局，避免后台布局和动画累积。Repeated graph refreshes and project switches cancel stale chunk timers and stop prior Cytoscape layouts so background layout work cannot accumulate.
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
 
 ## 安全提醒：Public 仓库不要提交这些内容
@@ -235,14 +249,16 @@ NEO4J_USER=neo4j                       # 用户名
 
 ## 网页端安全配置说明
 
-当前版本推荐在网页端填写 Steam API Key 和 Neo4j 密码。保存后它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。
+当前版本推荐在网页端填写 Steam API Key、Steam 代理 URL 和 Neo4j 密码。保存后它们会写入系统凭据库，例如 Windows Credential Manager，而不是写入 `.env`。
 
 安全策略：
 
 - 前端输入框使用密码框。
 - 保存后输入框会清空。
-- API 只返回“已配置/未配置”，不会回显 Steam API Key 或 Neo4j 密码原文。
+- API 只返回“已配置/未配置”，不会回显 Steam API Key、代理 URL 或 Neo4j 密码原文。
+- Steam 代理支持 `http://`、`https://`、`socks5://` 和 `socks5h://`；包含账号密码的代理 URL 同样保存在系统凭据库并进入日志脱敏列表。
 - `.env` 只建议保存非敏感配置，例如 Neo4j 地址、用户名、端口和默认抓取参数。
+- `.env` 中的 `STEAM_PROXY_URL` 可作为兼容回退；若 URL 包含认证信息，仍建议迁移到网页端安全存储。
 - 旧版 `.env` 中的 `STEAM_API_KEY` 和 `NEO4J_PASSWORD` 仍然兼容读取，但网页会提示建议迁移到安全存储。
 - 如果你需要真正的浏览器到后端传输层加密，应启用本地 HTTPS；普通 localhost HTTP 不应被描述为“全链路加密”。
 
@@ -438,7 +454,7 @@ uv sync
 
 ### 第 10 步：启动本地应用
 
-如果您使用的是 Neo4j 引擎，请确认 Neo4j Desktop 数据库已经 Start 运行；如果使用的是默认 the Kùzu 引擎，则无需启动任何外部数据库。
+如果您使用的是 Neo4j 引擎，请确认 Neo4j Desktop 数据库已经 Start 运行；如果使用默认的 Kùzu 引擎，则无需启动任何外部数据库。
 
 在终端中运行：
 
@@ -451,6 +467,14 @@ uv run steam-friend-map
 ```text
 http://127.0.0.1:8000
 ```
+
+可用健康接口确认应用和图数据库都已就绪：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+```
+
+图数据库可用时返回 HTTP 200；不可用时返回 HTTP 503 和已脱敏的错误信息。服务退出会先停止后台抓取任务，再依次关闭 Steam HTTP 客户端和数据库，避免遗留 Kuzu 文件锁。
 
 ## 第一次成功运行检查清单
 
@@ -470,11 +494,12 @@ http://127.0.0.1:8000
 
 第一次建议用很保守的设置：
 
-| 项目     | 建议           |
-| -------- | -------------- |
-| Depth    | `1`            |
-| Nodes    | `200` 或 `500` |
-| Delay ms | `300`          |
+| 项目                | 建议           |
+| ------------------- | -------------- |
+| Depth               | `1`            |
+| Nodes               | `200` 或 `500` |
+| Delay ms            | `300`          |
+| Concurrent requests | `4`            |
 
 操作步骤：
 
@@ -495,6 +520,8 @@ http://127.0.0.1:8000
 9. 点击一个节点，右侧会显示头像、昵称、主页链接、备注、标签和分类。
 
 确认 1 层正常后，再尝试 2 层。不要一上来就抓 4 层。
+
+“并发请求数”限制同时等待 Steam 响应的请求数量，范围为 `1-16`。建议从 `4` 开始；若频繁遇到 HTTP 429，可降低并发或增大 Delay ms，程序也会按 Steam 的 `Retry-After` 自动退避。
 
 ### 扫描前筛选怎么用？
 
@@ -690,9 +717,17 @@ This project is a local Steam friend graph crawler and Neo4j visualizer. The Web
    http://127.0.0.1:8000
    ```
 
+   Check readiness at `http://127.0.0.1:8000/api/health`. It returns HTTP 503 when the graph database is unavailable. Shutdown stops background crawls before closing the Steam HTTP client and database.
+
 8. Use the Secure Settings panel to save your Steam API Key and Neo4j password into the system credential store.
 
 The app only uses public Steam Web API data. Private friend lists are marked as inaccessible and skipped. Pre-scan filters can limit candidates by public friend count or by links to the prior user pool; post-scan filters and Friend Circle Analysis work only on data already stored in your local Neo4j database.
+
+Project membership is represented by explicit `IN_PROJECT` relationships. Notes, tags, categories, Root depth, prior-pool link counts, and closeness scores are stored on that membership, so one Steam user can have independent annotations and analysis metrics in different projects. Legacy node metadata is migrated idempotently on startup.
+
+Runtime mutations are serialized with crawl creation. Settings, secrets, and project switches roll back when persistence or runtime reload fails, preventing a background crawl from retaining a closed database or HTTP client.
+
+CSV exports include project annotations and analysis fields, use a UTF-8 BOM, and escape spreadsheet formula prefixes. JSON exports retain the original graph structure.
 
 System Logs / Dev Logs redact API keys, passwords, Cookie, Authorization, and common `password=` / `key=` values before showing them in the browser. SteamIDs, notes, screenshots, and relationship context may still be personal data, so review logs before sharing.
 

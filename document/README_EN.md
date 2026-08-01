@@ -97,6 +97,8 @@ Core capabilities:
 - Uses public Steam Web API; does not read cookies or bypass privacy settings.
 - Crawl depth limited to 1–4 layers; max user count 10000.
 - Automatically creates `SteamUser` nodes and `STEAM_FRIEND` relationships.
+- Isolates projects with explicit `IN_PROJECT` memberships; the same Steam user can safely belong to multiple projects, and deleting one project preserves users still referenced elsewhere.
+- Automatically performs a one-time idempotent membership migration for legacy databases that only stored `project_id` properties.
 - GUI supports Chinese / English language switching.
 - Avatar cards, notes, tags, categories, central node rankings, and shortest path queries.
 
@@ -179,14 +181,16 @@ This is not legal advice. Whether certain data may be crawled, stored, analyzed,
 
 ## Web-based security configuration
 
-The current version recommends entering the Steam API Key and Neo4j password through the web UI. After saving, they are written to the system credential store (e.g., Windows Credential Manager) rather than `.env`.
+The current version recommends entering the Steam API Key, Steam proxy URL, and Neo4j password through the web UI. After saving, they are written to the system credential store (e.g., Windows Credential Manager) rather than `.env`.
 
 Security measures:
 
 - Frontend input uses password-type fields.
 - Input fields are cleared after saving.
-- The API only returns "configured / not configured" — the actual key or password is never echoed back.
+- The API only returns "configured / not configured" — the actual key, proxy URL, or password is never echoed back.
+- Steam proxies support `http://`, `https://`, `socks5://`, and `socks5h://`. Proxy URLs containing credentials are stored in the system credential store and included in log redaction.
 - `.env` should only contain non-sensitive config like Neo4j URI, username, port, and default crawl parameters.
+- `STEAM_PROXY_URL` remains available as an `.env` fallback; migrate it to the web UI when the URL contains credentials.
 - Legacy `.env` entries for `STEAM_API_KEY` and `NEO4J_PASSWORD` are still read for compatibility, but the UI suggests migrating to secure storage.
 - If you need real transport-layer encryption, enable local HTTPS; plain localhost HTTP should not be described as "end-to-end encrypted".
 

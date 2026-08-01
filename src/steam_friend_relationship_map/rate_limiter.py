@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Callable
+
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveRateLimiter:
@@ -22,18 +26,26 @@ class AdaptiveRateLimiter:
         self.max_delay_ms = max(max_delay_ms, base_delay_ms)
         self.decrease_step_ms = 10.0  # 每次成功减少 10ms 延迟（请求加快）
         self.increase_factor = 1.5    # 每次重试/失败增加 1.5 倍延迟（请求放慢）
+        self.backoff_floor_ms = min(100.0, self.max_delay_ms)
         self.on_change_callback = on_change_callback
         self.lock = asyncio.Lock()
+        self._next_request_at = 0.0
 
     async def wait(self) -> None:
-        """根据当前延迟间隔进行等待"""
-        async with self.lock:
-            delay = self.current_delay_ms / 1000.0
-            if delay > 0:
-                await asyncio.sleep(delay)
+        """Wait until a request can atomically claim the next start time."""
+        loop = asyncio.get_running_loop()
+        while True:
+            async with self.lock:
+                now = loop.time()
+                wait_seconds = self._next_request_at - now
+                if wait_seconds <= 0:
+                    self._next_request_at = now + self.current_delay_ms / 1000.0
+                    return
+            await asyncio.sleep(wait_seconds)
 
     async def report_success(self) -> None:
         """报告请求成功，使用非线性曲线缩短延迟（加快）"""
+        change: tuple[float, float, str] | None = None
         async with self.lock:
             old_delay = self.current_delay_ms
             # 比例渐进回收曲线：高延迟时恢复步长更大，低延迟时平缓趋近最小延迟
@@ -42,15 +54,31 @@ class AdaptiveRateLimiter:
             new_delay = max(self.min_delay_ms, old_delay - decrease_step)
             if new_delay != old_delay:
                 self.current_delay_ms = new_delay
-                if self.on_change_callback:
-                    self.on_change_callback(old_delay, new_delay, "success")
+                change = (old_delay, new_delay, "success")
+        self._notify_change(change)
 
-    async def report_backoff(self) -> None:
+    async def report_backoff(self, retry_after_ms: float | None = None) -> None:
         """报告请求拥堵或受限，乘性延长延迟（退避）"""
+        change: tuple[float, float, str] | None = None
         async with self.lock:
             old_delay = self.current_delay_ms
-            new_delay = min(self.max_delay_ms, old_delay * self.increase_factor)
+            adaptive_delay = max(self.backoff_floor_ms, old_delay * self.increase_factor)
+            new_delay = min(self.max_delay_ms, adaptive_delay)
+            requested_delay = max(new_delay, max(0.0, retry_after_ms or 0.0))
+            loop = asyncio.get_running_loop()
+            self._next_request_at = max(
+                self._next_request_at,
+                loop.time() + requested_delay / 1000.0,
+            )
             if new_delay != old_delay:
                 self.current_delay_ms = new_delay
-                if self.on_change_callback:
-                    self.on_change_callback(old_delay, new_delay, "backoff")
+                change = (old_delay, new_delay, "backoff")
+        self._notify_change(change)
+
+    def _notify_change(self, change: tuple[float, float, str] | None) -> None:
+        if change is None or self.on_change_callback is None:
+            return
+        try:
+            self.on_change_callback(*change)
+        except Exception:
+            logger.warning("Rate limiter change callback failed", exc_info=True)

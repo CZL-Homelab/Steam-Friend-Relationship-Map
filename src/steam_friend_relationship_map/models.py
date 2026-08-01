@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+
+from .proxy import normalize_proxy_url
 
 
 class CrawlStatus(StrEnum):
@@ -42,11 +44,20 @@ class FriendEdge(BaseModel):
     source_depth: int
 
 
+class FriendListCacheUpdate(BaseModel):
+    steam_id: str
+    status: str
+    friend_count: int | None = None
+    friend_count_status: str | None = None
+    friend_ids: list[str] | None = None
+
+
 class CrawlCreate(BaseModel):
     root_url: str = Field(min_length=1)
     max_depth: int = Field(default=2, ge=1, le=4)
     max_nodes: int = Field(default=2000, ge=1, le=10000)
     delay_ms: int = Field(default=300, ge=0, le=10000)
+    request_concurrency: int = Field(default=4, ge=1, le=16)
     friend_count_min: int | None = Field(default=None, ge=0)
     friend_count_max: int | None = Field(default=None, ge=0)
     prior_pool_min_links: int = Field(default=0, ge=0)
@@ -127,6 +138,14 @@ class SettingsTestResult(BaseModel):
     neo4j_reason: str = "unknown"
 
 
+class HealthResponse(BaseModel):
+    status: Literal["ok", "unavailable"]
+    database: str
+    database_message: str
+    active_crawl: bool
+    project_id: str
+
+
 class PublicSettings(BaseModel):
     graph_db_engine: str
     kuzu_db_path: str
@@ -141,8 +160,10 @@ class PublicSettings(BaseModel):
     default_cache_valid_days: int
     active_project: str = "default"
     steam_api_key_configured: bool
+    steam_proxy_configured: bool
     neo4j_password_configured: bool
     steam_api_key_from_env: bool = False
+    steam_proxy_from_env: bool = False
     neo4j_password_from_env: bool = False
     secure_store_available: bool = True
     message: str = ""
@@ -169,9 +190,26 @@ class SettingsPatch(BaseModel):
         return value.replace("\n", "").replace("\r", "")
 
 
+class SettingsSave(SettingsPatch):
+    steam_api_key: str | None = Field(default=None, min_length=1)
+    steam_proxy_url: str | None = Field(default=None, min_length=1)
+    neo4j_password: str | None = Field(default=None, min_length=1)
+
+    @field_validator("steam_proxy_url")
+    @classmethod
+    def validate_proxy_secret(cls, value: str | None) -> str | None:
+        return normalize_proxy_url(value) if value is not None else None
+
+
 class SecretUpdate(BaseModel):
-    name: Literal["steam_api_key", "neo4j_password"]
+    name: Literal["steam_api_key", "steam_proxy_url", "neo4j_password"]
     value: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_secret_value(self) -> "SecretUpdate":
+        if self.name == "steam_proxy_url":
+            self.value = normalize_proxy_url(self.value)
+        return self
 
 
 class DbStats(BaseModel):
@@ -188,7 +226,7 @@ class GraphNode(BaseModel):
     avatar: str = ""
     profile_url: str = ""
     note: str = ""
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     category: str = ""
     friend_list_status: str = "unknown"
     degree: int = 0
@@ -224,6 +262,38 @@ class ExportResponse(BaseModel):
     edges: list[dict[str, Any]]
 
 
+class ExportRequest(BaseModel):
+    format: Literal["json", "csv"] = "json"
+
+
+class NetworkMetric(BaseModel):
+    id: str
+    pagerank: float
+    community: int
+    community_size: int
+    degree: int
+
+
+class NetworkLeader(BaseModel):
+    id: str
+    label: str
+    avatar: str = ""
+    profile_url: str = ""
+    pagerank: float
+    degree: int
+    community: int
+    community_size: int
+
+
+class NetworkAnalysisResponse(BaseModel):
+    metrics: list[NetworkMetric] = Field(default_factory=list)
+    leaders: list[NetworkLeader] = Field(default_factory=list)
+    analyzed_nodes: int = 0
+    analyzed_edges: int = 0
+    community_count: int = 0
+    modularity: float = 0
+
+
 class FriendCircleCandidate(BaseModel):
     steam_id: str
     label: str
@@ -234,7 +304,7 @@ class FriendCircleCandidate(BaseModel):
     friend_count: int | None = None
     mutual_count: int = 0
     score: float = 0
-    evidence: list[GraphNode] = []
+    evidence: list[GraphNode] = Field(default_factory=list)
 
 
 class FriendCircleAnalysisResponse(BaseModel):
@@ -253,7 +323,7 @@ class PotentialFriendCandidate(BaseModel):
     mutual_count: int = 0
     jaccard_coefficient: float = 0.0
     score: float = 0.0
-    evidence: list[GraphNode] = []
+    evidence: list[GraphNode] = Field(default_factory=list)
 
 
 class PotentialFriendsResponse(BaseModel):
@@ -279,6 +349,22 @@ class ProjectCreate(BaseModel):
         cleaned = value.replace("\n", "").replace("\r", "").strip()
         if not cleaned:
             raise ValueError("project name cannot be empty")
+        return cleaned
+
+
+class ProjectSwitch(BaseModel):
+    project_id: str = Field(
+        min_length=1,
+        max_length=80,
+        validation_alias=AliasChoices("project_id", "name"),
+    )
+
+    @field_validator("project_id")
+    @classmethod
+    def normalize_project_id(cls, value: str) -> str:
+        cleaned = value.replace("\n", "").replace("\r", "").strip()
+        if not cleaned:
+            raise ValueError("project id cannot be empty")
         return cleaned
 
 
