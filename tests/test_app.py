@@ -78,6 +78,7 @@ class FakeRepo:
                     root_route_count=1,
                     root_route_total_hops=0,
                     root_friend_circle_score=1_000_000,
+                    is_root=True,
                 )
             ],
             edges=[GraphEdge(id="root-a", source="root", target="a")],
@@ -233,6 +234,7 @@ def test_graph_endpoint_uses_repo() -> None:
     assert body["nodes"][0]["root_route_count"] == 1
     assert body["nodes"][0]["root_route_total_hops"] == 0
     assert body["nodes"][0]["root_friend_circle_score"] == 1_000_000
+    assert body["nodes"][0]["is_root"] is True
 
 
 def test_project_list_errors_return_json_detail() -> None:

@@ -234,6 +234,7 @@
     "validation.required": "必填",
     "validation.proxyUrl": "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理 URL",
     "validation.rootSteamIdRequired": "请输入 Root SteamID",
+    "validation.unknownVanityRoot": "未找到 {vanity} 的已扫描 SteamID，请先扫描该主页",
     "potential.hint": "推荐与 Root 没有直接关系、但拥有共同好友的二跳用户，并按 Jaccard 相似度排序。",
     "potential.row": "{mutual} 位共同好友 · Jaccard {jaccard}%"
   },
@@ -472,6 +473,7 @@
     "validation.required": "Required",
     "validation.proxyUrl": "Enter a valid HTTP, HTTPS, or SOCKS5 proxy URL",
     "validation.rootSteamIdRequired": "Root SteamID is required",
+    "validation.unknownVanityRoot": "No scanned SteamID was found for {vanity}; crawl that profile first",
     "potential.hint": "Recommend two-hop users who are not directly connected to Root but share friends, ranked by Jaccard similarity.",
     "potential.row": "{mutual} mutual friends · Jaccard {jaccard}%"
   }

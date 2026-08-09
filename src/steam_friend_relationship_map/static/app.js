@@ -925,8 +925,50 @@ function graphParams() {
   return params;
 }
 
+function loadRecentRootsFromStorage() {
+  try {
+    const roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]");
+    return Array.isArray(roots) ? roots : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeGraphRootInput(value) {
+  const recentRoots = loadRecentRootsFromStorage();
+  const normalized = [];
+  for (const rawPart of value.split(",")) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const profileMatch = part.match(/(?:steamcommunity\.com\/)?profiles\/([0-9]{17})(?:[/?#]|$)/i);
+    if (profileMatch) {
+      normalized.push(profileMatch[1]);
+      continue;
+    }
+    const vanityMatch = part.match(/(?:steamcommunity\.com\/)?id\/([a-zA-Z0-9_-]+)(?:[/?#]|$)/i);
+    if (vanityMatch) {
+      const vanity = vanityMatch[1].toLowerCase();
+      const knownRoot = recentRoots.find((root) => {
+        const match = String(root?.url || "").match(/(?:steamcommunity\.com\/)?id\/([a-zA-Z0-9_-]+)(?:[/?#]|$)/i);
+        return match?.[1]?.toLowerCase() === vanity && root?.id;
+      });
+      if (!knownRoot) return { value: "", unknownVanity: vanityMatch[1] };
+      normalized.push(String(knownRoot.id));
+      continue;
+    }
+    normalized.push(part);
+  }
+  return { value: [...new Set(normalized)].join(","), unknownVanity: "" };
+}
+
 function validateGraphFilters() {
-  clearFieldErrors(["graphFriendCountMin", "graphFriendCountMax", "graphPriorPoolMinLinks", "graphDepth", "graphLimit"]);
+  clearFieldErrors(["graphRoot", "graphFriendCountMin", "graphFriendCountMax", "graphPriorPoolMinLinks", "graphDepth", "graphLimit"]);
+  const normalizedRoot = normalizeGraphRootInput($("graphRoot").value);
+  if (normalizedRoot.unknownVanity) {
+    setFieldError("graphRoot", t("validation.unknownVanityRoot", { vanity: normalizedRoot.unknownVanity }));
+    return false;
+  }
+  $("graphRoot").value = normalizedRoot.value;
   if (!validateRange("graphFriendCountMin", "graphFriendCountMax")) return false;
   const prior = numberValue("graphPriorPoolMinLinks", 0);
   if (prior < 0) {
@@ -1218,8 +1260,7 @@ function startTimer(startedAt = null) {
 // ── Recent roots ──────────────────────────────────────────────────
 
 function saveRecentRoot(url, name, avatar, id) {
-  let roots = [];
-  try { roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  let roots = loadRecentRootsFromStorage();
   roots = roots.filter(r => r.url !== url);
   roots.unshift({ url, name: name || url, avatar, id: id || "" });
   if (roots.length > 10) roots = roots.slice(0, 10);
@@ -1228,8 +1269,7 @@ function saveRecentRoot(url, name, avatar, id) {
 }
 
 function renderRecentRoots() {
-  let roots = [];
-  try { roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  const roots = loadRecentRootsFromStorage();
   const list = $("recentRootsList");
   const count = $("recentRootsCount");
   list.innerHTML = "";
@@ -1475,6 +1515,8 @@ async function pollRun() {
       toast(run.message || statusText(run.status));
       appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
       invalidateNetworkAnalysis(false);
+      $("graphRoot").value = run.root_steam_id || "";
+      $("analysisRoot").value = run.root_steam_id || "";
       await loadGraph().catch(() => {});
       await loadDbStats().catch(() => {});
       // 更新最近扫描的 Root 头像和昵称
@@ -1971,18 +2013,14 @@ async function copySystemLogs() {
 }
 
 function wireEvents() {
-  // SteamID 智能链接解析提取
-  $("graphRoot").addEventListener("input", (event) => {
-    const val = event.target.value.trim();
-    const profileMatch = val.match(/profiles\/([0-9]{17})/);
-    const idMatch = val.match(/id\/([a-zA-Z0-9_-]+)/);
-    if (profileMatch) {
-      event.target.value = profileMatch[1];
-      autoSaveLastConfig();
-    } else if (idMatch) {
-      event.target.value = idMatch[1];
-      autoSaveLastConfig();
+  $("graphRoot").addEventListener("change", (event) => {
+    clearFieldErrors(["graphRoot"]);
+    const normalized = normalizeGraphRootInput(event.target.value);
+    if (normalized.unknownVanity) {
+      setFieldError("graphRoot", t("validation.unknownVanityRoot", { vanity: normalized.unknownVanity }));
+      return;
     }
+    event.target.value = normalized.value;
   });
 
   // 一键重置筛选

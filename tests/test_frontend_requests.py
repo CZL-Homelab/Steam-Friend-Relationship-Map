@@ -13,6 +13,65 @@ NODE = shutil.which("node")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_graph_root_input_uses_resolved_recent_vanity_ids_without_network_access() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    recent_roots = json.dumps(
+        [
+            {
+                "url": "https://steamcommunity.com/id/known-user/",
+                "id": "76561198000000001",
+            }
+        ]
+    )
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      class Coordinator {{}}
+      let fetchCalls = 0;
+      const context = {{
+        console,
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        fetch() {{ fetchCalls++; throw new Error("network must not be used"); }},
+        localStorage: {{
+          getItem(key) {{ return key === "sfm_recent_roots" ? {json.dumps(recent_roots)} : null; }},
+          setItem() {{}},
+          removeItem() {{}},
+        }},
+        window: {{
+          LatestRequestCoordinator: Coordinator,
+          GraphLifecycleCoordinator: Coordinator,
+          addEventListener() {{}},
+        }},
+        document: {{ addEventListener() {{}}, getElementById() {{ return null; }} }},
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+
+      const numeric = vm.runInContext(
+        'normalizeGraphRootInput("https://steamcommunity.com/profiles/76561198000000000/")',
+        context,
+      );
+      const known = vm.runInContext(
+        'normalizeGraphRootInput("https://steamcommunity.com/id/known-user/")',
+        context,
+      );
+      const unknown = vm.runInContext(
+        'normalizeGraphRootInput("https://steamcommunity.com/id/unknown-user/")',
+        context,
+      );
+      if (numeric.value !== "76561198000000000") process.exit(1);
+      if (known.value !== "76561198000000001" || known.unknownVanity) process.exit(2);
+      if (unknown.value !== "" || unknown.unknownVanity !== "unknown-user") process.exit(3);
+      if (fetchCalls !== 0) process.exit(4);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_latest_request_coordinator_aborts_and_invalidates_older_requests() -> None:
     module_path = str((STATIC_DIR / "request-coordinator.js").resolve())
     script = f"""
@@ -435,6 +494,13 @@ def test_application_reports_missing_frontend_dependencies_before_initializing_g
     startup_source = source[startup:startup_end]
     assert "loadHealth()" in startup_source
     assert "testSettings(" not in startup_source
+
+    terminal_start = source.index("if (TERMINAL_CRAWL_STATUSES.has(run.status))")
+    terminal_end = source.index("scheduleRunPoll();", terminal_start)
+    terminal_source = source[terminal_start:terminal_end]
+    assert terminal_source.index('$("graphRoot").value = run.root_steam_id') < terminal_source.index(
+        "await loadGraph()"
+    )
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
