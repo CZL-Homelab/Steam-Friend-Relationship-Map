@@ -60,7 +60,12 @@ def test_network_analysis_handles_isolated_nodes_deterministically() -> None:
 
 def test_network_analysis_ignores_invalid_edges_self_loops_and_duplicates() -> None:
     data = ExportResponse(
-        nodes=[_node("a"), _node("b"), _node("a", "Duplicate"), {"persona_name": "Missing ID"}],
+        nodes=[
+            _node("a"),
+            _node("b"),
+            _node("a", "Duplicate"),
+            {"persona_name": "Missing ID"},
+        ],
         edges=[
             {"source": "a", "target": "b"},
             {"source": "b", "target": "a"},

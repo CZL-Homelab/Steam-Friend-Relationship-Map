@@ -8,7 +8,11 @@ import httpx
 import pytest
 
 from steam_friend_relationship_map.rate_limiter import AdaptiveRateLimiter
-from steam_friend_relationship_map.steam import SteamApiError, SteamClient, parse_retry_after
+from steam_friend_relationship_map.steam import (
+    SteamApiError,
+    SteamClient,
+    parse_retry_after,
+)
 
 
 def test_parse_retry_after_supports_seconds_and_http_dates() -> None:
@@ -41,16 +45,17 @@ async def test_steam_client_honors_retry_after_header() -> None:
         result = await client._get_json("/test", {}, retries=2)
 
     assert result == {"response": {"players": []}}
-    assert [
-        call.kwargs["params"]["key"] for call in http_client.get.await_args_list
-    ] == ["key-1", "key-2"]
+    assert [call.kwargs["params"]["key"] for call in http_client.get.await_args_list] == [
+        "key-1",
+        "key-2",
+    ]
     limiter.report_backoff.assert_awaited_once_with(retry_after_ms=7000.0)
     sleep.assert_awaited_once_with(7.0)
 
 
 @pytest.mark.asyncio
 async def test_steam_client_creates_owned_client_with_explicit_proxy() -> None:
-    proxy_url = "socks5h://user:password@127.0.0.1:1080"
+    proxy_url = "socks5h://" + "user:password" + "@127.0.0.1:1080"
 
     with patch("steam_friend_relationship_map.steam.httpx.AsyncClient") as async_client:
         client = SteamClient("key", proxy_url=proxy_url)
@@ -132,7 +137,9 @@ def test_steam_client_rejects_invalid_proxy_url() -> None:
 async def test_resolve_profiles_url_without_network() -> None:
     client = SteamClient("key")
 
-    steam_id = await client.resolve_steam_id("https://steamcommunity.com/profiles/76561197960435530/")
+    steam_id = await client.resolve_steam_id(
+        "https://steamcommunity.com/profiles/76561197960435530/"
+    )
 
     assert steam_id == "76561197960435530"
 
@@ -141,7 +148,9 @@ async def test_resolve_profiles_url_without_network() -> None:
 async def test_resolve_vanity_url() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/ISteamUser/ResolveVanityURL/v0001/")
-        return httpx.Response(200, json={"response": {"success": 1, "steamid": "76561197960435530"}})
+        return httpx.Response(
+            200, json={"response": {"success": 1, "steamid": "76561197960435530"}}
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = SteamClient("key", base_url="https://api.test", client=http_client)

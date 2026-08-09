@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import pytest
+
 from steam_friend_relationship_map.models import (
     FriendEdge,
     FriendListCacheUpdate,
@@ -59,7 +61,9 @@ class _FakeSession:
 
     def run(self, query: str, **params: Any) -> _FakeResult:
         placeholders = set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", query))
-        assert placeholders <= set(params), f"Missing Cypher params {placeholders - set(params)} for query: {query}"
+        assert placeholders <= set(params), (
+            f"Missing Cypher params {placeholders - set(params)} for query: {query}"
+        )
         self.driver.queries.append(query)
         self.driver.query_params.append(params)
         if self.in_write_transaction:
@@ -140,7 +144,9 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
     assert any("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
     assert any("membership.note" in query for query in driver.queries)
     assert any("coalesce(membership.category" in query for query in driver.queries)
-    assert any("NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries)
+    assert any(
+        "NOT EXISTS { MATCH (u)-[:IN_PROJECT]->(:Project) }" in query for query in driver.queries
+    )
     assert driver.execute_write_calls == 1
     assert len(driver.transaction_queries) == 5
     assert all(
@@ -153,7 +159,9 @@ def test_neo4j_project_membership_migration_is_idempotent() -> None:
     repo, driver = _repo()
 
     repo.ensure_schema()
-    first_migration_query_count = sum("MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries)
+    first_migration_query_count = sum(
+        "MERGE (u)-[:IN_PROJECT]->(p)" in query for query in driver.queries
+    )
     repo.ensure_schema()
 
     assert first_migration_query_count == 1
@@ -173,6 +181,15 @@ def test_neo4j_recovers_crawls_interrupted_by_restart() -> None:
     assert params["status"] == "stopped"
     assert params["message"] == "应用重启前抓取未正常结束"
     assert params["finished_at"]
+
+
+def test_neo4j_rejects_dynamic_crawl_run_field_names() -> None:
+    repo, driver = _repo()
+
+    with pytest.raises(ValueError, match="Unsupported crawl run update fields"):
+        repo.update_crawl_run("run-1", **{"status = 'failed'": "ignored"})
+
+    assert driver.queries == []
 
 
 def test_neo4j_batches_friend_cache_reads_and_ignores_incomplete_rows() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
@@ -53,7 +53,7 @@ class FriendListCacheUpdate(BaseModel):
 
 
 class CrawlCreate(BaseModel):
-    root_url: str = Field(min_length=1)
+    root_url: str = Field(min_length=1, max_length=2048)
     max_depth: int = Field(default=2, ge=1, le=4)
     max_nodes: int = Field(default=2000, ge=1, le=10000)
     delay_ms: int = Field(default=300, ge=0, le=10000)
@@ -65,7 +65,11 @@ class CrawlCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_filters(self) -> "CrawlCreate":
-        if self.friend_count_min is not None and self.friend_count_max is not None and self.friend_count_min > self.friend_count_max:
+        if (
+            self.friend_count_min is not None
+            and self.friend_count_max is not None
+            and self.friend_count_min > self.friend_count_max
+        ):
             raise ValueError("friend_count_min must be less than or equal to friend_count_max")
         return self
 
@@ -113,7 +117,7 @@ class AppLog(BaseModel):
 
 class UserPatch(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
-    tags: list[str] | None = None
+    tags: list[Annotated[str, Field(max_length=120)]] | None = Field(default=None, max_length=30)
     category: str | None = Field(default=None, max_length=120)
 
     @field_validator("tags")
@@ -126,7 +130,7 @@ class UserPatch(BaseModel):
             value = tag.strip()
             if value and value not in cleaned:
                 cleaned.append(value)
-        return cleaned[:30]
+        return cleaned
 
 
 class SettingsTestResult(BaseModel):
@@ -171,11 +175,11 @@ class PublicSettings(BaseModel):
 
 class SettingsPatch(BaseModel):
     graph_db_engine: Literal["kuzu", "neo4j"] | None = None
-    kuzu_db_path: str | None = None
+    kuzu_db_path: str | None = Field(default=None, max_length=2048)
     kuzu_buffer_pool_size_gb: int | None = Field(default=None, ge=1, le=64)
-    neo4j_uri: str | None = None
-    neo4j_user: str | None = None
-    app_host: str | None = None
+    neo4j_uri: str | None = Field(default=None, max_length=2048)
+    neo4j_user: str | None = Field(default=None, max_length=256)
+    app_host: str | None = Field(default=None, max_length=255)
     app_port: int | None = Field(default=None, ge=1, le=65535)
     default_max_depth: int | None = Field(default=None, ge=1, le=4)
     default_max_nodes: int | None = Field(default=None, ge=1, le=10000)
@@ -191,9 +195,9 @@ class SettingsPatch(BaseModel):
 
 
 class SettingsSave(SettingsPatch):
-    steam_api_key: str | None = Field(default=None, min_length=1)
-    steam_proxy_url: str | None = Field(default=None, min_length=1)
-    neo4j_password: str | None = Field(default=None, min_length=1)
+    steam_api_key: str | None = Field(default=None, min_length=1, max_length=8192)
+    steam_proxy_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    neo4j_password: str | None = Field(default=None, min_length=1, max_length=8192)
 
     @field_validator("steam_proxy_url")
     @classmethod
@@ -203,7 +207,7 @@ class SettingsSave(SettingsPatch):
 
 class SecretUpdate(BaseModel):
     name: Literal["steam_api_key", "steam_proxy_url", "neo4j_password"]
-    value: str = Field(min_length=1)
+    value: str = Field(min_length=1, max_length=8192)
 
     @model_validator(mode="after")
     def validate_secret_value(self) -> "SecretUpdate":

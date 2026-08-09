@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
 from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl, _execute_discard
 from steam_friend_relationship_map.models import (
     CrawlRun,
@@ -92,7 +93,9 @@ def test_kuzu_close_releases_database_lock(tmp_path: Path) -> None:
         reopened.close()
 
 
-def test_kuzu_close_releases_connections_created_by_worker_threads(tmp_path: Path) -> None:
+def test_kuzu_close_releases_connections_created_by_worker_threads(
+    tmp_path: Path,
+) -> None:
     class FakeDatabase:
         def __init__(self) -> None:
             self.closed = False
@@ -116,7 +119,10 @@ def test_kuzu_close_releases_connections_created_by_worker_threads(tmp_path: Pat
         return connection  # type: ignore[return-value]
 
     with (
-        patch("steam_friend_relationship_map.kuzu_repo.kuzu.Database", return_value=database),
+        patch(
+            "steam_friend_relationship_map.kuzu_repo.kuzu.Database",
+            return_value=database,
+        ),
         patch(
             "steam_friend_relationship_map.kuzu_repo.kuzu.Connection",
             side_effect=lambda _database: FakeConnection(),
@@ -136,7 +142,9 @@ def test_kuzu_close_releases_connections_created_by_worker_threads(tmp_path: Pat
         repo._get_conn()
 
 
-def test_kuzu_worker_connection_does_not_keep_real_database_locked(tmp_path: Path) -> None:
+def test_kuzu_worker_connection_does_not_keep_real_database_locked(
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "worker_kuzu_db"
     repo = KuzuRepositoryImpl(db_path=str(db_path), buffer_pool_size_gb=1)
     executor = ThreadPoolExecutor(max_workers=1)
@@ -160,7 +168,10 @@ def test_kuzu_open_failure_does_not_move_database(tmp_path: Path) -> None:
     db_path.mkdir()
 
     with (
-        patch("steam_friend_relationship_map.kuzu_repo.kuzu.Database", side_effect=RuntimeError("Could not set lock on file")) as database,
+        patch(
+            "steam_friend_relationship_map.kuzu_repo.kuzu.Database",
+            side_effect=RuntimeError("Could not set lock on file"),
+        ) as database,
         patch("shutil.move") as move,
         patch("os.rename") as rename,
     ):
@@ -221,6 +232,13 @@ def test_kuzu_crawl_runs(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     assert retrieved2 is not None
     assert retrieved2.status == CrawlStatus.completed
     assert retrieved2.nodes_discovered == 10
+
+
+def test_kuzu_rejects_dynamic_crawl_run_field_names(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    with pytest.raises(ValueError, match="Unsupported crawl run update fields"):
+        temp_kuzu_repo.update_crawl_run("run-1", **{"status = 'failed'": "ignored"})
 
 
 def test_kuzu_recovers_crawls_interrupted_by_restart(
@@ -362,15 +380,34 @@ def test_kuzu_graph_operations(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     # Friend circle analysis
     # Let's add user 4 who is friend with 2 and 3, but not 1
     repo.upsert_users([SteamUserRecord(steam_id="4", persona_name="David", depth_min=2)], "default")
-    repo.upsert_relationships([
-        FriendEdge(from_id="2", to_id="4", crawl_id="run-1", source_depth=1),
-        FriendEdge(from_id="3", to_id="4", crawl_id="run-1", source_depth=2),
-    ], "default")
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="2", to_id="4", crawl_id="run-1", source_depth=1),
+            FriendEdge(from_id="3", to_id="4", crawl_id="run-1", source_depth=2),
+        ],
+        "default",
+    )
     # Mark friend list statuses to ensure depth_min and friend_list_fetched_at
-    repo.mark_friend_list_status("1", "public", friend_count=2, friend_count_status="public", friend_ids=["2"], project_id="default")
-    repo.mark_friend_list_status("2", "public", friend_count=3, friend_count_status="public", friend_ids=["1", "3", "4"], project_id="default")
+    repo.mark_friend_list_status(
+        "1",
+        "public",
+        friend_count=2,
+        friend_count_status="public",
+        friend_ids=["2"],
+        project_id="default",
+    )
+    repo.mark_friend_list_status(
+        "2",
+        "public",
+        friend_count=3,
+        friend_count_status="public",
+        friend_ids=["1", "3", "4"],
+        project_id="default",
+    )
 
-    analysis = repo.get_friend_circle_analysis(root="1", max_depth=3, min_mutual=1, limit=5, project_id="default")
+    analysis = repo.get_friend_circle_analysis(
+        root="1", max_depth=3, min_mutual=1, limit=5, project_id="default"
+    )
     assert len(analysis.candidates) >= 1
     candidate_ids = [c.steam_id for c in analysis.candidates]
     assert "4" in candidate_ids
@@ -411,7 +448,9 @@ def test_kuzu_path_and_friend_circle_use_bounded_bfs(
     path = repo.get_shortest_path("root", "d", 2, "default")
     assert [node.id for node in path.nodes] == ["root", "a", "d"]
     assert [edge.source for edge in path.edges] == ["root", "a"]
-    assert [node.id for node in repo.get_shortest_path("root", "root", 0, "default").nodes] == ["root"]
+    assert [node.id for node in repo.get_shortest_path("root", "root", 0, "default").nodes] == [
+        "root"
+    ]
 
     analysis = repo.get_friend_circle_analysis(
         root="root",
@@ -441,7 +480,10 @@ def test_kuzu_batches_large_graph_writes_and_deduplicates_relationships(
 
     steam_ids = [f"batch-{index:04d}" for index in range(1002)]
     repo.upsert_users(
-        [SteamUserRecord(steam_id=steam_id, depth_min=index % 4) for index, steam_id in enumerate(steam_ids)],
+        [
+            SteamUserRecord(steam_id=steam_id, depth_min=index % 4)
+            for index, steam_id in enumerate(steam_ids)
+        ],
         "batch-project",
     )
 
@@ -485,7 +527,9 @@ def test_kuzu_batches_large_graph_writes_and_deduplicates_relationships(
     )
     repo.upsert_relationships(edges, "batch-project")
 
-    relationship_batch_queries = [query for query in counting.queries if "UNWIND $rows AS row" in query]
+    relationship_batch_queries = [
+        query for query in counting.queries if "UNWIND $rows AS row" in query
+    ]
     assert len(relationship_batch_queries) == 3
     relationship_count = connection.execute(
         """
@@ -536,9 +580,7 @@ def test_kuzu_batches_large_graph_writes_and_deduplicates_relationships(
         ],
         project_id="batch-project",
     )
-    cache_write_queries = [
-        query for query in counting.queries if "UNWIND $rows AS row" in query
-    ]
+    cache_write_queries = [query for query in counting.queries if "UNWIND $rows AS row" in query]
     assert len(cache_write_queries) == 3
     private_count = connection.execute(
         """
@@ -577,7 +619,9 @@ def test_kuzu_batched_user_write_rolls_back_all_chunks(
     assert result.get_next()[0] == 0
 
 
-def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
     repo.upsert_users(
@@ -602,14 +646,17 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRep
         ],
         "project-a",
     )
-    repo.bulk_patch_users([
-        {"steam_id": "root", "category": "root"},
-        {"steam_id": "a", "category": "hide"},
-        {"steam_id": "b", "category": "hide"},
-        {"steam_id": "c", "category": "show"},
-        {"steam_id": "d", "category": "show"},
-        {"steam_id": "other", "category": "show"},
-    ], project_id="project-a")
+    repo.bulk_patch_users(
+        [
+            {"steam_id": "root", "category": "root"},
+            {"steam_id": "a", "category": "hide"},
+            {"steam_id": "b", "category": "hide"},
+            {"steam_id": "c", "category": "show"},
+            {"steam_id": "d", "category": "show"},
+            {"steam_id": "other", "category": "show"},
+        ],
+        project_id="project-a",
+    )
     repo.upsert_users(
         [
             SteamUserRecord(steam_id="root-b", persona_name="Root Other", depth_min=0),
@@ -628,7 +675,14 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRep
     assert depth_one.depth_incomplete is False
 
     depth_three = repo.get_graph(root="root", depth=3, limit=20, project_id="project-a")
-    assert {node.id for node in depth_three.nodes} == {"root", "a", "b", "c", "d", "other"}
+    assert {node.id for node in depth_three.nodes} == {
+        "root",
+        "a",
+        "b",
+        "c",
+        "d",
+        "other",
+    }
     assert {frozenset((edge.source, edge.target)) for edge in depth_three.edges} == {
         frozenset(("root", "a")),
         frozenset(("root", "b")),
@@ -642,9 +696,13 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRep
     assert depth_three.traversal_depth_reached == 3
     assert depth_three.depth_incomplete is False
 
-    filtered = repo.get_graph(root="root", depth=3, limit=20, category="show", project_id="project-a")
+    filtered = repo.get_graph(
+        root="root", depth=3, limit=20, category="show", project_id="project-a"
+    )
     assert {node.id for node in filtered.nodes} == {"c", "d", "other"}
-    assert {frozenset((edge.source, edge.target)) for edge in filtered.edges} == {frozenset(("c", "d"))}
+    assert {frozenset((edge.source, edge.target)) for edge in filtered.edges} == {
+        frozenset(("c", "d"))
+    }
     assert filtered.traversal_depth_reached == 3
     filtered_nodes = {node.id: node for node in filtered.nodes}
     assert filtered_nodes["c"].root_route_count == 2
@@ -656,7 +714,9 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(temp_kuzu_repo: KuzuRep
     assert project_b.depth_incomplete is True
 
 
-def test_kuzu_root_friend_circle_scores_routes_and_total_hops(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+def test_kuzu_root_friend_circle_scores_routes_and_total_hops(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
     repo.upsert_users(
@@ -695,7 +755,9 @@ def test_kuzu_root_friend_circle_scores_routes_and_total_hops(temp_kuzu_repo: Ku
     assert shallower_nodes["c"].root_route_total_hops == 3
 
 
-def test_kuzu_root_friend_circle_route_cap_is_stable(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+def test_kuzu_root_friend_circle_route_cap_is_stable(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
     middle_users = [
@@ -716,7 +778,12 @@ def test_kuzu_root_friend_circle_route_cap_is_stable(temp_kuzu_repo: KuzuReposit
             for index in range(250)
             for edge in (
                 FriendEdge(from_id="root", to_id=f"m-{index}", crawl_id="run-1", source_depth=0),
-                FriendEdge(from_id=f"m-{index}", to_id="target", crawl_id="run-1", source_depth=1),
+                FriendEdge(
+                    from_id=f"m-{index}",
+                    to_id="target",
+                    crawl_id="run-1",
+                    source_depth=1,
+                ),
             )
         ],
         "default",
@@ -735,16 +802,27 @@ def test_kuzu_cypher_injection_prevention(temp_kuzu_repo: KuzuRepositoryImpl) ->
 
     users = [
         SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
-        SteamUserRecord(steam_id="injection\\' OR 1=1 OR n.steam_id=\\'", persona_name="Hacker", depth_min=1),
+        SteamUserRecord(
+            steam_id="injection\\' OR 1=1 OR n.steam_id=\\'",
+            persona_name="Hacker",
+            depth_min=1,
+        ),
     ]
     repo.upsert_users(users, "default")
 
-    graph = repo.get_graph(root="injection\\' OR 1=1 OR n.steam_id=\\'", depth=1, limit=10, project_id="default")
+    graph = repo.get_graph(
+        root="injection\\' OR 1=1 OR n.steam_id=\\'",
+        depth=1,
+        limit=10,
+        project_id="default",
+    )
     assert len(graph.nodes) == 1
     assert graph.nodes[0].id == "injection\\' OR 1=1 OR n.steam_id=\\'"
 
 
-def test_kuzu_relationships_are_isolated_by_project(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
+def test_kuzu_relationships_are_isolated_by_project(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
 
@@ -872,12 +950,8 @@ def test_kuzu_project_membership_migration_backfills_legacy_relationships(
 
     conn = repo._get_conn()
     conn.execute("MATCH (:SteamUser)-[m:IN_PROJECT]->(:Project) DELETE m")
-    conn.execute(
-        "MATCH (m:SchemaMigration) WHERE m.id = 'project-membership-v1' DELETE m"
-    )
-    conn.execute(
-        "MATCH (p:Project) WHERE p.id IN ['project-a', 'project-b'] DELETE p"
-    )
+    conn.execute("MATCH (m:SchemaMigration) WHERE m.id = 'project-membership-v1' DELETE m")
+    conn.execute("MATCH (p:Project) WHERE p.id IN ['project-a', 'project-b'] DELETE p")
     conn.execute("DROP TABLE IN_PROJECT")
     conn.execute("DROP TABLE SchemaMigration")
 
@@ -885,11 +959,17 @@ def test_kuzu_project_membership_migration_backfills_legacy_relationships(
 
     assert repo.project_exists("project-a")
     assert repo.project_exists("project-b")
-    assert {node.id for node in repo.get_graph(root=None, depth=1, limit=10, project_id="project-a").nodes} == {
+    assert {
+        node.id
+        for node in repo.get_graph(root=None, depth=1, limit=10, project_id="project-a").nodes
+    } == {
         "shared",
         "neighbor",
     }
-    assert {node.id for node in repo.get_graph(root=None, depth=1, limit=10, project_id="project-b").nodes} == {
+    assert {
+        node.id
+        for node in repo.get_graph(root=None, depth=1, limit=10, project_id="project-b").nodes
+    } == {
         "shared",
         "neighbor",
     }
@@ -930,8 +1010,18 @@ def test_kuzu_bulk_patch_users(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo.upsert_users(users, "default")
 
     patches = [
-        {"steam_id": "1", "note": "Alice's note", "tags": ["CS2"], "category": "friend"},
-        {"steam_id": "2", "note": "Bob's note", "tags": ["Dota2"], "category": "colleague"},
+        {
+            "steam_id": "1",
+            "note": "Alice's note",
+            "tags": ["CS2"],
+            "category": "friend",
+        },
+        {
+            "steam_id": "2",
+            "note": "Bob's note",
+            "tags": ["Dota2"],
+            "category": "colleague",
+        },
         {"steam_id": "1", "tags": [], "category": "close friend"},
     ]
     repo.bulk_patch_users(patches)
@@ -1001,21 +1091,42 @@ def test_kuzu_project_member_metadata_is_fully_isolated(
     node_b = project_b.nodes[0]
 
     assert node_a.label == "Shared updated"
-    assert (node_a.depth, node_a.prior_pool_link_count, node_a.root_closeness_score) == (1, 2, 10.0)
+    assert (
+        node_a.depth,
+        node_a.prior_pool_link_count,
+        node_a.root_closeness_score,
+    ) == (1, 2, 10.0)
     assert (node_a.note, node_a.tags, node_a.category) == (
         "Project A note",
         ["alpha"],
         "a-category",
     )
-    assert (node_b.depth, node_b.prior_pool_link_count, node_b.root_closeness_score) == (3, 7, 4.0)
+    assert (
+        node_b.depth,
+        node_b.prior_pool_link_count,
+        node_b.root_closeness_score,
+    ) == (3, 7, 4.0)
     assert (node_b.note, node_b.tags, node_b.category) == (
         "Project B note",
         ["beta"],
         "b-category",
     )
 
-    assert len(repo.get_graph(root=None, depth=1, limit=10, category="a-category", project_id="project-a").nodes) == 1
-    assert not repo.get_graph(root=None, depth=1, limit=10, category="a-category", project_id="project-b").nodes
+    assert (
+        len(
+            repo.get_graph(
+                root=None,
+                depth=1,
+                limit=10,
+                category="a-category",
+                project_id="project-a",
+            ).nodes
+        )
+        == 1
+    )
+    assert not repo.get_graph(
+        root=None, depth=1, limit=10, category="a-category", project_id="project-b"
+    ).nodes
 
     exported_a = repo.export_graph("project-a").nodes[0]
     exported_b = repo.export_graph("project-b").nodes[0]
@@ -1050,9 +1161,7 @@ def test_kuzu_export_closes_consumed_query_results() -> None:
     class ExportConnection:
         def __init__(self) -> None:
             self.results = [
-                ClosableResult(
-                    [[{"steam_id": "a", "persona_name": "A"}, {"depth_min": 1}]]
-                ),
+                ClosableResult([[{"steam_id": "a", "persona_name": "A"}, {"depth_min": 1}]]),
                 ClosableResult([["a", "b"]]),
             ]
 
@@ -1073,9 +1182,7 @@ def test_kuzu_export_closes_consumed_query_results() -> None:
 
 
 def test_kuzu_results_are_iterated_only_by_closing_consumer() -> None:
-    source = Path("src/steam_friend_relationship_map/kuzu_repo.py").read_text(
-        encoding="utf-8"
-    )
+    source = Path("src/steam_friend_relationship_map/kuzu_repo.py").read_text(encoding="utf-8")
 
     assert source.count(".has_next()") == 1
     assert "while result.has_next():" in source
@@ -1163,7 +1270,11 @@ def test_kuzu_project_member_metadata_migration_copies_legacy_primary_project(
     repo.ensure_schema()
 
     node = repo.get_graph(root=None, depth=1, limit=10, project_id="project-a").nodes[0]
-    assert (node.depth, node.prior_pool_link_count, node.root_closeness_score) == (2, 5, 8.5)
+    assert (node.depth, node.prior_pool_link_count, node.root_closeness_score) == (
+        2,
+        5,
+        8.5,
+    )
     assert (node.note, node.tags, node.category) == (
         "legacy note",
         ["legacy-tag"],

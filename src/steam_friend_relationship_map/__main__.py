@@ -147,7 +147,11 @@ def _print_settings_error(exc: ValidationError) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Steam Friend Relationship Map")
-    parser.add_argument("--init", action="store_true", help="Force re-initialize the .env configuration file")
+    parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Force re-initialize the .env configuration file",
+    )
     args = parser.parse_args()
 
     try:

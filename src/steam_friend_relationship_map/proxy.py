@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-
 SUPPORTED_PROXY_SCHEMES = frozenset({"http", "https", "socks5", "socks5h"})
 
 

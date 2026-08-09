@@ -7,8 +7,7 @@ from threading import Lock
 
 from .models import AppLog, utc_now_iso
 
-
-SECRET_TOKEN = "[REDACTED]"
+SECRET_TOKEN = "[REDACTED]"  # nosec B105 - output placeholder, not a credential
 
 
 class AppLogBuffer:
@@ -26,9 +25,15 @@ class AppLogBuffer:
         clean = self.redact(message)
         with self._lock:
             self._seq += 1
-            row = AppLog(seq=self._seq, time=utc_now_iso(), level=level, source=source, message=clean)
+            row = AppLog(
+                seq=self._seq,
+                time=utc_now_iso(),
+                level=level,
+                source=source,
+                message=clean,
+            )
             self._rows.append(row)
-            del self._rows[:-self.max_entries]
+            del self._rows[: -self.max_entries]
             return row
 
     def list(self, after: int = 0, level: str | None = None) -> list[AppLog]:
@@ -45,11 +50,23 @@ class AppLogBuffer:
 
         # 常见请求头、Cookie、URL 参数和错误消息中的密钥/密码都在进入 UI 前脱敏。
         patterns = [
-            (r"(?i)(authorization\s*[:=]\s*)(bearer\s+)?[^\s,;]+", r"\1" + SECRET_TOKEN),
+            (
+                r"(?i)(authorization\s*[:=]\s*)(bearer\s+)?[^\s,;]+",
+                r"\1" + SECRET_TOKEN,
+            ),
             (r"(?i)(cookie|set-cookie)(\s*[:=]\s*)[^,\n\r]+", r"\1\2" + SECRET_TOKEN),
-            (r"(?i)\b((?:https?|socks5h?)://[^:\s/@]+:)[^@\s/]+@", r"\1" + SECRET_TOKEN + "@"),
-            (r"(?i)(password|passwd|pwd|key|api[_-]?key|steam_api_key|neo4j_password)(\s*[:=]\s*)[^&\s,;]+", r"\1\2" + SECRET_TOKEN),
-            (r"(?i)([?&](?:key|password|api_key|steam_api_key|neo4j_password)=)[^&\s]+", r"\1" + SECRET_TOKEN),
+            (
+                r"(?i)\b((?:https?|socks5h?)://[^:\s/@]+:)[^@\s/]+@",
+                r"\1" + SECRET_TOKEN + "@",
+            ),
+            (
+                r"(?i)(password|passwd|pwd|key|api[_-]?key|steam_api_key|neo4j_password)(\s*[:=]\s*)[^&\s,;]+",
+                r"\1\2" + SECRET_TOKEN,
+            ),
+            (
+                r"(?i)([?&](?:key|password|api_key|steam_api_key|neo4j_password)=)[^&\s]+",
+                r"\1" + SECRET_TOKEN,
+            ),
             (r"\b[A-Fa-f0-9]{32}\b", SECRET_TOKEN),
         ]
         for pattern, replacement in patterns:
@@ -65,11 +82,7 @@ class AppLogHandler(logging.Handler):
         self.register_buffer(buffer)
 
     def _live_buffers(self) -> list[AppLogBuffer]:
-        live = [
-            buffer
-            for reference in self._buffers
-            if (buffer := reference()) is not None
-        ]
+        live = [buffer for reference in self._buffers if (buffer := reference()) is not None]
         self._buffers = [weakref.ref(buffer) for buffer in live]
         return live
 
@@ -85,21 +98,13 @@ class AppLogHandler(logging.Handler):
 
     def register_buffer(self, buffer: AppLogBuffer) -> None:
         with self.lock:
-            live = [
-                candidate
-                for candidate in self._live_buffers()
-                if candidate is not buffer
-            ]
+            live = [candidate for candidate in self._live_buffers() if candidate is not buffer]
             live.append(buffer)
             self._buffers = [weakref.ref(candidate) for candidate in live]
 
     def unregister_buffer(self, buffer: AppLogBuffer) -> None:
         with self.lock:
-            live = [
-                candidate
-                for candidate in self._live_buffers()
-                if candidate is not buffer
-            ]
+            live = [candidate for candidate in self._live_buffers() if candidate is not buffer]
             self._buffers = [weakref.ref(candidate) for candidate in live]
 
     def emit(self, record: logging.LogRecord) -> None:

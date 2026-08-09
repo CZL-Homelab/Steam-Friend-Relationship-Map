@@ -13,12 +13,38 @@ from .models import (
     FriendListCacheUpdate,
     GraphNode,
     GraphResponse,
-    PotentialFriendCandidate,
     PotentialFriendsResponse,
     ProjectCreate,
     ProjectListResponse,
     SteamUserRecord,
 )
+
+CRAWL_RUN_UPDATE_FIELDS = frozenset(
+    {
+        "status",
+        "finished_at",
+        "nodes_discovered",
+        "edges_discovered",
+        "private_count",
+        "error_count",
+        "message",
+        "current_depth",
+        "current_steam_id",
+        "queue_size",
+        "expanded_count",
+        "progress_percent",
+        "last_event",
+        "filtered_count",
+        "friend_count_filtered_count",
+        "prior_pool_filtered_count",
+    }
+)
+
+
+def validate_crawl_run_update_fields(fields: dict[str, Any]) -> None:
+    unknown = sorted(set(fields) - CRAWL_RUN_UPDATE_FIELDS)
+    if unknown:
+        raise ValueError(f"Unsupported crawl run update fields: {', '.join(unknown)}")
 
 
 class IGraphRepository(ABC):

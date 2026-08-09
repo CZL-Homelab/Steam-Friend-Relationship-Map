@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .graph_repo import IGraphRepository
 from .logs import AppLogBuffer
 from .models import (
     CrawlCreate,
@@ -14,12 +15,10 @@ from .models import (
     CrawlStatus,
     FriendEdge,
     FriendListCacheUpdate,
-    SteamUserRecord,
     utc_now_iso,
 )
-from .graph_repo import IGraphRepository
-from .steam import SteamApiError, SteamClient, placeholder_user
 from .rate_limiter import AdaptiveRateLimiter
+from .steam import SteamApiError, SteamClient, placeholder_user
 
 
 @dataclass
@@ -42,7 +41,13 @@ class FriendListLookup:
 
 
 class CrawlManager:
-    def __init__(self, repo: IGraphRepository, steam: SteamClient, logs: AppLogBuffer | None = None, project_id: str = "default") -> None:
+    def __init__(
+        self,
+        repo: IGraphRepository,
+        steam: SteamClient,
+        logs: AppLogBuffer | None = None,
+        project_id: str = "default",
+    ) -> None:
         self.repo = repo
         self.steam = steam
         self.logs = logs
@@ -78,7 +83,7 @@ class CrawlManager:
             ctrl = self.controls.get(rid)
             if ctrl is None or (ctrl.task is not None and ctrl.task.done()):
                 completed_run_ids.append(rid)
-        
+
         if len(completed_run_ids) > 10:
             to_remove = completed_run_ids[:-10]
             for rid in to_remove:
@@ -164,9 +169,8 @@ class CrawlManager:
     async def cancel(self, run_id: str) -> bool:
         """优雅停止：完成当前层后停止，数据保留。"""
         control = self.controls.get(run_id)
-        if not self._is_active(control):
+        if control is None or not self._is_active(control):
             return False
-        assert control is not None
         async with control.transition_lock:
             if not self._is_active(control) or control.cancel:
                 return False
@@ -177,23 +181,23 @@ class CrawlManager:
     async def force_stop(self, run_id: str) -> bool:
         """强制中断：立即停止，已扫描数据保留。"""
         control = self.controls.get(run_id)
-        if not self._is_active(control):
+        if control is None or not self._is_active(control):
             return False
-        assert control is not None
         async with control.transition_lock:
             if not self._is_active(control) or control.force_stop:
                 return False
             control.force_stop = True
             control.pause = False
-            self.append_event(run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）")
+            self.append_event(
+                run_id, "warn", "stop", "收到强制中断请求，立即停止（已扫描数据保留）"
+            )
             return True
 
     async def pause(self, run_id: str) -> bool:
         """暂停扫描（如遇 Steam 限流）。"""
         control = self.controls.get(run_id)
-        if not self._is_active(control):
+        if control is None or not self._is_active(control):
             return False
-        assert control is not None
         async with control.transition_lock:
             if not self._is_active(control) or control.pause:
                 return False
@@ -203,15 +207,16 @@ class CrawlManager:
             except Exception:
                 control.pause = False
                 raise
-            self.append_event(run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续")
+            self.append_event(
+                run_id, "warn", "pause", "扫描已暂停（如 Steam 并发限制），可点击继续"
+            )
             return True
 
     async def resume(self, run_id: str) -> bool:
         """继续扫描。"""
         control = self.controls.get(run_id)
-        if not self._is_active(control):
+        if control is None or not self._is_active(control):
             return False
-        assert control is not None
         async with control.transition_lock:
             if not self._is_active(control) or not control.pause:
                 return False
@@ -232,7 +237,14 @@ class CrawlManager:
             message = self.logs.redact(message)
         seq = self.event_seq.get(run_id, 0) + 1
         self.event_seq[run_id] = seq
-        event = CrawlEvent(seq=seq, run_id=run_id, time=utc_now_iso(), level=level, stage=stage, message=message)
+        event = CrawlEvent(
+            seq=seq,
+            run_id=run_id,
+            time=utc_now_iso(),
+            level=level,
+            stage=stage,
+            message=message,
+        )
         rows = self.events.setdefault(run_id, [])
         rows.append(event)
         del rows[:-300]
@@ -404,13 +416,14 @@ class CrawlManager:
         def on_delay_change(old_d: float, new_d: float, reason: str):
             reason_cn = "请求成功" if reason == "success" else "发生重试/受限"
             self.append_event(
-                run.id, "info", "limiter",
-                f"[限速器] {reason_cn}，延迟调整为 {int(new_d)}ms"
+                run.id,
+                "info",
+                "limiter",
+                f"[限速器] {reason_cn}，延迟调整为 {int(new_d)}ms",
             )
 
         limiter = AdaptiveRateLimiter(
-            base_delay_ms=float(payload.delay_ms),
-            on_change_callback=on_delay_change
+            base_delay_ms=float(payload.delay_ms), on_change_callback=on_delay_change
         )
         self.steam.rate_limiter = limiter
 
@@ -456,7 +469,9 @@ class CrawlManager:
 
                 # ── 强制中断：立即停止，数据保留 ──
                 if control.force_stop:
-                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    event = self.append_event(
+                        run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）"
+                    )
                     await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.stopped,
@@ -474,7 +489,12 @@ class CrawlManager:
 
                 # ── 优雅停止：完成当前层 ──
                 if control.cancel:
-                    event = self.append_event(run.id, "warn", "cancelled", "用户停止扫描，完成当前层后停止（数据保留）")
+                    event = self.append_event(
+                        run.id,
+                        "warn",
+                        "cancelled",
+                        "用户停止扫描，完成当前层后停止（数据保留）",
+                    )
                     await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.cancelled,
@@ -495,19 +515,23 @@ class CrawlManager:
                 same_pool_edges: list[FriendEdge] = []
                 same_pool_edge_keys: set[tuple[str, str]] = set()
                 next_depth = depth + 1
-                layer_ids = [steam_id for steam_id in sorted(current_layer) if steam_id not in expanded]
+                layer_ids = [
+                    steam_id for steam_id in sorted(current_layer) if steam_id not in expanded
+                ]
                 layer_total = len(layer_ids)
                 for batch_start in range(0, layer_total, payload.request_concurrency):
                     while control.pause and not control.force_stop:
                         await asyncio.sleep(0.5)
                     if control.force_stop:
                         break
-                    batch_ids = layer_ids[batch_start:batch_start + payload.request_concurrency]
+                    batch_ids = layer_ids[batch_start : batch_start + payload.request_concurrency]
                     for batch_offset, current_id in enumerate(batch_ids, start=1):
                         idx = batch_start + batch_offset
                         expanded.add(current_id)
                         self.append_event(
-                            run.id, "info", "expand",
+                            run.id,
+                            "info",
+                            "expand",
                             f"深度{depth} 第{idx}/{layer_total}个: {current_id} (节点总计{len(discovered)})",
                         )
 
@@ -523,7 +547,9 @@ class CrawlManager:
                         progress_percent=self._progress(len(discovered), run.max_nodes, False),
                     )
 
-                    lookups = await self._load_friend_list_batch(batch_ids, payload.cache_valid_days)
+                    lookups = await self._load_friend_list_batch(
+                        batch_ids, payload.cache_valid_days
+                    )
                     if control.force_stop:
                         break
                     await self._persist_api_friend_lists(lookups)
@@ -537,11 +563,18 @@ class CrawlManager:
                                 raise lookup.error
                             exc = lookup.error
                             error_count += 1
-                            self.append_event(run.id, "error", "friends", f"[API错误] {current_id}: {exc}")
+                            self.append_event(
+                                run.id,
+                                "error",
+                                "friends",
+                                f"[API错误] {current_id}: {exc}",
+                            )
                             if exc.status_code in {401, 403}:
                                 consecutive_auth_errors += 1
                                 if consecutive_auth_errors >= 5:
-                                    raise RuntimeError("Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。")
+                                    raise RuntimeError(
+                                        "Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。"
+                                    )
                             else:
                                 consecutive_auth_errors = 0
                             continue
@@ -551,20 +584,43 @@ class CrawlManager:
 
                         if lookup.status == "private":
                             private_count += 1
-                            self.append_event(run.id, "warn", "private", f"[{'缓存' if lookup.source == 'cache' else 'API'}] 私密: {current_id}")
+                            self.append_event(
+                                run.id,
+                                "warn",
+                                "private",
+                                f"[{'缓存' if lookup.source == 'cache' else 'API'}] 私密: {current_id}",
+                            )
                             continue
 
                         friend_ids = list(lookup.friend_ids)
                         if lookup.source == "api":
-                            self.append_event(run.id, "info", "expand", f"  └ API返回: {len(friend_ids)} 位好友")
+                            self.append_event(
+                                run.id,
+                                "info",
+                                "expand",
+                                f"  └ API返回: {len(friend_ids)} 位好友",
+                            )
                         else:
-                            self.append_event(run.id, "info", "expand", f"  └ 缓存命中: {len(friend_ids)} 位好友")
+                            self.append_event(
+                                run.id,
+                                "info",
+                                "expand",
+                                f"  └ 缓存命中: {len(friend_ids)} 位好友",
+                            )
 
                         for friend_id in friend_ids:
                             edge_key = tuple(sorted((current_id, friend_id)))
-                            edge = FriendEdge(from_id=current_id, to_id=friend_id, crawl_id=run.id, source_depth=depth)
+                            edge = FriendEdge(
+                                from_id=current_id,
+                                to_id=friend_id,
+                                crawl_id=run.id,
+                                source_depth=depth,
+                            )
                             if friend_id in discovered:
-                                if edge_key not in edges_seen and edge_key not in same_pool_edge_keys:
+                                if (
+                                    edge_key not in edges_seen
+                                    and edge_key not in same_pool_edge_keys
+                                ):
                                     same_pool_edge_keys.add(edge_key)
                                     same_pool_edges.append(edge)
                                 continue
@@ -580,10 +636,11 @@ class CrawlManager:
                     if counter_updates:
                         await self._call_repo("update_crawl_run", run.id, **counter_updates)
 
-
                 # ── 内层循环后再次检查强制中断 ──
                 if control.force_stop:
-                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    event = self.append_event(
+                        run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）"
+                    )
                     await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.stopped,
@@ -602,7 +659,9 @@ class CrawlManager:
                 accepted_ids: list[str] = []
                 candidate_metrics: dict[str, dict[str, object]] = {}
                 no_deeper_scan: set[str] = set()
-                uses_friend_count_filter = payload.friend_count_min is not None or payload.friend_count_max is not None
+                uses_friend_count_filter = (
+                    payload.friend_count_min is not None or payload.friend_count_max is not None
+                )
 
                 # ── 阶段性写盘辅助函数 ──
                 async def flush_batch(batch_ids: list[str]):
@@ -622,9 +681,9 @@ class CrawlManager:
                         rec.root_closeness_score = float(met.get("root_closeness_score", 0))
                         rec.last_scored_crawl_id = str(met.get("last_scored_crawl_id", ""))
                         batch_records.append(rec)
-                    
+
                     await self._call_repo("upsert_users", batch_records, self.project_id)
-                    
+
                     batch_edges = []
                     for sid in batch_ids:
                         for edge in candidate_edges[sid]:
@@ -632,7 +691,7 @@ class CrawlManager:
                             if edge_key not in edges_seen:
                                 edges_seen.add(edge_key)
                                 batch_edges.append(edge)
-                    
+
                     if same_pool_edges:
                         for edge in same_pool_edges:
                             edge_key = tuple(sorted((edge.from_id, edge.to_id)))
@@ -641,13 +700,11 @@ class CrawlManager:
                                 batch_edges.append(edge)
                         same_pool_edges = []
                         same_pool_edge_keys.clear()
-                    
+
                     if batch_edges:
-                        await self._call_repo(
-                            "upsert_relationships", batch_edges, self.project_id
-                        )
+                        await self._call_repo("upsert_relationships", batch_edges, self.project_id)
                         edges_discovered += len(batch_edges)
-                        
+
                     nodes_discovered = len(discovered)
                     await self._call_repo(
                         "update_crawl_run",
@@ -673,14 +730,24 @@ class CrawlManager:
                             self.project_id,
                         )
                         self.append_event(
-                            run.id, "info", "filter",
+                            run.id,
+                            "info",
+                            "filter",
                             f"跨层连接查询完成: {len(cross_links)} 位候选与内层 {len(inner_pool)} 用户有连接",
                         )
 
-                ordered_candidates = sorted(candidate_hits, key=lambda steam_id: (-len(candidate_hits[steam_id]), steam_id))
+                ordered_candidates = sorted(
+                    candidate_hits,
+                    key=lambda steam_id: (-len(candidate_hits[steam_id]), steam_id),
+                )
                 remaining_capacity = max(0, run.max_nodes - len(discovered))
                 if len(ordered_candidates) > remaining_capacity:
-                    self.append_event(run.id, "warn", "limit", f"已达节点上限 {run.max_nodes}，停止收候选")
+                    self.append_event(
+                        run.id,
+                        "warn",
+                        "limit",
+                        f"已达节点上限 {run.max_nodes}，停止收候选",
+                    )
                     ordered_candidates = ordered_candidates[:remaining_capacity]
 
                 for batch_start in range(0, len(ordered_candidates), payload.request_concurrency):
@@ -689,7 +756,9 @@ class CrawlManager:
                     if control.force_stop:
                         break
 
-                    batch_ids = ordered_candidates[batch_start:batch_start + payload.request_concurrency]
+                    batch_ids = ordered_candidates[
+                        batch_start : batch_start + payload.request_concurrency
+                    ]
                     lookups = (
                         await self._load_friend_list_batch(batch_ids, payload.cache_valid_days)
                         if uses_friend_count_filter
@@ -704,12 +773,17 @@ class CrawlManager:
                         total_prior_links = max(current_layer_links, inner_links)
                         skip_deeper = False
 
-                        if payload.prior_pool_min_links and total_prior_links < payload.prior_pool_min_links:
+                        if (
+                            payload.prior_pool_min_links
+                            and total_prior_links < payload.prior_pool_min_links
+                        ):
                             prior_pool_filtered_count += 1
                             filtered_count += 1
                             skip_deeper = True
                             self.append_event(
-                                run.id, "warn", "filter",
+                                run.id,
+                                "warn",
+                                "filter",
                                 f"孤立节点-收录但不展开: {friend_id} (跨层连接={total_prior_links} < 需要≥{payload.prior_pool_min_links}), 已与前面用户形成'孤岛'",
                             )
 
@@ -723,11 +797,18 @@ class CrawlManager:
                                     raise lookup.error
                                 exc = lookup.error
                                 error_count += 1
-                                self.append_event(run.id, "error", "friends", f"[API错误] {friend_id}: {exc}")
+                                self.append_event(
+                                    run.id,
+                                    "error",
+                                    "friends",
+                                    f"[API错误] {friend_id}: {exc}",
+                                )
                                 if exc.status_code in {401, 403}:
                                     consecutive_auth_errors += 1
                                     if consecutive_auth_errors >= 5:
-                                        raise RuntimeError("Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。")
+                                        raise RuntimeError(
+                                            "Steam API 认证失败连续超过 5 次，可能 API Key 已失效，任务熔断退出。"
+                                        )
                                 else:
                                     consecutive_auth_errors = 0
                             else:
@@ -736,12 +817,16 @@ class CrawlManager:
                                 if lookup.status == "public":
                                     friend_count = len(lookup.friend_ids)
 
-                            if not self._friend_count_matches(friend_count, friend_count_status, payload):
+                            if not self._friend_count_matches(
+                                friend_count, friend_count_status, payload
+                            ):
                                 friend_count_filtered_count += 1
                                 filtered_count += 1
                                 skip_deeper = True
                                 self.append_event(
-                                    run.id, "warn", "filter",
+                                    run.id,
+                                    "warn",
+                                    "filter",
                                     f"好友数超限-收录但不展开: {friend_id} (好友数={friend_count or '?'}, 范围 {payload.friend_count_min or 0}~{payload.friend_count_max or '∞'}), 该用户将不参与更深层扫描!",
                                 )
 
@@ -752,14 +837,18 @@ class CrawlManager:
 
                         label = "收录(不展开)" if skip_deeper else "收录"
                         self.append_event(
-                            run.id, "info", "accept",
+                            run.id,
+                            "info",
+                            "accept",
                             f"{label}: {friend_id} @深度{next_depth} (前层连接={total_prior_links}, 好友数={friend_count or '?'})",
                         )
                         candidate_metrics[friend_id] = {
                             "friend_count": friend_count,
                             "friend_count_status": friend_count_status,
                             "prior_pool_link_count": total_prior_links,
-                            "root_closeness_score": self._score(next_depth, total_prior_links, friend_count),
+                            "root_closeness_score": self._score(
+                                next_depth, total_prior_links, friend_count
+                            ),
                             "last_scored_crawl_id": run.id,
                         }
 
@@ -772,7 +861,7 @@ class CrawlManager:
                 if pending_batch_ids:
                     await flush_batch(pending_batch_ids)
                     pending_batch_ids = []
-                
+
                 # 写入可能遗留的 same_pool_edges
                 if same_pool_edges:
                     batch_edges = []
@@ -784,13 +873,13 @@ class CrawlManager:
                     same_pool_edges = []
                     same_pool_edge_keys.clear()
                     if batch_edges:
-                        await self._call_repo(
-                            "upsert_relationships", batch_edges, self.project_id
-                        )
+                        await self._call_repo("upsert_relationships", batch_edges, self.project_id)
                         edges_discovered += len(batch_edges)
 
                 if control.force_stop:
-                    event = self.append_event(run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）")
+                    event = self.append_event(
+                        run.id, "warn", "stopped", "用户强制中断（已扫描数据保留）"
+                    )
                     await self._persist_terminal_run(
                         run,
                         status=CrawlStatus.stopped,
@@ -810,11 +899,23 @@ class CrawlManager:
                     active = len(accepted_ids) - len(no_deeper_scan)
                     soft_filtered = len(no_deeper_scan)
                     self.append_event(
-                        run.id, "info", "summary",
+                        run.id,
+                        "info",
+                        "summary",
                         f"深度{depth}→{next_depth}: 收录{len(accepted_ids)}人 (其中{active}人继续展开, {soft_filtered}人标记不展开), 节点总计{len(discovered)}",
                     )
-                    self.append_event(run.id, "info", "users", f"已写入用户节点, 总计{nodes_discovered}")
-                    self.append_event(run.id, "info", "edges", f"已写入关系线, 关系总计{edges_discovered}")
+                    self.append_event(
+                        run.id,
+                        "info",
+                        "users",
+                        f"已写入用户节点, 总计{nodes_discovered}",
+                    )
+                    self.append_event(
+                        run.id,
+                        "info",
+                        "edges",
+                        f"已写入关系线, 关系总计{edges_discovered}",
+                    )
 
                 await self._call_repo(
                     "update_crawl_run",
@@ -833,7 +934,9 @@ class CrawlManager:
                 current_layer = {sid for sid in accepted_ids if sid not in no_deeper_scan}
 
             event = self.append_event(
-                run.id, "info", "completed",
+                run.id,
+                "info",
+                "completed",
                 f"抓取完成! 节点{nodes_discovered} 关系{edges_discovered} 私密{private_count} 错误{error_count} 筛选{filtered_count}",
             )
             await self._persist_terminal_run(

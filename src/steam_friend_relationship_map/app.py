@@ -23,6 +23,8 @@ from starlette.types import Scope
 
 from .analytics import analyze_network
 from .crawler import CrawlManager
+from .graph_repo import IGraphRepository
+from .kuzu_repo import KuzuRepositoryImpl
 from .logs import AppLogBuffer, install_log_handler, release_log_handler
 from .models import (
     AppLog,
@@ -32,8 +34,8 @@ from .models import (
     DbStats,
     ExportRequest,
     ExportResponse,
-    FriendEdge,
     FriendCircleAnalysisResponse,
+    FriendEdge,
     GraphNode,
     GraphResponse,
     HealthResponse,
@@ -52,13 +54,10 @@ from .models import (
     UserPatch,
     utc_now_iso,
 )
-from .graph_repo import IGraphRepository
 from .neo4j_repo import Neo4jRepositoryImpl
-from .kuzu_repo import KuzuRepositoryImpl
 from .secrets import SecretStorageError, SecretStore
 from .settings import Settings, clear_settings_cache, get_settings
 from .steam import SteamApiError, SteamClient
-
 
 STATIC_DIR = Path(__file__).parent / "static"
 ENV_PATH = Path.cwd() / ".env"
@@ -79,7 +78,7 @@ ENV_KEYS = {
 SECRET_ENV_KEYS = {
     "steam_api_key": "STEAM_API_KEY",
     "steam_proxy_url": "STEAM_PROXY_URL",
-    "neo4j_password": "NEO4J_PASSWORD",
+    "neo4j_password": "NEO4J_PASSWORD",  # nosec B105 - environment variable name
 }
 CSV_EXPORT_FIELDS = (
     "type",
@@ -102,6 +101,9 @@ CSV_EXPORT_FIELDS = (
 CSV_EXPORT_CHUNK_SIZE = 64 * 1024
 MAX_GRAPH_ROOTS = 5
 MAX_GRAPH_ROOT_LENGTH = 128
+MAX_GRAPH_NODES = 10_000
+MAX_NETWORK_ANALYSIS_NODES = 10_000
+MAX_NETWORK_ANALYSIS_EDGES = 50_000
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 CONTENT_SECURITY_POLICY = "; ".join(
     (
@@ -174,9 +176,7 @@ def read_secret_environment_values(path: Path) -> tuple[dict[str, str], str]:
 
     values: dict[str, str] = {}
     for field, env_key in SECRET_ENV_KEYS.items():
-        raw_value = (
-            os.environ[env_key] if env_key in os.environ else file_values.get(env_key)
-        )
+        raw_value = os.environ[env_key] if env_key in os.environ else file_values.get(env_key)
         values[field] = "" if raw_value is None else str(raw_value)
     return values, error
 
@@ -214,7 +214,9 @@ def iter_export_csv(
             "source": "",
             "target": "",
             "profile_url": node.get("profile_url", ""),
-            "avatar": node.get("avatar_full") or node.get("avatar_medium") or node.get("avatar", ""),
+            "avatar": node.get("avatar_full")
+            or node.get("avatar_medium")
+            or node.get("avatar", ""),
             "note": node.get("note", ""),
             "tags": json.dumps(node.get("tags") or [], ensure_ascii=False),
             "category": node.get("category", ""),
@@ -245,7 +247,9 @@ def iter_export_csv(
 
 def sensitive_setting_values(settings: Settings) -> list[str]:
     api_keys = [k.strip() for k in re.split(r"[\s,;]+", settings.steam_api_key) if k.strip()]
-    return api_keys + [value for value in (settings.neo4j_password, settings.steam_proxy_url) if value]
+    return api_keys + [
+        value for value in (settings.neo4j_password, settings.steam_proxy_url) if value
+    ]
 
 
 def get_repository(settings: Settings) -> IGraphRepository:
@@ -476,6 +480,7 @@ def create_app(
             if not started.is_set():
                 task.cancel()
             else:
+
                 def report_late_failure(completed: asyncio.Task[Any]) -> None:
                     try:
                         completed.result()
@@ -498,6 +503,7 @@ def create_app(
         **kwargs: Any,
     ) -> Any:
         """Run synchronous repository work off-loop while guarding runtime swaps."""
+
         async def operation() -> Any:
             if project_scoped:
                 kwargs["project_id"] = settings.active_project
@@ -534,7 +540,10 @@ def create_app(
             if not started.is_set():
                 task.cancel()
             else:
-                def report_late_failure(completed: asyncio.Task[NetworkAnalysisResponse]) -> None:
+
+                def report_late_failure(
+                    completed: asyncio.Task[NetworkAnalysisResponse],
+                ) -> None:
                     try:
                         completed.result()
                     except asyncio.CancelledError:
@@ -565,6 +574,7 @@ def create_app(
 
     def finish_runtime_mutation(source: str):  # type: ignore[no-untyped-def]
         """Let started writes finish, but cancel writes still waiting for the lock."""
+
         def decorator(function):  # type: ignore[no-untyped-def]
             @wraps(function)
             async def wrapped(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -687,16 +697,12 @@ def create_app(
         log_buffer.set_secret_values(
             sensitive_setting_values(old_settings) + sensitive_setting_values(new_settings)
         )
-        should_replace_repo = (
-            provided_repo is None
-            and repository_settings_changed(old_settings, new_settings)
+        should_replace_repo = provided_repo is None and repository_settings_changed(
+            old_settings, new_settings
         )
-        should_replace_steam = (
-            provided_steam is None
-            and (
-                old_settings.steam_api_key != new_settings.steam_api_key
-                or old_settings.steam_proxy_url != new_settings.steam_proxy_url
-            )
+        should_replace_steam = provided_steam is None and (
+            old_settings.steam_api_key != new_settings.steam_api_key
+            or old_settings.steam_proxy_url != new_settings.steam_proxy_url
         )
 
         candidate_repo: IGraphRepository | None = None
@@ -850,9 +856,7 @@ def create_app(
             active_project=current_settings.active_project,
             steam_api_key_configured=bool(steam_secret or environment_secrets["steam_api_key"]),
             steam_proxy_configured=bool(proxy_secret or environment_secrets["steam_proxy_url"]),
-            neo4j_password_configured=bool(
-                neo4j_secret or environment_secrets["neo4j_password"]
-            ),
+            neo4j_password_configured=bool(neo4j_secret or environment_secrets["neo4j_password"]),
             steam_api_key_from_env=not bool(steam_secret)
             and bool(environment_secrets["steam_api_key"]),
             steam_proxy_from_env=not bool(proxy_secret)
@@ -913,9 +917,7 @@ def create_app(
             return False
         try:
             origin_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            request_port = request.url.port or (
-                443 if request.url.scheme == "https" else 80
-            )
+            request_port = request.url.port or (443 if request.url.scheme == "https" else 80)
         except ValueError:
             return False
         origin_host = parsed.hostname.lower()
@@ -930,7 +932,7 @@ def create_app(
         allowed_hosts = {csrf_bind_host, "localhost", "127.0.0.1", "::1"}
         if origin_host in allowed_hosts:
             return True
-        if csrf_bind_host not in {"0.0.0.0", "::"}:
+        if csrf_bind_host not in {"0.0.0.0", "::"}:  # nosec B104 - comparison only
             return False
         try:
             ip_address(origin_host)
@@ -942,24 +944,59 @@ def create_app(
         message = safe_detail(exc)
         if isinstance(exc, SteamApiError):
             if "缺少 STEAM_API_KEY" in message:
-                return "missing_key", "未配置 Steam API Key。请先在左侧“安全配置”里填写并保存 Steam API Key。"
+                return (
+                    "missing_key",
+                    "未配置 Steam API Key。请先在左侧“安全配置”里填写并保存 Steam API Key。",
+                )
             if exc.status_code in {401, 403}:
-                return "invalid_key", f"Steam API Key 无效或无权限（HTTP {exc.status_code}）。请检查 Key 是否复制完整、是否仍可用。"
+                return (
+                    "invalid_key",
+                    f"Steam API Key 无效或无权限（HTTP {exc.status_code}）。请检查 Key 是否复制完整、是否仍可用。",
+                )
             if exc.status_code == 429:
-                return "rate_limited", "Steam API 暂时限流（HTTP 429）。请稍后再测试，或增加抓取延迟。"
+                return (
+                    "rate_limited",
+                    "Steam API 暂时限流（HTTP 429）。请稍后再测试，或增加抓取延迟。",
+                )
             if exc.status_code is not None:
-                return "steam_http", f"Steam API 返回 HTTP {exc.status_code}。请确认 Steam 服务可访问后重试。"
-            return "steam_connection", f"无法连接 Steam API。请检查网络或代理设置。详情：{message}"
-        return "steam_connection", f"Steam 测试失败。请检查网络或 Steam API Key。详情：{message}"
+                return (
+                    "steam_http",
+                    f"Steam API 返回 HTTP {exc.status_code}。请确认 Steam 服务可访问后重试。",
+                )
+            return (
+                "steam_connection",
+                f"无法连接 Steam API。请检查网络或代理设置。详情：{message}",
+            )
+        return (
+            "steam_connection",
+            f"Steam 测试失败。请检查网络或 Steam API Key。详情：{message}",
+        )
 
     def classify_neo4j_test_error(exc: object) -> tuple[str, str]:
         message = safe_detail(exc)
         if not settings.neo4j_password:
-            return "missing_password", "未配置 Neo4j 密码。请先在左侧“安全配置”里填写并保存 Neo4j Password。"
-        if isinstance(exc, AuthError) or "Unauthorized" in message or "authentication" in message.lower():
-            return "auth_failed", "Neo4j 用户名或密码不正确。请检查 NEO4J_USER 和 Neo4j Password。"
-        if isinstance(exc, ServiceUnavailable) or "Failed to establish connection" in message or "Connection refused" in message:
-            return "server_unavailable", f"无法连接 Neo4j。请确认 Neo4j Desktop/Server 已启动，并且地址是 {settings.neo4j_uri}。"
+            return (
+                "missing_password",
+                "未配置 Neo4j 密码。请先在左侧“安全配置”里填写并保存 Neo4j Password。",
+            )
+        if (
+            isinstance(exc, AuthError)
+            or "Unauthorized" in message
+            or "authentication" in message.lower()
+        ):
+            return (
+                "auth_failed",
+                "Neo4j 用户名或密码不正确。请检查 NEO4J_USER 和 Neo4j Password。",
+            )
+        if (
+            isinstance(exc, ServiceUnavailable)
+            or "Failed to establish connection" in message
+            or "Connection refused" in message
+        ):
+            return (
+                "server_unavailable",
+                f"无法连接 Neo4j。请确认 Neo4j Desktop/Server 已启动，并且地址是 {settings.neo4j_uri}。",
+            )
         return "neo4j_error", f"Neo4j 测试失败。请检查服务、地址和凭据。详情：{message}"
 
     @app.middleware("http")
@@ -983,9 +1020,17 @@ def create_app(
             log_buffer.append("error", "api", f"{request.method} {request.url.path} failed: {exc}")
             raise
         if response.status_code >= 500:
-            log_buffer.append("error", "api", f"{request.method} {request.url.path} -> HTTP {response.status_code}")
+            log_buffer.append(
+                "error",
+                "api",
+                f"{request.method} {request.url.path} -> HTTP {response.status_code}",
+            )
         elif response.status_code >= 400:
-            log_buffer.append("warn", "api", f"{request.method} {request.url.path} -> HTTP {response.status_code}")
+            log_buffer.append(
+                "warn",
+                "api",
+                f"{request.method} {request.url.path} -> HTTP {response.status_code}",
+            )
         return response
 
     @app.middleware("http")
@@ -1031,7 +1076,9 @@ def create_app(
             return await public_settings()
 
     @app.get("/api/logs", response_model=list[AppLog])
-    async def get_logs(after: Annotated[int, Query(ge=0)] = 0, level: str | None = None) -> list[AppLog]:
+    async def get_logs(
+        after: Annotated[int, Query(ge=0)] = 0, level: str | None = None
+    ) -> list[AppLog]:
         return log_buffer.list(after=after, level=level or None)
 
     @app.put("/api/settings", response_model=PublicSettings)
@@ -1040,9 +1087,7 @@ def create_app(
         async with runtime_mutation_guard():
             payload_data = payload.model_dump(exclude_none=True)
             env_values = {
-                field: value
-                for field, value in payload_data.items()
-                if field in ENV_KEYS
+                field: value for field, value in payload_data.items() if field in ENV_KEYS
             }
             secret_values = {
                 field: value
@@ -1286,8 +1331,7 @@ def create_app(
                         log_buffer.append(
                             "error",
                             "project",
-                            "Active project rollback was incomplete: "
-                            + "; ".join(rollback_errors),
+                            "Active project rollback was incomplete: " + "; ".join(rollback_errors),
                         )
                     raise HTTPException(status_code=400, detail=safe_detail(exc)) from exc
             try:
@@ -1306,8 +1350,7 @@ def create_app(
                     log_buffer.append(
                         "error",
                         "project",
-                        "Project deletion rollback was incomplete: "
-                        + "; ".join(rollback_errors),
+                        "Project deletion rollback was incomplete: " + "; ".join(rollback_errors),
                     )
                 if isinstance(exc, HTTPException):
                     raise
@@ -1396,7 +1439,9 @@ def create_app(
         return run
 
     @app.get("/api/crawls/{run_id}/events", response_model=list[CrawlEvent])
-    async def get_crawl_events(run_id: str, after: Annotated[int, Query(ge=0)] = 0) -> list[CrawlEvent]:
+    async def get_crawl_events(
+        run_id: str, after: Annotated[int, Query(ge=0)] = 0
+    ) -> list[CrawlEvent]:
         return manager.get_events(run_id, after)
 
     @app.post("/api/crawls/{run_id}/cancel")
@@ -1421,19 +1466,29 @@ def create_app(
     async def get_graph(
         root: str | None = None,
         depth: Annotated[int, Query(ge=0, le=4)] = 2,
-        limit: Annotated[int, Query(ge=1, le=100000)] = 500,
-        q: str | None = None,
-        category: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_GRAPH_NODES)] = 500,
+        q: Annotated[str | None, Query(max_length=256)] = None,
+        category: Annotated[str | None, Query(max_length=120)] = None,
         friend_count_min: Annotated[int | None, Query(ge=0)] = None,
         friend_count_max: Annotated[int | None, Query(ge=0)] = None,
         prior_pool_min_links: Annotated[int, Query(ge=0)] = 0,
-        sort_by: Annotated[str, Query(pattern="^(depth|degree|friend_count|prior_pool_links|closeness)$")] = "depth",
+        sort_by: Annotated[
+            str,
+            Query(pattern="^(depth|degree|friend_count|prior_pool_links|closeness)$"),
+        ] = "depth",
         sort_dir: Annotated[str, Query(pattern="^(asc|desc)$")] = "asc",
     ) -> GraphResponse:
         try:
             normalized_root = normalize_graph_roots(root)
-            if friend_count_min is not None and friend_count_max is not None and friend_count_min > friend_count_max:
-                raise HTTPException(status_code=400, detail="friend_count_min must be <= friend_count_max")
+            if (
+                friend_count_min is not None
+                and friend_count_max is not None
+                and friend_count_min > friend_count_max
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="friend_count_min must be <= friend_count_max",
+                )
             return await call_repository(
                 "get_graph",
                 root=normalized_root,
@@ -1476,8 +1531,14 @@ def create_app(
 
     @app.get("/api/path", response_model=GraphResponse)
     async def get_path(
-        from_id: Annotated[str, Query(alias="from")],
-        to_id: Annotated[str, Query(alias="to")],
+        from_id: Annotated[
+            str,
+            Query(alias="from", min_length=1, max_length=MAX_GRAPH_ROOT_LENGTH),
+        ],
+        to_id: Annotated[
+            str,
+            Query(alias="to", min_length=1, max_length=MAX_GRAPH_ROOT_LENGTH),
+        ],
         max_depth: Annotated[int, Query(ge=1, le=4)] = 4,
     ) -> GraphResponse:
         return await call_repository(
@@ -1489,7 +1550,9 @@ def create_app(
         )
 
     @app.get("/api/stats/top-degree", response_model=list[GraphNode])
-    async def top_degree(limit: Annotated[int, Query(ge=1, le=50)] = 12) -> list[GraphNode]:
+    async def top_degree(
+        limit: Annotated[int, Query(ge=1, le=50)] = 12,
+    ) -> list[GraphNode]:
         try:
             return await call_repository("get_top_degree", limit, project_scoped=True)
         except Exception as exc:
@@ -1498,9 +1561,9 @@ def create_app(
 
     @app.get("/api/analysis/friend-circles", response_model=FriendCircleAnalysisResponse)
     async def friend_circles(
-        root: str,
+        root: Annotated[str, Query(min_length=1, max_length=MAX_GRAPH_ROOT_LENGTH)],
         max_depth: Annotated[int, Query(ge=2, le=4)] = 3,
-        min_mutual: Annotated[int, Query(ge=0)] = 2,
+        min_mutual: Annotated[int, Query(ge=0, le=10_000)] = 2,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
     ) -> FriendCircleAnalysisResponse:
         try:
@@ -1523,11 +1586,25 @@ def create_app(
     ) -> NetworkAnalysisResponse:
         try:
             exported = await call_repository("export_graph", project_scoped=True)
+            if (
+                len(exported.nodes) > MAX_NETWORK_ANALYSIS_NODES
+                or len(exported.edges) > MAX_NETWORK_ANALYSIS_EDGES
+            ):
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "Network analysis is limited to "
+                        f"{MAX_NETWORK_ANALYSIS_NODES} nodes and "
+                        f"{MAX_NETWORK_ANALYSIS_EDGES} edges"
+                    ),
+                )
             return await calculate_network_analysis(
                 exported,
                 limit=limit,
                 resolution=resolution,
             )
+        except HTTPException:
+            raise
         except Exception as exc:
             log_buffer.append("error", "analysis", f"网络影响力分析失败: {exc}")
             raise HTTPException(status_code=500, detail=safe_detail(exc)) from exc

@@ -4,7 +4,6 @@ import asyncio
 import logging
 from typing import Callable
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +24,7 @@ class AdaptiveRateLimiter:
         self.min_delay_ms = min(min_delay_ms, base_delay_ms)
         self.max_delay_ms = max(max_delay_ms, base_delay_ms)
         self.decrease_step_ms = 10.0  # 每次成功减少 10ms 延迟（请求加快）
-        self.increase_factor = 1.5    # 每次重试/失败增加 1.5 倍延迟（请求放慢）
+        self.increase_factor = 1.5  # 每次重试/失败增加 1.5 倍延迟（请求放慢）
         self.backoff_floor_ms = min(100.0, self.max_delay_ms)
         self.on_change_callback = on_change_callback
         self.lock = asyncio.Lock()

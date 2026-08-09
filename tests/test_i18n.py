@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
 I18N_PATH = Path("src/steam_friend_relationship_map/static/i18n.json")
 
 

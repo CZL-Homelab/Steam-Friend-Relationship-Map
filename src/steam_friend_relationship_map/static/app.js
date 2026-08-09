@@ -437,6 +437,24 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function safeExternalUrl(value, { image = false } = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (image && /^data:image\/(?:gif|jpeg|png|webp);base64,[a-z0-9+/=\s]+$/i.test(raw)) {
+    return raw;
+  }
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    const isSameOrigin = parsed.origin === window.location.origin;
+    if (parsed.protocol === "https:" || (isSameOrigin && parsed.protocol === "http:")) {
+      return parsed.href;
+    }
+  } catch {
+    // Invalid or unsupported URLs are rendered without a link or image.
+  }
+  return "";
+}
+
 async function api(path, options = {}) {
   try {
     const { headers = {}, ...fetchOptions } = options;
@@ -494,21 +512,30 @@ function formatLogTime(isoString) {
 function appendLog(listId, level, source, message, time = new Date().toISOString()) {
   const list = $(listId);
   if (!list) return;
+  const normalizedLevel = ["debug", "info", "warn", "error"].includes(level) ? level : "info";
   const row = document.createElement("div");
-  row.className = `log-item log-${level}`;
-  row.dataset.level = level;
-  
+  row.className = `log-item log-${normalizedLevel}`;
+  row.dataset.level = normalizedLevel;
+
   const formattedTime = formatLogTime(time);
-  const levelTag = level ? ` <span class="log-tag-${level}">[${level.toUpperCase()}]</span>` : "";
-  row.innerHTML = `<span class="log-meta">${escapeHtml(formattedTime)}${levelTag} · ${escapeHtml(source)}</span><span>${escapeHtml(message)}</span>`;
-  
+  const meta = document.createElement("span");
+  meta.className = "log-meta";
+  meta.append(document.createTextNode(formattedTime));
+  const levelTag = document.createElement("span");
+  levelTag.className = `log-tag-${normalizedLevel}`;
+  levelTag.textContent = `[${normalizedLevel.toUpperCase()}]`;
+  meta.append(" ", levelTag, ` · ${source}`);
+  const messageNode = document.createElement("span");
+  messageNode.textContent = message;
+  row.append(meta, messageNode);
+
   if (listId === "crawlLogs" && $("crawlLogLevel")) {
     const selectedLevel = $("crawlLogLevel").value;
-    if (selectedLevel && level !== selectedLevel) {
+    if (selectedLevel && normalizedLevel !== selectedLevel) {
       row.style.display = "none";
     }
   }
-  
+
   list.appendChild(row);
   while (list.children.length > 300) list.removeChild(list.firstElementChild);
   list.scrollTop = list.scrollHeight;
@@ -712,7 +739,7 @@ function renderGraph(data) {
         data: {
           id: node.id,
           label: node.label,
-          avatar: node.avatar || "none",
+          avatar: safeExternalUrl(node.avatar, { image: true }) || "none",
           degree: node.degree || 1,
           closeness: node.root_closeness_score || 0,
           rootFriendCircle: node.root_friend_circle_score || 0,
@@ -840,13 +867,18 @@ function showStartupFailure(dependencies) {
 
 function fillProfile(node) {
   selectedNode = node;
-  $("profileAvatar").hidden = !node.avatar;
-  if (node.avatar) $("profileAvatar").src = node.avatar;
+  const avatarUrl = safeExternalUrl(node.avatar, { image: true });
+  $("profileAvatar").hidden = !avatarUrl;
+  if (avatarUrl) $("profileAvatar").src = avatarUrl;
+  else $("profileAvatar").removeAttribute("src");
   $("profileName").textContent = node.label || statusText("unknown");
   if (node.id) {
-    $("profileHeaderLink").href = node.profile_url || "#";
-    $("profileHeaderLink").setAttribute("target", "_blank");
-    $("profileUrlLabel").style.display = "flex";
+    const profileUrl = safeExternalUrl(node.profile_url);
+    $("profileHeaderLink").href = profileUrl || "#";
+    $("profileHeaderLink").setAttribute("rel", "noopener noreferrer");
+    if (profileUrl) $("profileHeaderLink").setAttribute("target", "_blank");
+    else $("profileHeaderLink").removeAttribute("target");
+    $("profileUrlLabel").style.display = profileUrl ? "flex" : "none";
   } else {
     $("profileHeaderLink").href = "#";
     $("profileHeaderLink").removeAttribute("target");
@@ -1209,14 +1241,32 @@ function renderRecentRoots() {
   roots.forEach(r => {
     const chip = document.createElement("div");
     chip.className = "recent-root-chip";
-    chip.title = r.url;
-    chip.innerHTML =
-      `<img src="${escapeHtml(r.avatar || '')}" alt="" onerror="this.style.display='none'">` +
-      `<div class="chip-info">` +
-        `<div class="chip-name">${escapeHtml(r.name || r.id || r.url)}</div>` +
-        `<div class="chip-meta"><span>${escapeHtml(r.id || '')}</span></div>` +
-        `<div class="chip-url">${escapeHtml(r.url)}</div>` +
-      `</div>`;
+    chip.title = String(r.url || "");
+
+    const avatarUrl = safeExternalUrl(r.avatar, { image: true });
+    if (avatarUrl) {
+      const avatar = document.createElement("img");
+      avatar.src = avatarUrl;
+      avatar.alt = "";
+      avatar.addEventListener("error", () => avatar.remove());
+      chip.appendChild(avatar);
+    }
+
+    const info = document.createElement("div");
+    info.className = "chip-info";
+    const name = document.createElement("div");
+    name.className = "chip-name";
+    name.textContent = r.name || r.id || r.url || "";
+    const meta = document.createElement("div");
+    meta.className = "chip-meta";
+    const steamId = document.createElement("span");
+    steamId.textContent = r.id || "";
+    meta.appendChild(steamId);
+    const url = document.createElement("div");
+    url.className = "chip-url";
+    url.textContent = r.url || "";
+    info.append(name, meta, url);
+    chip.appendChild(info);
     chip.addEventListener("click", () => {
       $("rootUrl").value = r.url;
       $("graphRoot").value = r.id || "";

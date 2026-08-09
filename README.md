@@ -155,13 +155,18 @@ main (生产分支)
 
 1. 从 `dev-base` 创建功能分支 `dev-N`
 2. 开发完成后 PR 到 `dev-base`
-3. 当 `dev-base` 积累足够功能后，从 `dev-base` 创建 `security-check-before-main`
-4. 在 `security-check-before-main` 上执行：
+3. 当 `dev-base` 积累足够功能后，从最新 `dev-base` 创建独立审计分支，例如 `dev/fix/security-audit-YYYY-MM-DD`
+4. 在独立审计分支上执行：
    - 安全审计（参考 `SECURITY.md` 中的审计报告格式）
    - 修复发现的安全问题
    - 代码注释规整化
    - 更新 `SECURITY.md` 审计报告
-5. 提交 `security-check-before-main`，由**其他人** review 后合并到 `main`
+5. 通过 PR 将审计分支以 merge commit 合入 `security-check-before-main`
+6. `security-check-before-main` 由**其他人**最终 review 后合并到 `main`
+
+质量工作流会在 Windows 与 Ubuntu 上运行完整测试，并检查 Ruff、Bandit、依赖漏洞、前端语法、i18n JSON 和仓库密钥。审计或集成分支不得绕过失败的质量门禁。
+
+After `dev-base` is integrated, create a dedicated audit branch from its latest commit, complete the security and cleanup work there, and merge it into `security-check-before-main` through a reviewed merge-commit PR. The permanent quality workflow runs the full test suite on Windows and Ubuntu together with Ruff, Bandit, dependency, frontend, i18n, and secret checks. Failed gates must not be bypassed.
 
 ### Commit 规范
 

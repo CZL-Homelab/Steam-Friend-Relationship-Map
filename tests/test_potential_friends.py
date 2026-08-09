@@ -6,8 +6,14 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+
 from steam_friend_relationship_map.kuzu_repo import KuzuRepositoryImpl
-from steam_friend_relationship_map.models import FriendEdge, ProjectCreate, SteamUserRecord
+from steam_friend_relationship_map.models import (
+    FriendEdge,
+    ProjectCreate,
+    SteamUserRecord,
+)
+
 
 @pytest.fixture
 def temp_kuzu_repo() -> Generator[KuzuRepositoryImpl, None, None]:
@@ -20,6 +26,7 @@ def temp_kuzu_repo() -> Generator[KuzuRepositoryImpl, None, None]:
         repo.close()
         shutil.rmtree(db_dir)
 
+
 def test_kuzu_get_potential_friends(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     repo = temp_kuzu_repo
     repo.ensure_schema()
@@ -28,28 +35,57 @@ def test_kuzu_get_potential_friends(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     # 1 (Root) is friends with 2, 3
     # 4 is friends with 2, 3 (Potential friend of 1: mutuals = {2, 3})
     # 5 is friends with 2 (Potential friend of 1: mutuals = {2})
-    repo.upsert_users([
-        SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
-        SteamUserRecord(steam_id="2", persona_name="Bob", depth_min=1),
-        SteamUserRecord(steam_id="3", persona_name="Charlie", depth_min=1),
-        SteamUserRecord(steam_id="4", persona_name="David", depth_min=2),
-        SteamUserRecord(steam_id="5", persona_name="Eve", depth_min=2),
-    ], "default")
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
+            SteamUserRecord(steam_id="2", persona_name="Bob", depth_min=1),
+            SteamUserRecord(steam_id="3", persona_name="Charlie", depth_min=1),
+            SteamUserRecord(steam_id="4", persona_name="David", depth_min=2),
+            SteamUserRecord(steam_id="5", persona_name="Eve", depth_min=2),
+        ],
+        "default",
+    )
 
-    repo.upsert_relationships([
-        FriendEdge(from_id="1", to_id="2", crawl_id="run-1", source_depth=0),
-        FriendEdge(from_id="1", to_id="3", crawl_id="run-1", source_depth=0),
-        FriendEdge(from_id="2", to_id="4", crawl_id="run-1", source_depth=1),
-        FriendEdge(from_id="3", to_id="4", crawl_id="run-1", source_depth=1),
-        FriendEdge(from_id="2", to_id="5", crawl_id="run-1", source_depth=1),
-    ], "default")
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="1", to_id="2", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="1", to_id="3", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="2", to_id="4", crawl_id="run-1", source_depth=1),
+            FriendEdge(from_id="3", to_id="4", crawl_id="run-1", source_depth=1),
+            FriendEdge(from_id="2", to_id="5", crawl_id="run-1", source_depth=1),
+        ],
+        "default",
+    )
 
     # Mark friend list statuses to build degrees
-    repo.mark_friend_list_status("1", "public", friend_count=2, friend_count_status="public", friend_ids=["2", "3"], project_id="default")
-    repo.mark_friend_list_status("2", "public", friend_count=3, friend_count_status="public", friend_ids=["1", "4", "5"], project_id="default")
-    repo.mark_friend_list_status("3", "public", friend_count=2, friend_count_status="public", friend_ids=["1", "4"], project_id="default")
+    repo.mark_friend_list_status(
+        "1",
+        "public",
+        friend_count=2,
+        friend_count_status="public",
+        friend_ids=["2", "3"],
+        project_id="default",
+    )
+    repo.mark_friend_list_status(
+        "2",
+        "public",
+        friend_count=3,
+        friend_count_status="public",
+        friend_ids=["1", "4", "5"],
+        project_id="default",
+    )
+    repo.mark_friend_list_status(
+        "3",
+        "public",
+        friend_count=2,
+        friend_count_status="public",
+        friend_ids=["1", "4"],
+        project_id="default",
+    )
 
-    res = repo.get_potential_friends(root="1", max_depth=3, min_mutual=1, limit=5, project_id="default")
+    res = repo.get_potential_friends(
+        root="1", max_depth=3, min_mutual=1, limit=5, project_id="default"
+    )
     assert len(res.candidates) == 2
 
     # David (ID 4) has mutuals: {2, 3}. Alice degree = 2. David degree = 2.
@@ -75,20 +111,40 @@ def test_kuzu_multi_root_graph(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     # 1 (Root A) is friends with 2
     # 3 (Root B) is friends with 2
     # Node 2 is the intersection node!
-    repo.upsert_users([
-        SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
-        SteamUserRecord(steam_id="2", persona_name="Bob", depth_min=1),
-        SteamUserRecord(steam_id="3", persona_name="Charlie", depth_min=0),
-    ], "default")
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="1", persona_name="Alice", depth_min=0),
+            SteamUserRecord(steam_id="2", persona_name="Bob", depth_min=1),
+            SteamUserRecord(steam_id="3", persona_name="Charlie", depth_min=0),
+        ],
+        "default",
+    )
 
-    repo.upsert_relationships([
-        FriendEdge(from_id="1", to_id="2", crawl_id="run-1", source_depth=0),
-        FriendEdge(from_id="3", to_id="2", crawl_id="run-1", source_depth=0),
-    ], "default")
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="1", to_id="2", crawl_id="run-1", source_depth=0),
+            FriendEdge(from_id="3", to_id="2", crawl_id="run-1", source_depth=0),
+        ],
+        "default",
+    )
 
     # Mark statuses
-    repo.mark_friend_list_status("1", "public", friend_count=1, friend_count_status="public", friend_ids=["2"], project_id="default")
-    repo.mark_friend_list_status("3", "public", friend_count=1, friend_count_status="public", friend_ids=["2"], project_id="default")
+    repo.mark_friend_list_status(
+        "1",
+        "public",
+        friend_count=1,
+        friend_count_status="public",
+        friend_ids=["2"],
+        project_id="default",
+    )
+    repo.mark_friend_list_status(
+        "3",
+        "public",
+        friend_count=1,
+        friend_count_status="public",
+        friend_ids=["2"],
+        project_id="default",
+    )
 
     # Query with multiple roots "1,3"
     graph = repo.get_graph(root="1,3", depth=1, limit=10, project_id="default")
@@ -136,8 +192,6 @@ def test_kuzu_potential_friends_are_project_isolated(
         "other",
     )
 
-    result = repo.get_potential_friends(
-        root="root", min_mutual=1, project_id="default"
-    )
+    result = repo.get_potential_friends(root="root", min_mutual=1, project_id="default")
 
     assert result.candidates == []
