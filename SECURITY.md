@@ -114,6 +114,7 @@ uv run --frozen bandit -c pyproject.toml -r src
 uv export --frozen --no-dev --format requirements-txt --no-emit-project --output-file requirements-audit.txt
 uv run --frozen pip-audit --strict -r requirements-audit.txt
 node --check src/steam_friend_relationship_map/static/app.js
+node --check src/steam_friend_relationship_map/static/graph-collision.js
 node -e "JSON.parse(require('fs').readFileSync('src/steam_friend_relationship_map/static/i18n.json', 'utf8'))"
 ```
 

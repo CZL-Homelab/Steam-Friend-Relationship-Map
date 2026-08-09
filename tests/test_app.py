@@ -288,7 +288,7 @@ def test_application_entrypoint_and_static_assets_use_safe_cache_headers() -> No
 
     entrypoint = client.get("/")
     static_entrypoint = client.get("/static/index.html")
-    versioned_asset = client.get("/static/app.js?v=1.0.22")
+    versioned_asset = client.get("/static/app.js?v=1.0.23")
     unversioned_asset = client.get("/static/app.js")
 
     assert entrypoint.headers["cache-control"] == "no-store"

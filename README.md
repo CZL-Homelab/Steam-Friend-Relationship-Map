@@ -115,6 +115,7 @@
 - 抓取任务的完成、取消、强停和失败状态使用统一终态快照；错误信息脱敏后落库，终态写入失败会自动重试且不会产生未处理的后台任务异常。Crawl completion, cancellation, forced stop, and failure share one terminal snapshot; errors are redacted before persistence, and terminal writes retry without leaking unhandled task exceptions.
 - 图谱重复刷新或切换项目时会主动取消旧的分块渲染计时器并停止旧 Cytoscape 布局，避免后台布局和动画累积。Repeated graph refreshes and project switches cancel stale chunk timers and stop prior Cytoscape layouts so background layout work cannot accumulate.
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
+- Root 节点始终显示且保持最大；头像倍率可在 75%-225% 间调整，节点在布局和手动拖拽时会自动避让。Root nodes stay visible and largest; avatar scale is adjustable from 75%-225%, with overlap avoidance during layout and manual dragging.
 
 ## 安全提醒：Public 仓库不要提交这些内容
 
