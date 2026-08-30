@@ -50,9 +50,9 @@ Local-first means the application, graph database, credentials, notes, and analy
 
 ![使用完全合成数据生成的 Steam 好友关系图谱 Web GUI 演示](document/assets/demo-graph-anonymized.png)
 
-截图使用隔离的临时 Kuzu 数据库、虚构姓名、`demo-*` 标识和生成式占位头像制作，不包含真实 Steam 账号、SteamID、好友关系、密钥、数据库路径或个人备注。
+截图采用暗色英文界面，以 2560x1440 输出；使用隔离的临时 Kuzu 数据库、虚构昵称、`demo-*` 标识和确定性生成的匿名机器人头像制作，不包含真实 Steam 账号、SteamID、好友关系、密钥、数据库路径或个人备注。
 
-This screenshot was produced from an isolated temporary Kuzu database with fictional names, `demo-*` identifiers, and generated placeholder avatars. It contains no real Steam account, SteamID, relationship, credential, database path, or personal note.
+This 2560x1440 screenshot uses the English dark theme and was produced from an isolated temporary Kuzu database with fictional aliases, `demo-*` identifiers, and deterministically generated anonymous robot avatars. It contains no real Steam account, SteamID, relationship, credential, database path, or personal note.
 
 ## 这个工具是做什么的？
 
