@@ -13,6 +13,145 @@ NODE = shutil.which("node")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_graph_collision_separates_chains_and_keeps_dragged_root_anchored() -> None:
+    module_path = str((STATIC_DIR / "graph-collision.js").resolve())
+    script = f"""
+      const {{ separateGraphCircles }} = require({json.dumps(module_path)});
+      function assertSeparated(circles, gap) {{
+        for (let left = 0; left < circles.length; left++) {{
+          for (let right = left + 1; right < circles.length; right++) {{
+            const a = circles[left];
+            const b = circles[right];
+            const distance = Math.hypot(a.x - b.x, a.y - b.y);
+            if (distance + 0.001 < a.radius + b.radius + gap) process.exit(1);
+          }}
+        }}
+      }}
+
+      const chain = [
+        {{ id: "root", x: 0, y: 0, radius: 50 }},
+        {{ id: "a", x: 20, y: 0, radius: 30 }},
+        {{ id: "b", x: 40, y: 0, radius: 30 }},
+      ];
+      const separated = separateGraphCircles(chain, {{ anchorId: "root", gap: 10 }});
+      const root = separated.circles.find((circle) => circle.id === "root");
+      if (root.x !== 0 || root.y !== 0) process.exit(2);
+      assertSeparated(separated.circles, 10);
+
+      const coincident = [
+        {{ id: "root", x: 10, y: 10, radius: 20 }},
+        {{ id: "same", x: 10, y: 10, radius: 20 }},
+      ];
+      const first = separateGraphCircles(coincident, {{ anchorId: "root", gap: 8 }});
+      const second = separateGraphCircles(coincident, {{ anchorId: "root", gap: 8 }});
+      assertSeparated(first.circles, 8);
+      if (JSON.stringify(first.circles) !== JSON.stringify(second.circles)) process.exit(3);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_graph_avatar_scale_defaults_clamps_and_keeps_root_largest() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      class Coordinator {{}}
+      const context = {{
+        console,
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}}, removeItem() {{}} }},
+        window: {{
+          LatestRequestCoordinator: Coordinator,
+          GraphLifecycleCoordinator: Coordinator,
+          addEventListener() {{}},
+        }},
+        document: {{ addEventListener() {{}}, getElementById() {{ return null; }} }},
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+
+      const values = vm.runInContext(`({{
+        minimum: clampGraphAvatarScale(1),
+        maximum: clampGraphAvatarScale(999),
+        fallback: clampGraphAvatarScale("invalid"),
+        root75: graphNodeDiameter(1, true, 75),
+        root150: graphNodeDiameter(1, true, 150),
+        root225: graphNodeDiameter(1, true, 225),
+        nonRoot150: graphNodeDiameter(100, false, 150),
+      }})`, context);
+      if (values.minimum !== 75 || values.maximum !== 225 || values.fallback !== 150) process.exit(1);
+      if (values.root75 !== 69 || values.root150 !== 138 || values.root225 !== 207) process.exit(2);
+      if (values.nonRoot150 >= values.root150) process.exit(3);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_graph_root_input_uses_resolved_recent_vanity_ids_without_network_access() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    recent_roots = json.dumps(
+        [
+            {
+                "url": "https://steamcommunity.com/id/known-user/",
+                "id": "76561198000000001",
+            }
+        ]
+    )
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      class Coordinator {{}}
+      let fetchCalls = 0;
+      const context = {{
+        console,
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        fetch() {{ fetchCalls++; throw new Error("network must not be used"); }},
+        localStorage: {{
+          getItem(key) {{ return key === "sfm_recent_roots" ? {json.dumps(recent_roots)} : null; }},
+          setItem() {{}},
+          removeItem() {{}},
+        }},
+        window: {{
+          LatestRequestCoordinator: Coordinator,
+          GraphLifecycleCoordinator: Coordinator,
+          addEventListener() {{}},
+        }},
+        document: {{ addEventListener() {{}}, getElementById() {{ return null; }} }},
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+
+      const numeric = vm.runInContext(
+        'normalizeGraphRootInput("https://steamcommunity.com/profiles/76561198000000000/")',
+        context,
+      );
+      const known = vm.runInContext(
+        'normalizeGraphRootInput("https://steamcommunity.com/id/known-user/")',
+        context,
+      );
+      const unknown = vm.runInContext(
+        'normalizeGraphRootInput("https://steamcommunity.com/id/unknown-user/")',
+        context,
+      );
+      if (numeric.value !== "76561198000000000") process.exit(1);
+      if (known.value !== "76561198000000001" || known.unknownVanity) process.exit(2);
+      if (unknown.value !== "" || unknown.unknownVanity !== "unknown-user") process.exit(3);
+      if (fetchCalls !== 0) process.exit(4);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_latest_request_coordinator_aborts_and_invalidates_older_requests() -> None:
     module_path = str((STATIC_DIR / "request-coordinator.js").resolve())
     script = f"""
@@ -89,7 +228,12 @@ def test_graph_lifecycle_cancels_stale_chunks_and_layouts() -> None:
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_frontend_javascript_parses() -> None:
-    for filename in ("request-coordinator.js", "graph-lifecycle.js", "app.js"):
+    for filename in (
+        "request-coordinator.js",
+        "graph-lifecycle.js",
+        "graph-collision.js",
+        "app.js",
+    ):
         subprocess.run(
             [NODE, "--check", str(STATIC_DIR / filename)],
             check=True,
@@ -275,6 +419,7 @@ def test_request_coordinator_loads_before_application_script() -> None:
 
     assert index.index("/static/request-coordinator.js") < index.index("/static/app.js")
     assert index.index("/static/graph-lifecycle.js") < index.index("/static/app.js")
+    assert index.index("/static/graph-collision.js") < index.index("/static/app.js")
     script_sources = re.findall(r'<script src="([^"]+)"', index)
     assert script_sources
     assert all("?v=" in source for source in script_sources)
@@ -413,7 +558,8 @@ def test_application_reports_missing_helper_scripts_without_crashing() -> None:
         if (buttons.some((button) => !button.disabled)) process.exit(6);
         if (!hint.textContent.includes("#graphRoot")) process.exit(7);
         if (typeof legacyThemeListener !== "function") process.exit(8);
-      }}).catch(() => process.exit(9));
+        if (!hint.textContent.includes("graph-collision.js")) process.exit(9);
+      }}).catch(() => process.exit(10));
     """
 
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
@@ -435,6 +581,13 @@ def test_application_reports_missing_frontend_dependencies_before_initializing_g
     startup_source = source[startup:startup_end]
     assert "loadHealth()" in startup_source
     assert "testSettings(" not in startup_source
+
+    terminal_start = source.index("if (TERMINAL_CRAWL_STATUSES.has(run.status))")
+    terminal_end = source.index("scheduleRunPoll();", terminal_start)
+    terminal_source = source[terminal_start:terminal_end]
+    assert terminal_source.index(
+        '$("graphRoot").value = run.root_steam_id'
+    ) < terminal_source.index("await loadGraph()")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")

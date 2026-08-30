@@ -155,6 +155,30 @@ def test_neo4j_project_scoped_queries_bind_all_parameters() -> None:
     )
 
 
+def test_neo4j_root_query_bypasses_filters_and_reserves_root_capacity() -> None:
+    repo, driver = _repo()
+
+    repo.get_graph(
+        root="root-a,root-b",
+        depth=2,
+        limit=1,
+        query="missing",
+        category="missing",
+        friend_count_min=999,
+        prior_pool_min_links=999,
+        sort_by="degree",
+        sort_dir="desc",
+        project_id="project-a",
+    )
+
+    node_query = next(query for query in driver.queries if "reached_from_roots" in query)
+    node_params = driver.query_params[driver.queries.index(node_query)]
+    assert "WHERE n.steam_id IN $root_ids OR (" in node_query
+    assert "CASE WHEN n.steam_id IN $root_ids THEN 0 ELSE 1 END" in node_query
+    assert node_params["root_ids"] == ["root-a", "root-b"]
+    assert node_params["limit"] == 2
+
+
 def test_neo4j_project_membership_migration_is_idempotent() -> None:
     repo, driver = _repo()
 

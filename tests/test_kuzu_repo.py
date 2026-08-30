@@ -699,12 +699,15 @@ def test_kuzu_root_graph_uses_bfs_depth_and_view_filters(
     filtered = repo.get_graph(
         root="root", depth=3, limit=20, category="show", project_id="project-a"
     )
-    assert {node.id for node in filtered.nodes} == {"c", "d", "other"}
+    assert {node.id for node in filtered.nodes} == {"root", "c", "d", "other"}
     assert {frozenset((edge.source, edge.target)) for edge in filtered.edges} == {
-        frozenset(("c", "d"))
+        frozenset(("c", "d")),
+        frozenset(("root", "other")),
     }
     assert filtered.traversal_depth_reached == 3
     filtered_nodes = {node.id: node for node in filtered.nodes}
+    assert filtered_nodes["root"].is_root is True
+    assert filtered_nodes["root"].root_friend_circle_score == 1_000_000
     assert filtered_nodes["c"].root_route_count == 2
     assert filtered_nodes["c"].root_route_total_hops == 4
 
@@ -743,6 +746,8 @@ def test_kuzu_root_friend_circle_scores_routes_and_total_hops(
     nodes = {node.id: node for node in graph.nodes}
 
     assert nodes["root"].root_friend_circle_score == 1_000_000
+    assert nodes["root"].is_root is True
+    assert all(not node.is_root for node_id, node in nodes.items() if node_id != "root")
     assert nodes["a"].root_route_count == 3
     assert nodes["a"].root_route_total_hops == 5
     assert nodes["c"].root_route_count == 3
@@ -753,6 +758,45 @@ def test_kuzu_root_friend_circle_scores_routes_and_total_hops(
     shallower_nodes = {node.id: node for node in shallower_graph.nodes}
     assert shallower_nodes["c"].root_route_count == 2
     assert shallower_nodes["c"].root_route_total_hops == 3
+
+
+def test_kuzu_root_bypasses_view_filters_sorting_and_small_limit(
+    temp_kuzu_repo: KuzuRepositoryImpl,
+) -> None:
+    repo = temp_kuzu_repo
+    repo.ensure_schema()
+    repo.upsert_users(
+        [
+            SteamUserRecord(steam_id="root-a", persona_name="Root A", depth_min=0),
+            SteamUserRecord(steam_id="root-b", persona_name="Root B", depth_min=0),
+            SteamUserRecord(steam_id="friend", persona_name="Visible", depth_min=1),
+        ],
+        "default",
+    )
+    repo.upsert_relationships(
+        [
+            FriendEdge(from_id="root-a", to_id="friend", crawl_id="run", source_depth=0),
+            FriendEdge(from_id="root-b", to_id="friend", crawl_id="run", source_depth=0),
+        ],
+        "default",
+    )
+
+    graph = repo.get_graph(
+        root="root-a,root-b",
+        depth=1,
+        limit=1,
+        query="does-not-match",
+        category="does-not-match",
+        friend_count_min=999,
+        prior_pool_min_links=999,
+        sort_by="degree",
+        sort_dir="desc",
+        project_id="default",
+    )
+
+    assert [node.id for node in graph.nodes] == ["root-a", "root-b"]
+    assert all(node.is_root for node in graph.nodes)
+    assert all(node.root_friend_circle_score == 1_000_000 for node in graph.nodes)
 
 
 def test_kuzu_root_friend_circle_route_cap_is_stable(

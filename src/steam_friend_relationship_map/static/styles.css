@@ -368,6 +368,32 @@ select {
   height: 34px;
 }
 
+.avatar-scale-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.avatar-scale-control input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--teal);
+}
+
+.avatar-scale-control output {
+  width: 48px;
+  flex: 0 0 48px;
+  color: var(--ink);
+  font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  text-align: right;
+}
+
 textarea {
   resize: vertical;
 }

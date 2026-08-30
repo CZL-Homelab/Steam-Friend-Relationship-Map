@@ -1,5 +1,15 @@
 # 安全审计报告 / Security Audit Report
 
+## 报告安全漏洞 / Reporting a Vulnerability
+
+请不要在公开 Issue、Discussion、PR、日志或截图中披露尚未修复的漏洞、凭据或真实关系数据。请使用仓库的 [GitHub Private Vulnerability Reporting](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/security/advisories/new) 私密提交报告。
+
+Do not disclose unpatched vulnerabilities, credentials, or real relationship data in public issues, discussions, pull requests, logs, or screenshots. Submit reports privately through [GitHub Private Vulnerability Reporting](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/security/advisories/new).
+
+报告应包含受影响版本或提交、最小复现步骤、潜在影响、已知缓解方式，以及不含真实密钥或个人数据的证明材料。维护者会先确认报告内容，再通过私密 Advisory 协调验证、修复和披露。不要对不属于你的系统、账户或数据进行测试。
+
+Include the affected version or commit, minimal reproduction steps, potential impact, known mitigations, and evidence that contains no real secrets or personal data. The maintainer will validate the report and coordinate remediation and disclosure through the private advisory. Do not test against systems, accounts, or data you do not own or have permission to assess.
+
 ## 审计信息 / Audit Information
 
 - 审计日期 / Date: `2026-08-01`
@@ -114,6 +124,7 @@ uv run --frozen bandit -c pyproject.toml -r src
 uv export --frozen --no-dev --format requirements-txt --no-emit-project --output-file requirements-audit.txt
 uv run --frozen pip-audit --strict -r requirements-audit.txt
 node --check src/steam_friend_relationship_map/static/app.js
+node --check src/steam_friend_relationship_map/static/graph-collision.js
 node -e "JSON.parse(require('fs').readFileSync('src/steam_friend_relationship_map/static/i18n.json', 'utf8'))"
 ```
 
