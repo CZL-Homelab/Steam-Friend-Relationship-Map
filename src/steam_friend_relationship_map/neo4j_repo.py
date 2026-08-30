@@ -733,9 +733,10 @@ class Neo4jRepositoryImpl(IGraphRepository):
             "project_ids": self._visible_project_ids(project_id),
         }
         if query:
-            params["query"] = query.lower()
+            params["search_query"] = query.lower()
             filters.append(
-                "(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)"
+                "(toLower(coalesce(n.persona_name, '')) CONTAINS $search_query "
+                "OR n.steam_id CONTAINS $search_query)"
             )
         if category:
             params["category"] = category
@@ -749,7 +750,7 @@ class Neo4jRepositoryImpl(IGraphRepository):
         if prior_pool_min_links:
             params["prior_pool_min_links"] = prior_pool_min_links
             filters.append("coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links")
-        where = "WHERE " + " AND ".join(filters) if filters else ""
+        display_where = " AND ".join(filters) if filters else "TRUE"
         sort_map = {
             "depth": "coalesce(membership.depth_min, 999)",
             "degree": "degree",
@@ -767,6 +768,8 @@ class Neo4jRepositoryImpl(IGraphRepository):
         with self.driver.session() as session:
             if root_ids:
                 params["root_ids"] = root_ids
+                effective_limit = max(limit, len(root_ids))
+                params["limit"] = effective_limit
                 # Root 查询只取指定层数内的子图，防止前端一次渲染过大的全库图。
                 node_query = f"""
                 MATCH (r:SteamUser)-[:IN_PROJECT]->(project:Project {{id: $project_id}})
@@ -775,18 +778,20 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 WHERE all(rel IN relationships(p) WHERE coalesce(rel.project_id, '') IN $project_ids)
                 WITH n, project, collect(DISTINCT r.steam_id) AS reached_from_roots
                 MATCH (n)-[membership:IN_PROJECT]->(project)
-                {where}
+                WHERE n.steam_id IN $root_ids OR ({display_where})
                 RETURN n, membership, reached_from_roots, COUNT {{
                     (n)-[degree_rel:STEAM_FRIEND]-()
                     WHERE coalesce(degree_rel.project_id, '') IN $project_ids
                 }} AS degree
-                ORDER BY {order_expr} {direction}, degree DESC
+                ORDER BY CASE WHEN n.steam_id IN $root_ids THEN 0 ELSE 1 END,
+                         {order_expr} {direction}, degree DESC, n.steam_id ASC
                 LIMIT $limit + 1
                 """
             else:
+                effective_limit = limit
                 node_query = f"""
                 MATCH (n:SteamUser)-[membership:IN_PROJECT]->(:Project {{id: $project_id}})
-                {where}
+                WHERE {display_where}
                 RETURN n, membership, COUNT {{
                     (n)-[degree_rel:STEAM_FRIEND]-()
                     WHERE coalesce(degree_rel.project_id, '') IN $project_ids
@@ -795,14 +800,16 @@ class Neo4jRepositoryImpl(IGraphRepository):
                 LIMIT $limit + 1
                 """
             records = list(session.run(node_query, **params))
-            limited = len(records) > limit
-            records = records[:limit]
+            limited = len(records) > effective_limit
+            records = records[:effective_limit]
             nodes = [
                 self._graph_node(record["n"], record["degree"], record["membership"])
                 for record in records
             ]
             if root_ids:
+                root_set = set(root_ids)
                 for node, record in zip(nodes, records, strict=True):
+                    node.is_root = node.id in root_set
                     node.is_intersection = len(record["reached_from_roots"]) > 1
             ids = [node.id for node in nodes]
             edge_records = list(

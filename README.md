@@ -2,6 +2,11 @@
 
 [中文](README.md) | [English](document/README_EN.md)
 
+[![Release](https://img.shields.io/github/v/release/CZL-Homelab/Steam-Friend-Relationship-Map)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/releases)
+[![Quality and security](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](pyproject.toml)
+
 ## 目录
 
 - [这个工具是做什么的？](#这个工具是做什么的)
@@ -10,6 +15,7 @@
 - [架构](#架构)
 - [安全提醒：Public 仓库不要提交这些内容](#安全提醒public-仓库不要提交这些内容)
 - [分支开发流程](#分支开发流程--branch-workflow)
+- [参与贡献](#参与贡献--contributing)
 - [AI 生成声明](#ai-生成声明)
 - [免责声明与敏感信息说明](#免责声明与敏感信息说明)
 - [网页端安全配置说明](#网页端安全配置说明)
@@ -34,7 +40,9 @@
 
 ---
 
-这是一个本地运行的 Steam 好友关系图谱工具。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层向下抓取公开好友关系，支持写入本地轻量级嵌入式图数据库 Kùzu（默认，免安装）或外部 Neo4j Desktop 数据库（可选），并在本地 Web GUI 中展示头像、昵称、Steam 主页、备注、关系线、中心节点和最短路径。
+这是一个 **local-first、注重隐私的社交图谱分析开源项目**，Steam 是当前的数据源。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层抓取公开好友关系，写入本地 Kùzu（默认，免安装）或可选 Neo4j 图数据库，并在本地 Web GUI 中完成关系探索、最短路径和图分析。
+
+Local-first means the application, graph database, credentials, notes, and analysis stay under the user's control by default. The project does not provide an author-hosted cloud service or built-in telemetry.
 
 ## 这个工具是做什么的？
 
@@ -115,6 +123,7 @@
 - 抓取任务的完成、取消、强停和失败状态使用统一终态快照；错误信息脱敏后落库，终态写入失败会自动重试且不会产生未处理的后台任务异常。Crawl completion, cancellation, forced stop, and failure share one terminal snapshot; errors are redacted before persistence, and terminal writes retry without leaking unhandled task exceptions.
 - 图谱重复刷新或切换项目时会主动取消旧的分块渲染计时器并停止旧 Cytoscape 布局，避免后台布局和动画累积。Repeated graph refreshes and project switches cancel stale chunk timers and stop prior Cytoscape layouts so background layout work cannot accumulate.
 - 支持头像卡片、备注、标签、分类、中心节点排行和最短路径查询。
+- Root 节点始终显示且保持最大；头像倍率可在 75%-225% 间调整，节点在布局和手动拖拽时会自动避让。Root nodes stay visible and largest; avatar scale is adjustable from 75%-225%, with overlap avoidance during layout and manual dragging.
 
 ## 安全提醒：Public 仓库不要提交这些内容
 
@@ -173,18 +182,23 @@ After `dev-base` is integrated, create a dedicated audit branch from its latest 
 - **Title**：中英双语，中文在前。格式：`feat/fix/chore: 中文简述 / English brief`
 - **Body**：中英文各一段，列出关键改动
 
+## 参与贡献 / Contributing
+
+欢迎提交 Issue、文档、测试、缺陷修复和经过说明的功能 PR。开发环境、分支规则、质量门禁、PR 清单和 Release 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全漏洞不要发布到公开 Issue，请按 [SECURITY.md](SECURITY.md) 私密报告；数据处理原则见 [PRIVACY.md](PRIVACY.md)。
+
+Issues, documentation, tests, bug fixes, and well-scoped feature pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branching, quality gates, review expectations, and release management.
+
 ## AI 生成声明
 
-> **本项目由 AI 辅助生成。**
+> **本项目采用 AI 辅助实现，并由维护者主导架构、验证与维护。**
 >
-> 本仓库的全部代码、文档、配置和设计主要由 **GPT 5.5 Vibe Coding** 生成，人工做少量审阅和调整。这意味着：
+> 本仓库的大量代码、文档和配置由 **GPT 5.5 Vibe Coding** 等 AI 工具辅助生成。维护者负责需求与架构决策、任务拆解、集成、调试、测试、安全门禁和发布决策；AI 产出不会因此被视为天然正确。
 >
-> - 项目结构、实现细节和文档措辞可能存在不符合最佳实践的地方。
-> - 代码逻辑可能包含 AI 产生的幻觉、冗余或不够优雅的实现。
-> - 安全性和边界处理未必经过完整的人工审查。
-> - **Vibe Coding 规则强制要求**：任何时候使用 AI（包括 Vibe Coding 模式）辅助开发时，**必须首先要求 AI 助手完整阅读并严格遵循项目根目录下的 `.cursorrules` 规则**，以确保密钥脱敏、日志安全、代码结构和分支开发/Commit 规范得到贯彻执行。
+> - AI 参与的改动仍必须经过自动化测试、静态分析、依赖和密钥检查，并按分支流程接受人工 review。
+> - AI 可能产生幻觉、冗余或不符合最佳实践的实现；发现问题请通过 Issue 或 PR 提出。
+> - 使用 AI 参与开发时，必须先阅读并遵循 [`.agents/.cursorrules`](.agents/.cursorrules)、[CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md) 和 [PRIVACY.md](PRIVACY.md)。
 >
-> 作为一个 **公开（Public）仓库**，特此声明其 AI 生成属性，方便使用者评估代码质量和适用场景。欢迎通过 Issue 或 PR 指出问题和改进建议。
+> 该声明用于透明说明实现方式，不替代维护者对集成、验证、安全响应和 Release 管理的责任。
 
 ## 免责声明与敏感信息说明
 

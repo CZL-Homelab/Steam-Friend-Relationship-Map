@@ -156,6 +156,9 @@ def test_kuzu_multi_root_graph(temp_kuzu_repo: KuzuRepositoryImpl) -> None:
     alice = [n for n in graph.nodes if n.id == "1"][0]
     assert alice.is_intersection is False
     charlie = [n for n in graph.nodes if n.id == "3"][0]
+    assert alice.is_root is True
+    assert charlie.is_root is True
+    assert bob.is_root is False
     assert alice.root_friend_circle_score == 1_000_000
     assert charlie.root_friend_circle_score == 1_000_000
     assert bob.root_route_count == 2

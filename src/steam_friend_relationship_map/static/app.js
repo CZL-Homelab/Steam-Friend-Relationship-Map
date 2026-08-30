@@ -87,6 +87,7 @@ const FALLBACK_ZH = {
 };
 
 let cy;
+let graphCollision = null;
 let currentRunId = null;
 let pollTimer = null;
 let systemLogTimer = null;
@@ -102,7 +103,12 @@ let i18n = { "zh-CN": FALLBACK_ZH, en: {} };
 let currentLang = appStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
+let avatarScaleSettleTimer = null;
 const startupDependencyErrors = [];
+const GRAPH_AVATAR_SCALE_KEY = "sfm_graph_avatar_scale";
+const DEFAULT_GRAPH_AVATAR_SCALE = 150;
+const MIN_GRAPH_AVATAR_SCALE = 75;
+const MAX_GRAPH_AVATAR_SCALE = 225;
 const REQUIRED_INTERACTIVE_ELEMENT_IDS = [
   "graph", "graphEmpty", "graphLoading", "graphRoot", "pathResult",
   "resetFilters", "settingsGraphDbEngine", "testSettings", "loadSettings",
@@ -113,7 +119,8 @@ const REQUIRED_INTERACTIVE_ELEMENT_IDS = [
   "potentialRoot", "potentialMinMutual", "potentialLimit", "potentialFriendList",
   "refreshSystemLogs",
   "copySystemLogs", "clearSystemLogs", "systemLogLevel", "systemLogs",
-  "graphSizeBy", "graphLayoutBias", "communityColors", "exportJson", "exportCsv",
+  "graphSizeBy", "graphLayoutBias", "graphAvatarScale", "graphAvatarScaleValue",
+  "communityColors", "exportJson", "exportCsv",
   "exportFrame", "copyBloom", "bloomQuery", "refreshProjects", "createProject",
   "newProjectName", "themeToggle", "toggleConsole", "presetSelect", "savePreset",
   "deletePreset", "rootUrl", "maxDepth", "maxNodes", "delayMs", "cacheValidDays",
@@ -272,6 +279,11 @@ function updateCytoscapeStyle() {
     .selector("node[?isIntersection]")
     .style({
       "border-color": amber,
+      "border-width": 6,
+    })
+    .selector("node[isRoot = 1]")
+    .style({
+      "border-color": blue,
       "border-width": 6,
     })
     .selector("edge")
@@ -634,8 +646,8 @@ function initGraph() {
           "text-background-opacity": 0.9,
           "text-background-padding": 3,
           "text-margin-y": 8,
-          width: "mapData(visualSize, 0, 100, 34, 92)",
-          height: "mapData(visualSize, 0, 100, 34, 92)",
+          width: "data(renderedSize)",
+          height: "data(renderedSize)",
         },
       },
       {
@@ -659,6 +671,10 @@ function initGraph() {
         style: { "border-color": "#b45309", "border-width": 4 },
       },
       {
+        selector: "node[isRoot = 1]",
+        style: { "border-color": "#2563eb", "border-width": 6 },
+      },
+      {
         selector: "edge",
         style: {
           width: "mapData(strength, 1, 20, 1.2, 7)",
@@ -676,6 +692,11 @@ function initGraph() {
   });
 
   updateCytoscapeStyle();
+  graphCollision?.destroy();
+  graphCollision = new window.GraphCollisionController(cy, {
+    gap: graphCollisionGap(getGraphAvatarScale()),
+    maxMovesPerFrame: 500,
+  }).bind();
 
   cy.on("tap", "node", (event) => {
     selectedNode = event.target.data().node;
@@ -692,7 +713,68 @@ function metricValue(node, metric) {
 }
 
 function isRootFriendCircleRoot(node) {
-  return (node.root_friend_circle_score ?? 0) >= 1000000;
+  return Boolean(node.is_root) || (node.root_friend_circle_score ?? 0) >= 1000000;
+}
+
+function clampGraphAvatarScale(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_GRAPH_AVATAR_SCALE;
+  return Math.max(MIN_GRAPH_AVATAR_SCALE, Math.min(MAX_GRAPH_AVATAR_SCALE, parsed));
+}
+
+function getGraphAvatarScale() {
+  const input = $("graphAvatarScale");
+  if (input) return clampGraphAvatarScale(input.value);
+  return clampGraphAvatarScale(appStorage.getItem(GRAPH_AVATAR_SCALE_KEY));
+}
+
+function graphNodeDiameter(visualSize, isRoot, scalePercent = getGraphAvatarScale()) {
+  const boundedVisualSize = isRoot
+    ? 100
+    : Math.max(0, Math.min(88, Number(visualSize) || 0));
+  const baseDiameter = 34 + (boundedVisualSize / 100) * 58;
+  return Math.round(baseDiameter * (clampGraphAvatarScale(scalePercent) / 100));
+}
+
+function graphCollisionGap(scalePercent = getGraphAvatarScale()) {
+  return Math.max(8, Math.round(8 * (clampGraphAvatarScale(scalePercent) / 100)));
+}
+
+function updateGraphAvatarScaleOutput(scalePercent) {
+  const output = $("graphAvatarScaleValue");
+  if (output) output.textContent = `${scalePercent}%`;
+}
+
+function restoreGraphAvatarScale() {
+  const scale = clampGraphAvatarScale(
+    appStorage.getItem(GRAPH_AVATAR_SCALE_KEY) ?? DEFAULT_GRAPH_AVATAR_SCALE,
+  );
+  $("graphAvatarScale").value = String(scale);
+  updateGraphAvatarScaleOutput(scale);
+}
+
+function applyGraphAvatarScale({ settle = false } = {}) {
+  const scale = getGraphAvatarScale();
+  updateGraphAvatarScaleOutput(scale);
+  if (!cy) return;
+  cy.batch(() => {
+    cy.nodes().forEach((node) => {
+      node.data("renderedSize", graphNodeDiameter(
+        node.data("visualSize"),
+        node.data("isRoot") === 1,
+        scale,
+      ));
+    });
+  });
+  graphCollision?.setGap(graphCollisionGap(scale), settle);
+}
+
+function scheduleAvatarScaleCollisionSettle() {
+  clearTimeout(avatarScaleSettleTimer);
+  avatarScaleSettleTimer = setTimeout(() => {
+    avatarScaleSettleTimer = null;
+    graphCollision?.setGap(graphCollisionGap(), true);
+  }, 120);
 }
 
 function buildRootFriendCircleScale(nodes) {
@@ -725,6 +807,7 @@ function renderGraph(data) {
   const sizeBy = $("graphSizeBy").value || "root_friend_circle";
   const maxMetric = Math.max(1, ...data.nodes.map((node) => metricValue(node, sizeBy)));
   const rootCircleScale = buildRootFriendCircleScale(data.nodes);
+  const avatarScale = getGraphAvatarScale();
   const networkMetrics = new Map((currentNetworkAnalysis?.metrics || []).map((metric) => [metric.id, metric]));
   const useCommunityColors = $("communityColors")?.checked !== false;
   const fallbackBorder = getCssVar("--panel") || "#ffffff";
@@ -735,6 +818,12 @@ function renderGraph(data) {
       const enrichedNode = networkMetric
         ? { ...node, pagerank: networkMetric.pagerank, network_community: networkMetric.community, community_size: networkMetric.community_size }
         : node;
+      const isRoot = isRootFriendCircleRoot(node);
+      const visualSize = isRoot
+        ? 100
+        : sizeBy === "root_friend_circle"
+          ? rootCircleScale.visualSize(node)
+          : Math.max(5, Math.min(88, (metricValue(node, sizeBy) / maxMetric) * 88));
       return {
         data: {
           id: node.id,
@@ -744,9 +833,9 @@ function renderGraph(data) {
           closeness: node.root_closeness_score || 0,
           rootFriendCircle: node.root_friend_circle_score || 0,
           rootFriendCircleRank: rootCircleScale.rank(node),
-          visualSize: sizeBy === "root_friend_circle"
-            ? rootCircleScale.visualSize(node)
-            : Math.max(5, Math.min(100, (metricValue(node, sizeBy) / maxMetric) * 100)),
+          visualSize,
+          renderedSize: graphNodeDiameter(visualSize, isRoot, avatarScale),
+          isRoot: isRoot ? 1 : 0,
           status: node.friend_list_status,
           pagerank: networkMetric?.pagerank || 0,
           community: networkMetric?.community || 0,
@@ -807,6 +896,8 @@ function runLayout() {
   const nodeCount = cy.nodes().length;
   // 大图模式下（如节点数 >= 300）禁用过渡动画，直接生成最终布局，能极大防止浏览器主线程假死
   const shouldAnimate = nodeCount < 300;
+  const avatarScaleFactor = getGraphAvatarScale() / 100;
+  const minimumNodeSpacing = Math.max(10, Math.round(12 * avatarScaleFactor));
 
   if (bias === "root_friend_circle" || bias === "closeness") {
     graphLifecycle.startLayout(cy.layout({
@@ -814,6 +905,9 @@ function runLayout() {
       animate: shouldAnimate ? "end" : false,
       animationDuration: 320,
       padding: 48,
+      avoidOverlap: true,
+      minNodeSpacing: minimumNodeSpacing,
+      nodeDimensionsIncludeLabels: false,
       concentric: (node) => bias === "root_friend_circle"
         ? (node.data("rootFriendCircleRank") || node.data("closeness") || node.data("degree") || 1)
         : (node.data("closeness") || node.data("degree") || 1),
@@ -826,8 +920,9 @@ function runLayout() {
     animate: shouldAnimate ? "end" : false,
     animationDuration: 320,
     padding: 48,
-    nodeRepulsion: 9000,
-    idealEdgeLength: 90,
+    nodeRepulsion: Math.round(9000 * avatarScaleFactor),
+    nodeOverlap: minimumNodeSpacing,
+    idealEdgeLength: Math.round(70 + 14 * avatarScaleFactor),
     numIter: nodeCount > 500 ? 500 : 1000, // 大图下减少 cose 迭代次数以缩短运算耗时
   }));
 }
@@ -836,6 +931,9 @@ function getMissingFrontendDependencies() {
   const missing = [...startupDependencyErrors];
   if (typeof window.cytoscape !== "function") {
     missing.push("vendor/cytoscape.min.js");
+  }
+  if (typeof window.GraphCollisionController !== "function") {
+    missing.push("graph-collision.js");
   }
   for (const id of REQUIRED_INTERACTIVE_ELEMENT_IDS) {
     if (!$(id)) missing.push(`#${id}`);
@@ -925,8 +1023,50 @@ function graphParams() {
   return params;
 }
 
+function loadRecentRootsFromStorage() {
+  try {
+    const roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]");
+    return Array.isArray(roots) ? roots : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeGraphRootInput(value) {
+  const recentRoots = loadRecentRootsFromStorage();
+  const normalized = [];
+  for (const rawPart of value.split(",")) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const profileMatch = part.match(/(?:steamcommunity\.com\/)?profiles\/([0-9]{17})(?:[/?#]|$)/i);
+    if (profileMatch) {
+      normalized.push(profileMatch[1]);
+      continue;
+    }
+    const vanityMatch = part.match(/(?:steamcommunity\.com\/)?id\/([a-zA-Z0-9_-]+)(?:[/?#]|$)/i);
+    if (vanityMatch) {
+      const vanity = vanityMatch[1].toLowerCase();
+      const knownRoot = recentRoots.find((root) => {
+        const match = String(root?.url || "").match(/(?:steamcommunity\.com\/)?id\/([a-zA-Z0-9_-]+)(?:[/?#]|$)/i);
+        return match?.[1]?.toLowerCase() === vanity && root?.id;
+      });
+      if (!knownRoot) return { value: "", unknownVanity: vanityMatch[1] };
+      normalized.push(String(knownRoot.id));
+      continue;
+    }
+    normalized.push(part);
+  }
+  return { value: [...new Set(normalized)].join(","), unknownVanity: "" };
+}
+
 function validateGraphFilters() {
-  clearFieldErrors(["graphFriendCountMin", "graphFriendCountMax", "graphPriorPoolMinLinks", "graphDepth", "graphLimit"]);
+  clearFieldErrors(["graphRoot", "graphFriendCountMin", "graphFriendCountMax", "graphPriorPoolMinLinks", "graphDepth", "graphLimit"]);
+  const normalizedRoot = normalizeGraphRootInput($("graphRoot").value);
+  if (normalizedRoot.unknownVanity) {
+    setFieldError("graphRoot", t("validation.unknownVanityRoot", { vanity: normalizedRoot.unknownVanity }));
+    return false;
+  }
+  $("graphRoot").value = normalizedRoot.value;
   if (!validateRange("graphFriendCountMin", "graphFriendCountMax")) return false;
   const prior = numberValue("graphPriorPoolMinLinks", 0);
   if (prior < 0) {
@@ -1218,8 +1358,7 @@ function startTimer(startedAt = null) {
 // ── Recent roots ──────────────────────────────────────────────────
 
 function saveRecentRoot(url, name, avatar, id) {
-  let roots = [];
-  try { roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  let roots = loadRecentRootsFromStorage();
   roots = roots.filter(r => r.url !== url);
   roots.unshift({ url, name: name || url, avatar, id: id || "" });
   if (roots.length > 10) roots = roots.slice(0, 10);
@@ -1228,8 +1367,7 @@ function saveRecentRoot(url, name, avatar, id) {
 }
 
 function renderRecentRoots() {
-  let roots = [];
-  try { roots = JSON.parse(appStorage.getItem("sfm_recent_roots") || "[]"); } catch { /* */ }
+  const roots = loadRecentRootsFromStorage();
   const list = $("recentRootsList");
   const count = $("recentRootsCount");
   list.innerHTML = "";
@@ -1475,6 +1613,8 @@ async function pollRun() {
       toast(run.message || statusText(run.status));
       appendSystemLog(run.status === "failed" ? "error" : "info", "crawl", run.message || statusText(run.status));
       invalidateNetworkAnalysis(false);
+      $("graphRoot").value = run.root_steam_id || "";
+      $("analysisRoot").value = run.root_steam_id || "";
       await loadGraph().catch(() => {});
       await loadDbStats().catch(() => {});
       // 更新最近扫描的 Root 头像和昵称
@@ -1971,18 +2111,14 @@ async function copySystemLogs() {
 }
 
 function wireEvents() {
-  // SteamID 智能链接解析提取
-  $("graphRoot").addEventListener("input", (event) => {
-    const val = event.target.value.trim();
-    const profileMatch = val.match(/profiles\/([0-9]{17})/);
-    const idMatch = val.match(/id\/([a-zA-Z0-9_-]+)/);
-    if (profileMatch) {
-      event.target.value = profileMatch[1];
-      autoSaveLastConfig();
-    } else if (idMatch) {
-      event.target.value = idMatch[1];
-      autoSaveLastConfig();
+  $("graphRoot").addEventListener("change", (event) => {
+    clearFieldErrors(["graphRoot"]);
+    const normalized = normalizeGraphRootInput(event.target.value);
+    if (normalized.unknownVanity) {
+      setFieldError("graphRoot", t("validation.unknownVanityRoot", { vanity: normalized.unknownVanity }));
+      return;
     }
+    event.target.value = normalized.value;
   });
 
   // 一键重置筛选
@@ -2005,6 +2141,9 @@ function wireEvents() {
     $("graphPriorPoolMinLinks").value = "0";
     $("graphSortBy").value = "depth";
     $("graphSortDir").value = "asc";
+    $("graphAvatarScale").value = String(DEFAULT_GRAPH_AVATAR_SCALE);
+    appStorage.setItem(GRAPH_AVATAR_SCALE_KEY, String(DEFAULT_GRAPH_AVATAR_SCALE));
+    applyGraphAvatarScale();
     
     autoSaveLastConfig();
     const emptyMsg = $("graphEmpty") ? $("graphEmpty").querySelector("p") : null;
@@ -2049,6 +2188,18 @@ function wireEvents() {
   $("systemLogLevel").addEventListener("change", () => loadSystemLogs(true).catch(() => {}));
   $("graphSizeBy").addEventListener("change", () => renderGraph(currentGraph));
   $("graphLayoutBias").addEventListener("change", runLayout);
+  $("graphAvatarScale").addEventListener("input", (event) => {
+    const scale = clampGraphAvatarScale(event.target.value);
+    event.target.value = String(scale);
+    appStorage.setItem(GRAPH_AVATAR_SCALE_KEY, String(scale));
+    applyGraphAvatarScale();
+    scheduleAvatarScaleCollisionSettle();
+  });
+  $("graphAvatarScale").addEventListener("change", () => {
+    clearTimeout(avatarScaleSettleTimer);
+    avatarScaleSettleTimer = null;
+    applyGraphAvatarScale({ settle: true });
+  });
   const savedCommunityColors = appStorage.getItem("sfm_community_colors");
   if (savedCommunityColors !== null) $("communityColors").checked = savedCommunityColors === "true";
   $("communityColors").addEventListener("change", () => {
@@ -2330,9 +2481,13 @@ function suspendBackgroundWork() {
   pageActive = false;
   clearTimeout(pollTimer);
   pollTimer = null;
+  clearTimeout(avatarScaleSettleTimer);
+  avatarScaleSettleTimer = null;
   stopSystemLogPolling();
   stopDbStatsPolling();
   requestCoordinator?.cancelMany(PAGE_SCOPED_REQUEST_KEYS);
+  graphCollision?.destroy();
+  graphCollision = null;
   graphLifecycle?.cancel();
 }
 
@@ -2378,6 +2533,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   applyTranslations();
   if (window.lucide) window.lucide.createIcons();
+  restoreGraphAvatarScale();
   initGraph();
   initResizeHandles();
   initConsole();

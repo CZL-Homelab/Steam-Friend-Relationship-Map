@@ -308,6 +308,13 @@
                 </select>
               </label>
             </div>
+            <label data-i18n-label="field.avatarScale">
+              头像倍率
+              <div class="avatar-scale-control">
+                <input id="graphAvatarScale" type="range" min="75" max="225" step="5" value="150" />
+                <output id="graphAvatarScaleValue" for="graphAvatarScale">150%</output>
+              </div>
+            </label>
           </section>
         </div>
 
@@ -624,6 +631,7 @@ MATCH p=shortestPath((a:SteamUser {steam_id:$from})-[:STEAM_FRIEND*..4]-(b:Steam
     <iframe id="exportFrame" name="exportFrame" title="Export download" hidden></iframe>
     <script src="/static/request-coordinator.js?v=1.0.0"></script>
     <script src="/static/graph-lifecycle.js?v=1.0.0"></script>
-    <script src="/static/app.js?v=1.0.22"></script>
+    <script src="/static/graph-collision.js?v=1.0.1"></script>
+    <script src="/static/app.js?v=1.0.23"></script>
   </body>
 </html>
