@@ -10,6 +10,29 @@ Do not disclose unpatched vulnerabilities, credentials, or real relationship dat
 
 Include the affected version or commit, minimal reproduction steps, potential impact, known mitigations, and evidence that contains no real secrets or personal data. The maintainer will validate the report and coordinate remediation and disclosure through the private advisory. Do not test against systems, accounts, or data you do not own or have permission to assess.
 
+## 增量安全审计 2026-08-30 / Incremental Security Audit 2026-08-30
+
+- 审计基线 / Audit baseline: `dev-base` at `fd61d0f6eb46e2bd1c11b719dfdbab9a0ceee9c4`
+- 审计分支 / Audit branch: `dev/fix/security-audit-2026-08-30`
+- 候审目标 / Review target: `security-check-before-main`
+- 明确不在范围内 / Explicitly out of scope: creating, approving, or merging any PR into `main`
+
+本轮增量审计覆盖 Root 强制展示、扫描 URL 到 SteamID 的本地映射、头像倍率、Cytoscape 布局与碰撞模块、Kuzu/Neo4j 项目隔离、输入和计算上限、锁定依赖以及永久 CI。Root 最多 5 个、单项最多 128 字符、深度最多 4；未知 vanity URL 不触发 Steam 网络请求。Kuzu 使用逐层 BFS，Neo4j 的可变长度语法仍受深度上限约束；两种后端均使用参数化项目标识和 Root 值。
+
+This incremental audit covers forced Root visibility, local crawl-URL-to-SteamID mapping, avatar scaling, Cytoscape layout and collision handling, Kuzu/Neo4j project isolation, input and computation bounds, locked dependencies, and permanent CI. Unknown vanity URLs do not trigger Steam requests. Kuzu uses layered BFS, while Neo4j variable-length syntax remains depth-bounded; both backends parameterize project and Root values.
+
+审计修复了一个低风险前端资源生命周期问题：页面进入 `pagehide` 时现在会取消头像倍率延迟任务、销毁碰撞控制器并清空引用，避免返回页面后遗留重复任务。新增回归测试验证定时器取消和控制器销毁。未发现新的高风险或中风险问题。
+
+The audit remediated one low-risk frontend lifecycle issue: `pagehide` now cancels the delayed avatar-scale task, destroys the collision controller, and clears its reference, preventing duplicate work after page restoration. A regression test covers timer cancellation and controller disposal. No new high- or medium-risk findings were identified.
+
+本轮本地复验结果：`215 passed`；Ruff check/format、Bandit、Node 语法和 i18n JSON 均通过；pip-audit 对冻结运行时依赖未发现已知漏洞。隔离 Kuzu 数据库的应用生命周期冒烟测试返回 HTTP `200`，现有数据库和 WAL 的 SHA-256 前后未变化。`cryptography` 已锁定为 `50.0.0`，关闭此前影响 `48.0.1` 的 PKCS#7 EnvelopedData 告警。
+
+Local reverification produced `215 passed`; Ruff check/format, Bandit, Node syntax, and i18n JSON checks passed; pip-audit found no known vulnerabilities in the frozen runtime set. An isolated Kuzu application lifecycle smoke test returned HTTP `200`, and SHA-256 hashes for the existing database and WAL remained unchanged. `cryptography` is locked to `50.0.0`, closing the earlier PKCS#7 EnvelopedData alert affecting `48.0.1`.
+
+TruffleHog `3.96.0` 完整历史扫描发现两条由 `Lob` detector 报告的 verified 结果，原文分别为 `test_csrf_rejects_localhost_prefix_spoof` 和 `test_settings_accepts_python_field_names`。两者都是历史 Python 测试函数名，不是密钥；项目也未集成 Lob。Lob 的测试凭据格式使用 `test_` 前缀，与 pytest 命名惯例发生结构性冲突，因此工作流仅额外排除 `Lob` detector。当前源码、历史提交和其他 detector 仍按 verified/unknown 阻断，并继续排除下文已记录的通用 `URI` 历史误报。
+
+The TruffleHog `3.96.0` full-history scan reported two verified results from the `Lob` detector: `test_csrf_rejects_localhost_prefix_spoof` and `test_settings_accepts_python_field_names`. Both are historical Python test function names, not credentials, and the project has no Lob integration. Lob test credentials use a `test_` prefix that structurally conflicts with pytest naming, so only the `Lob` detector is additionally excluded. Verified/unknown findings from all other detectors remain blocking across full history, alongside the separately documented generic `URI` exclusion below.
+
 ## 审计信息 / Audit Information
 
 - 审计日期 / Date: `2026-08-01`
@@ -113,6 +136,24 @@ The first full-history TruffleHog run also found two `unverified URI` results, b
 - 完整 pytest 为 `215 passed`；Ruff check/format、JavaScript 语法、i18n JSON 和 `uv lock --check` 均通过。
 
 The review baseline is the `dev-base` merge commit `8401abf13a4b49ae1606f86f6e6f8ebb70805df8` and covers only the README showcase text and `document/assets/demo-graph-anonymized.png`. The screenshot was generated from an isolated temporary Kuzu database with the English dark theme, fictional aliases, `demo-*` identifiers, and deterministic anonymous robot avatars. The browser source retained its 100% layout and was exported through deterministic 2x raster scaling to `2560x1440`; the generatively redrawn version was rejected so text, graph edges, and metrics remained unchanged. The PNG contains no text, EXIF, or XMP metadata chunks. No real Steam identity, relationship, credential, database path, host log, or personal note is visible. No high- or medium-risk finding was identified.
+
+## 上一版展示材料安全复核 2026-08-30 / Previous Showcase Material Security Review 2026-08-30
+
+- 集成基线 / Integration baseline: `dev-base` at `45ca6247fd63f2a8458be917ffd77e6b3f03261b`
+- 审计分支 / Audit branch: `dev/fix/security-audit-showcase-2026-08-30`
+- 候审目标 / Review target: `security-check-before-main`
+
+本轮复核覆盖 README badges、中英文导航、公开维护者说明和 Demo 截图。截图由隔离的临时 Kuzu 数据库生成，只使用虚构姓名、不可用于 Steam 的 `demo-*` 标识和生成式占位头像；画面不包含真实 SteamID、关系、凭据、本地数据库路径或个人备注。新增文本敏感标记扫描未发现 17 位 SteamID、本地服务地址、凭据字段或数据库路径。
+
+This review covers README badges, language navigation, public maintainer documentation, and the demo screenshot. The screenshot was generated from an isolated temporary Kuzu database using only fictional names, non-Steam `demo-*` identifiers, and generated placeholder avatars. It contains no real SteamID, relationship, credential, local database path, or personal note. Added-text scanning found no 17-digit SteamID, local service address, credential field, or database path.
+
+审计发现截图内容为 JPEG/JFIF，但最初误用了 `.png` 扩展名；现已修正为 `.jpg`，避免 MIME 和缓存工具误判。最终文件为 `1280x720`、`68,283` 字节，SHA-256 为 `D65A2AC7AF358B2FF169D9ED8A3324E5149AFF234D4CEE4E9FF3A5C108E128D2`。JPEG 只包含 JFIF、量化表、基线帧和 Huffman 表段，不含 EXIF、XMP、IPTC 或注释元数据。
+
+The audit found that the screenshot content was JPEG/JFIF but initially used a `.png` extension. It is now correctly named `.jpg` to avoid MIME and cache-tool ambiguity. The final file is `1280x720`, `68,283` bytes, with SHA-256 `D65A2AC7AF358B2FF169D9ED8A3324E5149AFF234D4CEE4E9FF3A5C108E128D2`. It contains only JFIF, quantization, baseline-frame, and Huffman-table segments, with no EXIF, XMP, IPTC, or comment metadata.
+
+仓库 About、Topics、`v0.1.0` Release、`CONTRIBUTING.md`、顶部中英文互链以及 CI/Python/License/Tests badges 均已复验。`k2316020523` 与 `LiaoYK001` 的 Profile 和 `CZL-Homelab` 公开成员关系可由未登录访客核验。未发现与本次展示改动相关的高风险或中风险问题。
+
+The repository About description, Topics, `v0.1.0` release, `CONTRIBUTING.md`, top-level language links, and CI/Python/License/Tests badges were reverified. The profiles and public `CZL-Homelab` membership of `k2316020523` and `LiaoYK001` are visible to unauthenticated visitors. No high- or medium-risk issue related to this showcase change was identified.
 
 ## 剩余风险 / Residual Risk
 
