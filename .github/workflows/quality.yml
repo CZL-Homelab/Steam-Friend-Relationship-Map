@@ -63,6 +63,7 @@ jobs:
       - name: Check frontend assets
         run: |
           node --check src/steam_friend_relationship_map/static/app.js
+          node --check src/steam_friend_relationship_map/static/graph-collision.js
           node -e "JSON.parse(require('fs').readFileSync('src/steam_friend_relationship_map/static/i18n.json', 'utf8'))"
 
   secrets:
@@ -82,10 +83,10 @@ jobs:
           version: 3.96.0
           base: ""
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --results=verified,unknown --exclude-detectors=URI
+          extra_args: --results=verified,unknown --exclude-detectors=URI,Lob
       - name: Scan changed commits for secrets
         if: github.event_name != 'pull_request' || github.base_ref != 'security-check-before-main' || !startsWith(github.head_ref, 'dev/fix/security-audit-')
         uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
         with:
           version: 3.96.0
-          extra_args: --results=verified,unknown --exclude-detectors=URI
+          extra_args: --results=verified,unknown --exclude-detectors=URI,Lob

@@ -241,6 +241,7 @@ class GraphNode(BaseModel):
     root_route_count: int = 0
     root_route_total_hops: int = 0
     root_friend_circle_score: float = 0
+    is_root: bool = False
     is_intersection: bool = False
 
 

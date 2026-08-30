@@ -1393,7 +1393,7 @@ class KuzuRepositoryImpl(IGraphRepository):
         # Kùzu depth clamp
         depth = max(0, min(depth, 4))
         limit = max(1, min(limit, 100000))
-        filters = ["p.id = $project_id"]
+        display_filters: list[str] = []
         params: dict[str, Any] = {
             "project_id": project_id,
             "project_ids": self._visible_project_ids(project_id),
@@ -1405,23 +1405,25 @@ class KuzuRepositoryImpl(IGraphRepository):
 
         if query:
             params["query"] = query.lower()
-            filters.append(
+            display_filters.append(
                 "(toLower(coalesce(n.persona_name, '')) CONTAINS $query OR n.steam_id CONTAINS $query)"
             )
         if category:
             params["category"] = category
-            filters.append("coalesce(membership.category, '') = $category")
+            display_filters.append("coalesce(membership.category, '') = $category")
         if friend_count_min is not None:
             params["friend_count_min"] = friend_count_min
-            filters.append("coalesce(n.friend_count, -1) >= $friend_count_min")
+            display_filters.append("coalesce(n.friend_count, -1) >= $friend_count_min")
         if friend_count_max is not None:
             params["friend_count_max"] = friend_count_max
-            filters.append("coalesce(n.friend_count, -1) <= $friend_count_max")
+            display_filters.append("coalesce(n.friend_count, -1) <= $friend_count_max")
         if prior_pool_min_links:
             params["prior_pool_min_links"] = prior_pool_min_links
-            filters.append("coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links")
+            display_filters.append(
+                "coalesce(membership.prior_pool_link_count, 0) >= $prior_pool_min_links"
+            )
 
-        where = "WHERE " + " AND ".join(filters)
+        display_where = " AND ".join(display_filters) if display_filters else "TRUE"
         sort_map = {
             "depth": "coalesce(membership.depth_min, 999)",
             "degree": "degree",
@@ -1469,21 +1471,27 @@ class KuzuRepositoryImpl(IGraphRepository):
                 if sum(steam_id in reachable for reachable in reachable_sets) > 1
             }
             params["reachable_ids"] = reachable_ids
+            params["root_ids"] = root_ids
+            effective_limit = max(limit, len(root_ids))
             node_query = f"""
             MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
-            {where} AND n.steam_id IN $reachable_ids
+            WHERE p.id = $project_id
+              AND n.steam_id IN $reachable_ids
+              AND (n.steam_id IN $root_ids OR ({display_where}))
             OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-() WHERE coalesce(rel.project_id, '') IN $project_ids
             WITH n, membership, count(DISTINCT rel) AS degree
             RETURN n, membership, degree
-            ORDER BY {order_expr} {direction}, degree DESC
+            ORDER BY CASE WHEN n.steam_id IN $root_ids THEN 0 ELSE 1 END,
+                     {order_expr} {direction}, degree DESC, n.steam_id ASC
             LIMIT $limit
             """
-            params["limit"] = limit + 1
+            params["limit"] = effective_limit + 1
         else:
+            effective_limit = limit
             params["limit"] = limit + 1
             node_query = f"""
             MATCH (n:SteamUser)-[membership:IN_PROJECT]->(p:Project)
-            {where}
+            WHERE p.id = $project_id AND ({display_where})
             OPTIONAL MATCH (n)-[rel:STEAM_FRIEND]-()
             WHERE coalesce(rel.project_id, '') IN $project_ids
             WITH n, membership, count(DISTINCT rel) AS degree
@@ -1493,10 +1501,12 @@ class KuzuRepositoryImpl(IGraphRepository):
             """
 
         records = _consume_rows(conn.execute(node_query, params))
-        limited = len(records) > limit
-        records = records[:limit]
+        limited = len(records) > effective_limit
+        records = records[:effective_limit]
         nodes = [self._graph_node(_parse_node(rec[0]), rec[2], rec[1]) for rec in records]
+        root_set = set(root_ids)
         for node in nodes:
+            node.is_root = node.id in root_set
             node.is_intersection = node.id in intersection_ids
         if root_ids and nodes:
             root_metrics = self._multi_root_friend_circle_metrics(

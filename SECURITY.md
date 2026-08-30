@@ -1,5 +1,38 @@
 # 安全审计报告 / Security Audit Report
 
+## 报告安全漏洞 / Reporting a Vulnerability
+
+请不要在公开 Issue、Discussion、PR、日志或截图中披露尚未修复的漏洞、凭据或真实关系数据。请使用仓库的 [GitHub Private Vulnerability Reporting](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/security/advisories/new) 私密提交报告。
+
+Do not disclose unpatched vulnerabilities, credentials, or real relationship data in public issues, discussions, pull requests, logs, or screenshots. Submit reports privately through [GitHub Private Vulnerability Reporting](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/security/advisories/new).
+
+报告应包含受影响版本或提交、最小复现步骤、潜在影响、已知缓解方式，以及不含真实密钥或个人数据的证明材料。维护者会先确认报告内容，再通过私密 Advisory 协调验证、修复和披露。不要对不属于你的系统、账户或数据进行测试。
+
+Include the affected version or commit, minimal reproduction steps, potential impact, known mitigations, and evidence that contains no real secrets or personal data. The maintainer will validate the report and coordinate remediation and disclosure through the private advisory. Do not test against systems, accounts, or data you do not own or have permission to assess.
+
+## 增量安全审计 2026-08-30 / Incremental Security Audit 2026-08-30
+
+- 审计基线 / Audit baseline: `dev-base` at `fd61d0f6eb46e2bd1c11b719dfdbab9a0ceee9c4`
+- 审计分支 / Audit branch: `dev/fix/security-audit-2026-08-30`
+- 候审目标 / Review target: `security-check-before-main`
+- 明确不在范围内 / Explicitly out of scope: creating, approving, or merging any PR into `main`
+
+本轮增量审计覆盖 Root 强制展示、扫描 URL 到 SteamID 的本地映射、头像倍率、Cytoscape 布局与碰撞模块、Kuzu/Neo4j 项目隔离、输入和计算上限、锁定依赖以及永久 CI。Root 最多 5 个、单项最多 128 字符、深度最多 4；未知 vanity URL 不触发 Steam 网络请求。Kuzu 使用逐层 BFS，Neo4j 的可变长度语法仍受深度上限约束；两种后端均使用参数化项目标识和 Root 值。
+
+This incremental audit covers forced Root visibility, local crawl-URL-to-SteamID mapping, avatar scaling, Cytoscape layout and collision handling, Kuzu/Neo4j project isolation, input and computation bounds, locked dependencies, and permanent CI. Unknown vanity URLs do not trigger Steam requests. Kuzu uses layered BFS, while Neo4j variable-length syntax remains depth-bounded; both backends parameterize project and Root values.
+
+审计修复了一个低风险前端资源生命周期问题：页面进入 `pagehide` 时现在会取消头像倍率延迟任务、销毁碰撞控制器并清空引用，避免返回页面后遗留重复任务。新增回归测试验证定时器取消和控制器销毁。未发现新的高风险或中风险问题。
+
+The audit remediated one low-risk frontend lifecycle issue: `pagehide` now cancels the delayed avatar-scale task, destroys the collision controller, and clears its reference, preventing duplicate work after page restoration. A regression test covers timer cancellation and controller disposal. No new high- or medium-risk findings were identified.
+
+本轮本地复验结果：`215 passed`；Ruff check/format、Bandit、Node 语法和 i18n JSON 均通过；pip-audit 对冻结运行时依赖未发现已知漏洞。隔离 Kuzu 数据库的应用生命周期冒烟测试返回 HTTP `200`，现有数据库和 WAL 的 SHA-256 前后未变化。`cryptography` 已锁定为 `50.0.0`，关闭此前影响 `48.0.1` 的 PKCS#7 EnvelopedData 告警。
+
+Local reverification produced `215 passed`; Ruff check/format, Bandit, Node syntax, and i18n JSON checks passed; pip-audit found no known vulnerabilities in the frozen runtime set. An isolated Kuzu application lifecycle smoke test returned HTTP `200`, and SHA-256 hashes for the existing database and WAL remained unchanged. `cryptography` is locked to `50.0.0`, closing the earlier PKCS#7 EnvelopedData alert affecting `48.0.1`.
+
+TruffleHog `3.96.0` 完整历史扫描发现两条由 `Lob` detector 报告的 verified 结果，原文分别为 `test_csrf_rejects_localhost_prefix_spoof` 和 `test_settings_accepts_python_field_names`。两者都是历史 Python 测试函数名，不是密钥；项目也未集成 Lob。Lob 的测试凭据格式使用 `test_` 前缀，与 pytest 命名惯例发生结构性冲突，因此工作流仅额外排除 `Lob` detector。当前源码、历史提交和其他 detector 仍按 verified/unknown 阻断，并继续排除下文已记录的通用 `URI` 历史误报。
+
+The TruffleHog `3.96.0` full-history scan reported two verified results from the `Lob` detector: `test_csrf_rejects_localhost_prefix_spoof` and `test_settings_accepts_python_field_names`. Both are historical Python test function names, not credentials, and the project has no Lob integration. Lob test credentials use a `test_` prefix that structurally conflicts with pytest naming, so only the `Lob` detector is additionally excluded. Verified/unknown findings from all other detectors remain blocking across full history, alongside the separately documented generic `URI` exclusion below.
+
 ## 审计信息 / Audit Information
 
 - 审计日期 / Date: `2026-08-01`
@@ -114,6 +147,7 @@ uv run --frozen bandit -c pyproject.toml -r src
 uv export --frozen --no-dev --format requirements-txt --no-emit-project --output-file requirements-audit.txt
 uv run --frozen pip-audit --strict -r requirements-audit.txt
 node --check src/steam_friend_relationship_map/static/app.js
+node --check src/steam_friend_relationship_map/static/graph-collision.js
 node -e "JSON.parse(require('fs').readFileSync('src/steam_friend_relationship_map/static/i18n.json', 'utf8'))"
 ```
 
