@@ -48,7 +48,7 @@ Local-first means the application, graph database, credentials, notes, and analy
 
 ## 完全脱敏演示 / Fully Anonymized Demo
 
-![使用完全合成数据生成的 Steam 好友关系图谱 Web GUI 演示](document/assets/demo-graph-anonymized.png)
+![使用完全合成数据生成的 Steam 好友关系图谱 Web GUI 演示](document/assets/demo-graph-anonymized.jpg)
 
 截图使用隔离的临时 Kuzu 数据库、虚构姓名、`demo-*` 标识和生成式占位头像制作，不包含真实 Steam 账号、SteamID、好友关系、密钥、数据库路径或个人备注。
 

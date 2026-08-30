@@ -48,7 +48,7 @@ Local-first means the application, graph database, credentials, notes, and analy
 
 ## Fully Anonymized Demo
 
-![Steam Friend Relationship Map Web GUI rendered with fully synthetic data](assets/demo-graph-anonymized.png)
+![Steam Friend Relationship Map Web GUI rendered with fully synthetic data](assets/demo-graph-anonymized.jpg)
 
 This screenshot was produced from an isolated temporary Kuzu database with fictional names, `demo-*` identifiers, and generated placeholder avatars. It contains no real Steam account, SteamID, relationship, credential, database path, or personal note.
 
