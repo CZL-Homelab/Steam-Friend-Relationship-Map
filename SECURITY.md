@@ -103,6 +103,17 @@ TruffleHog 完整历史首次扫描还发现 2 条 `unverified URI`：均为 `te
 
 The first full-history TruffleHog run also found two `unverified URI` results, both explicit fake loopback proxy credentials in historical `tests/test_app.py` revisions. They are outside the verified/unknown blocking scope, but GitHub output mode still returned exit `183`. Because history rewriting is prohibited, only the non-verifying generic `URI` detector is excluded. Current fixtures no longer contain credential-URI literals, and `tests/test_security_policy.py` scans the current source and documentation tree for them. All other detectors and full-history scanning remain enabled.
 
+## 2K 展示材料安全复核 2026-08-30 / 2K Showcase Material Security Review 2026-08-30
+
+- 复核基线为 `dev-base` 合并提交 `8401abf13a4b49ae1606f86f6e6f8ebb70805df8`，范围仅包括 README 展示说明和 `document/assets/demo-graph-anonymized.png`。
+- 截图由隔离的临时 Kuzu 数据库生成，使用英文暗色界面、虚构昵称、`demo-*` 标识和确定性匿名机器人头像；未打开或修改现有 `data/graph_kuzu`。
+- 浏览器源画面保持 100% 布局，最终使用确定性 2x 栅格输出为 `2560x1440`，未使用生成式重绘版本，避免文字、图谱边和指标发生变化。
+- PNG SHA-256 为 `420ABBABE106AE327AE720FF9AA73459E7CC605B37E2E6FB8ADAEAB0018F3C8F`；仅包含 `IHDR/sRGB/gAMA/pHYs/IDAT/IEND` 块，不含 `tEXt/zTXt/iTXt/eXIf` 元数据。
+- 可见内容未包含真实 SteamID、账号、关系、凭据、数据库路径、主机日志或个人备注。未发现高风险或中风险问题。
+- 完整 pytest 为 `215 passed`；Ruff check/format、JavaScript 语法、i18n JSON 和 `uv lock --check` 均通过。
+
+The review baseline is the `dev-base` merge commit `8401abf13a4b49ae1606f86f6e6f8ebb70805df8` and covers only the README showcase text and `document/assets/demo-graph-anonymized.png`. The screenshot was generated from an isolated temporary Kuzu database with the English dark theme, fictional aliases, `demo-*` identifiers, and deterministic anonymous robot avatars. The browser source retained its 100% layout and was exported through deterministic 2x raster scaling to `2560x1440`; the generatively redrawn version was rejected so text, graph edges, and metrics remained unchanged. The PNG contains no text, EXIF, or XMP metadata chunks. No real Steam identity, relationship, credential, database path, host log, or personal note is visible. No high- or medium-risk finding was identified.
+
 ## 剩余风险 / Residual Risk
 
 - Kuzu 是进程内数据库，同一路径仅允许一个持有者；同时启动多个实例会得到明确锁提示，应用不会自动修改数据文件。
