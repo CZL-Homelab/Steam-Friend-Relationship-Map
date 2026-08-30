@@ -4,6 +4,12 @@
 
 Thank you for helping improve Steam Friend Relationship Map. Bug reports, documentation improvements, tests, performance work, and well-scoped feature proposals are welcome.
 
+## 维护者与组织 / Maintainers and Organization
+
+本仓库由公开 GitHub 组织 [CZL-Homelab](https://github.com/CZL-Homelab) 维护。当前公开维护者包括 [LiaoYK001](https://github.com/LiaoYK001) 和 [k2316020523](https://github.com/k2316020523)；两者的公开组织成员关系可在 [CZL-Homelab People](https://github.com/orgs/CZL-Homelab/people) 页面核验。最终合入 `main` 仍遵循下文的独立审核与安全门禁。
+
+This repository is maintained by the public GitHub organization [CZL-Homelab](https://github.com/CZL-Homelab). Current public maintainers include [LiaoYK001](https://github.com/LiaoYK001) and [k2316020523](https://github.com/k2316020523); their public organization membership can be verified on the [CZL-Homelab People](https://github.com/orgs/CZL-Homelab/people) page. Final merges into `main` remain subject to the independent review and security gates documented below.
+
 ## 提交 Issue / Filing an Issue
 
 提交 Issue 前，请先搜索现有 Issue 和 PR，避免重复。缺陷报告应尽量包含：
