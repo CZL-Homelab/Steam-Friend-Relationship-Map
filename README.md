@@ -46,8 +46,6 @@
 
 Local-first means the application, graph database, credentials, notes, and analysis stay under the user's control by default. The project does not provide an author-hosted cloud service or built-in telemetry.
 
-## 完全脱敏演示 / Fully Anonymized Demo
-
 ![使用完全合成数据生成的 Steam 好友关系图谱 Web GUI 演示](document/assets/demo-graph-anonymized.png)
 
 ## 这个工具是做什么的？
