@@ -4,11 +4,13 @@
 
 [![Release](https://img.shields.io/github/v/release/CZL-Homelab/Steam-Friend-Relationship-Map)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/releases)
 [![Quality and security](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/CZL-Homelab/Steam-Friend-Relationship-Map/quality.yml?branch=main&label=tests)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](../pyproject.toml)
 
 ## Table of Contents
 
+- [Fully Anonymized Demo](#fully-anonymized-demo)
 - [What does this tool do?](#what-does-this-tool-do)
 - [What you need to prepare](#what-you-need-to-prepare)
 - [Is Neo4j Desktop still needed?](#is-neo4j-desktop-still-needed)
@@ -43,6 +45,12 @@
 This is a **local-first, privacy-conscious open-source social graph analysis project**, with Steam as its current data source. Enter a public Steam profile URL as the root to crawl 1–4 layers of public friend relationships into local Kùzu (default, zero-install) or optional Neo4j storage, then explore paths and graph analytics in the local Web GUI.
 
 Local-first means the application, graph database, credentials, notes, and analysis stay under the user's control by default. The project does not provide an author-hosted cloud service or built-in telemetry.
+
+## Fully Anonymized Demo
+
+![Steam Friend Relationship Map Web GUI rendered with fully synthetic data](assets/demo-graph-anonymized.png)
+
+This 2560x1440 screenshot uses the English dark theme and was produced from an isolated temporary Kuzu database with fictional aliases, `demo-*` identifiers, and deterministically generated anonymous robot avatars. It contains no real Steam account, SteamID, relationship, credential, database path, or personal note.
 
 ## What does this tool do?
 

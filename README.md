@@ -4,11 +4,13 @@
 
 [![Release](https://img.shields.io/github/v/release/CZL-Homelab/Steam-Friend-Relationship-Map)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/releases)
 [![Quality and security](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/CZL-Homelab/Steam-Friend-Relationship-Map/quality.yml?branch=main&label=tests)](https://github.com/CZL-Homelab/Steam-Friend-Relationship-Map/actions/workflows/quality.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](pyproject.toml)
 
 ## 目录
 
+- [完全脱敏演示](#完全脱敏演示--fully-anonymized-demo)
 - [这个工具是做什么的？](#这个工具是做什么的)
 - [你需要准备什么？](#你需要准备什么)
 - [Neo4j Desktop 还有用吗？](#neo4j-desktop-还有用吗)
@@ -43,6 +45,8 @@
 这是一个 **local-first、注重隐私的社交图谱分析开源项目**，Steam 是当前的数据源。你输入一个公开 Steam 用户主页 URL，把这个用户作为 Root，它会按 1-4 层抓取公开好友关系，写入本地 Kùzu（默认，免安装）或可选 Neo4j 图数据库，并在本地 Web GUI 中完成关系探索、最短路径和图分析。
 
 Local-first means the application, graph database, credentials, notes, and analysis stay under the user's control by default. The project does not provide an author-hosted cloud service or built-in telemetry.
+
+![使用完全合成数据生成的 Steam 好友关系图谱 Web GUI 演示](document/assets/demo-graph-anonymized.png)
 
 ## 这个工具是做什么的？
 
