@@ -104,6 +104,7 @@ let currentLang = appStorage.getItem("sfm_lang") || "zh-CN";
 let lastEventSeq = 0;
 let lastSystemLogSeq = 0;
 let avatarScaleSettleTimer = null;
+let avatarScaleApplyFrame = null;
 const startupDependencyErrors = [];
 const GRAPH_AVATAR_SCALE_KEY = "sfm_graph_avatar_scale";
 const DEFAULT_GRAPH_AVATAR_SCALE = 150;
@@ -281,7 +282,7 @@ function updateCytoscapeStyle() {
       "border-color": amber,
       "border-width": 6,
     })
-    .selector("node[isRoot = 1]")
+    .selector("node[?isRoot]")
     .style({
       "border-color": blue,
       "border-width": 6,
@@ -671,7 +672,7 @@ function initGraph() {
         style: { "border-color": "#b45309", "border-width": 4 },
       },
       {
-        selector: "node[isRoot = 1]",
+        selector: "node[?isRoot]",
         style: { "border-color": "#2563eb", "border-width": 6 },
       },
       {
@@ -761,7 +762,7 @@ function applyGraphAvatarScale({ settle = false } = {}) {
     cy.nodes().forEach((node) => {
       node.data("renderedSize", graphNodeDiameter(
         node.data("visualSize"),
-        node.data("isRoot") === 1,
+        Boolean(node.data("isRoot")),
         scale,
       ));
     });
@@ -769,11 +770,33 @@ function applyGraphAvatarScale({ settle = false } = {}) {
   graphCollision?.setGap(graphCollisionGap(scale), settle);
 }
 
+function cancelGraphAvatarScaleApply() {
+  if (avatarScaleApplyFrame === null) return;
+  if (typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(avatarScaleApplyFrame);
+  } else {
+    clearTimeout(avatarScaleApplyFrame);
+  }
+  avatarScaleApplyFrame = null;
+}
+
+function scheduleGraphAvatarScaleApply() {
+  if (avatarScaleApplyFrame !== null) return;
+  const requestFrame = typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame.bind(window)
+    : (callback) => setTimeout(callback, 16);
+  avatarScaleApplyFrame = requestFrame(() => {
+    avatarScaleApplyFrame = null;
+    applyGraphAvatarScale();
+  });
+}
+
 function scheduleAvatarScaleCollisionSettle() {
   clearTimeout(avatarScaleSettleTimer);
   avatarScaleSettleTimer = setTimeout(() => {
     avatarScaleSettleTimer = null;
-    graphCollision?.setGap(graphCollisionGap(), true);
+    cancelGraphAvatarScaleApply();
+    applyGraphAvatarScale({ settle: true });
   }, 120);
 }
 
@@ -835,7 +858,7 @@ function renderGraph(data) {
           rootFriendCircleRank: rootCircleScale.rank(node),
           visualSize,
           renderedSize: graphNodeDiameter(visualSize, isRoot, avatarScale),
-          isRoot: isRoot ? 1 : 0,
+          isRoot: Boolean(isRoot),
           status: node.friend_list_status,
           pagerank: networkMetric?.pagerank || 0,
           community: networkMetric?.community || 0,
@@ -2192,12 +2215,14 @@ function wireEvents() {
     const scale = clampGraphAvatarScale(event.target.value);
     event.target.value = String(scale);
     appStorage.setItem(GRAPH_AVATAR_SCALE_KEY, String(scale));
-    applyGraphAvatarScale();
+    updateGraphAvatarScaleOutput(scale);
+    scheduleGraphAvatarScaleApply();
     scheduleAvatarScaleCollisionSettle();
   });
   $("graphAvatarScale").addEventListener("change", () => {
     clearTimeout(avatarScaleSettleTimer);
     avatarScaleSettleTimer = null;
+    cancelGraphAvatarScaleApply();
     applyGraphAvatarScale({ settle: true });
   });
   const savedCommunityColors = appStorage.getItem("sfm_community_colors");
@@ -2483,6 +2508,7 @@ function suspendBackgroundWork() {
   pollTimer = null;
   clearTimeout(avatarScaleSettleTimer);
   avatarScaleSettleTimer = null;
+  cancelGraphAvatarScaleApply();
   stopSystemLogPolling();
   stopDbStatsPolling();
   requestCoordinator?.cancelMany(PAGE_SCOPED_REQUEST_KEYS);

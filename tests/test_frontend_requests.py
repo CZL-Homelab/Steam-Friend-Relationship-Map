@@ -93,6 +93,86 @@ def test_graph_avatar_scale_defaults_clamps_and_keeps_root_largest() -> None:
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
+def test_graph_avatar_scale_apply_is_animation_frame_throttled() -> None:
+    app_path = str((STATIC_DIR / "app.js").resolve())
+    script = f"""
+      const fs = require("fs");
+      const vm = require("vm");
+      class Coordinator {{}}
+      let frameCallback = null;
+      let frameRequests = 0;
+      const scaleInput = {{ value: "150" }};
+      const scaleOutput = {{ textContent: "" }};
+      const context = {{
+        console,
+        setTimeout,
+        clearTimeout,
+        URLSearchParams,
+        localStorage: {{ getItem() {{ return null; }}, setItem() {{}}, removeItem() {{}} }},
+        window: {{
+          LatestRequestCoordinator: Coordinator,
+          GraphLifecycleCoordinator: Coordinator,
+          addEventListener() {{}},
+          requestAnimationFrame(callback) {{
+            frameRequests += 1;
+            frameCallback = callback;
+            return frameRequests;
+          }},
+          cancelAnimationFrame() {{ frameCallback = null; }},
+        }},
+        document: {{
+          addEventListener() {{}},
+          getElementById(id) {{
+            if (id === "graphAvatarScale") return scaleInput;
+            if (id === "graphAvatarScaleValue") return scaleOutput;
+            return null;
+          }},
+        }},
+        resizeWrites: 0,
+      }};
+      context.globalThis = context;
+      vm.createContext(context);
+      vm.runInContext(fs.readFileSync({json.dumps(app_path)}, "utf8"), context);
+      vm.runInContext(`
+        const nodeData = [
+          new Map([["visualSize", 100], ["isRoot", true]]),
+          new Map([["visualSize", 50], ["isRoot", false]]),
+        ];
+        const nodes = nodeData.map((values) => ({{
+          data(key, value) {{
+            if (arguments.length === 2) {{
+              values.set(key, value);
+              globalThis.resizeWrites += 1;
+            }}
+            return values.get(key);
+          }},
+        }}));
+        cy = {{ batch(callback) {{ callback(); }}, nodes() {{ return nodes; }} }};
+        scheduleGraphAvatarScaleApply();
+        scheduleGraphAvatarScaleApply();
+        scheduleGraphAvatarScaleApply();
+      `, context);
+      if (frameRequests !== 1 || !frameCallback || context.resizeWrites !== 0) process.exit(1);
+      frameCallback();
+      if (context.resizeWrites !== 2) process.exit(2);
+      if (!vm.runInContext("avatarScaleApplyFrame === null", context)) process.exit(3);
+      vm.runInContext("scheduleGraphAvatarScaleApply()", context);
+      if (frameRequests !== 2) process.exit(4);
+    """
+
+    subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
+
+
+def test_graph_root_uses_boolean_cytoscape_selectors() -> None:
+    source = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "node[isRoot = 1]" not in source
+    assert source.count("node[?isRoot]") == 2
+    assert "isRoot: Boolean(isRoot)" in source
+    assert 'Boolean(node.data("isRoot"))' in source
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 def test_graph_root_input_uses_resolved_recent_vanity_ids_without_network_access() -> None:
     app_path = str((STATIC_DIR / "app.js").resolve())
     recent_roots = json.dumps(
@@ -656,12 +736,17 @@ def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> N
 
       vm.runInContext(`
         avatarScaleSettleTimer = setTimeout(() => {{}}, 120);
+        avatarScaleApplyFrame = setTimeout(() => {{}}, 16);
         graphCollision = {{ destroy() {{ globalThis.collisionDestroyed = true; }} }};
       `, context);
       windowEvents.get("pagehide")();
       if (timers.size !== 0) process.exit(4);
       if (!context.collisionDestroyed) process.exit(5);
-      if (!vm.runInContext("graphCollision === null && avatarScaleSettleTimer === null", context)) {{
+      if (!vm.runInContext(`
+        graphCollision === null
+          && avatarScaleSettleTimer === null
+          && avatarScaleApplyFrame === null
+      `, context)) {{
         process.exit(6);
       }}
       }})().catch((error) => {{ console.error(error); process.exit(7); }});
