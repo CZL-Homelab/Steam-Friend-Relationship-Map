@@ -126,6 +126,24 @@ TruffleHog 完整历史首次扫描还发现 2 条 `unverified URI`：均为 `te
 
 The first full-history TruffleHog run also found two `unverified URI` results, both explicit fake loopback proxy credentials in historical `tests/test_app.py` revisions. They are outside the verified/unknown blocking scope, but GitHub output mode still returned exit `183`. Because history rewriting is prohibited, only the non-verifying generic `URI` detector is excluded. Current fixtures no longer contain credential-URI literals, and `tests/test_security_policy.py` scans the current source and documentation tree for them. All other detectors and full-history scanning remain enabled.
 
+## 展示材料安全复核 2026-08-30 / Showcase Material Security Review 2026-08-30
+
+- 集成基线 / Integration baseline: `dev-base` at `45ca6247fd63f2a8458be917ffd77e6b3f03261b`
+- 审计分支 / Audit branch: `dev/fix/security-audit-showcase-2026-08-30`
+- 候审目标 / Review target: `security-check-before-main`
+
+本轮复核覆盖 README badges、中英文导航、公开维护者说明和 Demo 截图。截图由隔离的临时 Kuzu 数据库生成，只使用虚构姓名、不可用于 Steam 的 `demo-*` 标识和生成式占位头像；画面不包含真实 SteamID、关系、凭据、本地数据库路径或个人备注。新增文本敏感标记扫描未发现 17 位 SteamID、本地服务地址、凭据字段或数据库路径。
+
+This review covers README badges, language navigation, public maintainer documentation, and the demo screenshot. The screenshot was generated from an isolated temporary Kuzu database using only fictional names, non-Steam `demo-*` identifiers, and generated placeholder avatars. It contains no real SteamID, relationship, credential, local database path, or personal note. Added-text scanning found no 17-digit SteamID, local service address, credential field, or database path.
+
+审计发现截图内容为 JPEG/JFIF，但最初误用了 `.png` 扩展名；现已修正为 `.jpg`，避免 MIME 和缓存工具误判。最终文件为 `1280x720`、`68,283` 字节，SHA-256 为 `D65A2AC7AF358B2FF169D9ED8A3324E5149AFF234D4CEE4E9FF3A5C108E128D2`。JPEG 只包含 JFIF、量化表、基线帧和 Huffman 表段，不含 EXIF、XMP、IPTC 或注释元数据。
+
+The audit found that the screenshot content was JPEG/JFIF but initially used a `.png` extension. It is now correctly named `.jpg` to avoid MIME and cache-tool ambiguity. The final file is `1280x720`, `68,283` bytes, with SHA-256 `D65A2AC7AF358B2FF169D9ED8A3324E5149AFF234D4CEE4E9FF3A5C108E128D2`. It contains only JFIF, quantization, baseline-frame, and Huffman-table segments, with no EXIF, XMP, IPTC, or comment metadata.
+
+仓库 About、Topics、`v0.1.0` Release、`CONTRIBUTING.md`、顶部中英文互链以及 CI/Python/License/Tests badges 均已复验。`k2316020523` 与 `LiaoYK001` 的 Profile 和 `CZL-Homelab` 公开成员关系可由未登录访客核验。未发现与本次展示改动相关的高风险或中风险问题。
+
+The repository About description, Topics, `v0.1.0` release, `CONTRIBUTING.md`, top-level language links, and CI/Python/License/Tests badges were reverified. The profiles and public `CZL-Homelab` membership of `k2316020523` and `LiaoYK001` are visible to unauthenticated visitors. No high- or medium-risk issue related to this showcase change was identified.
+
 ## 剩余风险 / Residual Risk
 
 - Kuzu 是进程内数据库，同一路径仅允许一个持有者；同时启动多个实例会得到明确锁提示，应用不会自动修改数据文件。
