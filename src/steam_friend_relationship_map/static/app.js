@@ -2481,9 +2481,13 @@ function suspendBackgroundWork() {
   pageActive = false;
   clearTimeout(pollTimer);
   pollTimer = null;
+  clearTimeout(avatarScaleSettleTimer);
+  avatarScaleSettleTimer = null;
   stopSystemLogPolling();
   stopDbStatsPolling();
   requestCoordinator?.cancelMany(PAGE_SCOPED_REQUEST_KEYS);
+  graphCollision?.destroy();
+  graphCollision = null;
   graphLifecycle?.cancel();
 }
 

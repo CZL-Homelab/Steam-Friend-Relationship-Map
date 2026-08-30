@@ -654,9 +654,17 @@ def test_background_polling_retries_without_overlap_and_stops_on_pagehide() -> N
       await pendingPoll;
       if (timers.size !== 1 || delays.at(-1) !== 2500) process.exit(3);
 
+      vm.runInContext(`
+        avatarScaleSettleTimer = setTimeout(() => {{}}, 120);
+        graphCollision = {{ destroy() {{ globalThis.collisionDestroyed = true; }} }};
+      `, context);
       windowEvents.get("pagehide")();
       if (timers.size !== 0) process.exit(4);
-      }})().catch((error) => {{ console.error(error); process.exit(5); }});
+      if (!context.collisionDestroyed) process.exit(5);
+      if (!vm.runInContext("graphCollision === null && avatarScaleSettleTimer === null", context)) {{
+        process.exit(6);
+      }}
+      }})().catch((error) => {{ console.error(error); process.exit(7); }});
     """
 
     subprocess.run([NODE, "-e", script], check=True, cwd=Path.cwd())
